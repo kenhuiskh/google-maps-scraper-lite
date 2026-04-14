@@ -1,0 +1,122 @@
+# =============================================================================
+# Go
+# =============================================================================
+
+# Compiled binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Project-specific binary (the compiled output at the repo root)
+google-maps-scraper-lite
+
+# Test binaries produced by `go test -c`
+*.test
+
+# Benchmark output
+*.bench
+
+# Build output directory (common convention)
+bin/
+dist/
+out/
+gmdata/
+
+# Go coverage / profiling artefacts
+*.out
+*.prof
+coverage.html
+
+# =============================================================================
+# Go module / toolchain cache
+# =============================================================================
+
+# Local vendor directory (only ignore if you don't vendor deps)
+# vendor/
+
+# Go workspace sum database cache
+go.work.sum
+
+# =============================================================================
+# IDE & Editor
+# =============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains / GoLand
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim / Neovim
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Emacs
+*#
+.#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# =============================================================================
+# OS artefacts
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+
+# Windows
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# =============================================================================
+# Tooling artefacts (from conversation history context)
+# =============================================================================
+
+# Codex / AI assistant caches written into the repo root
+.codex-go*
+.gocache/
+
+# Claude
+.claude/
+CLAUDE.md
+
+# Air (live-reload tool)
+tmp/
+
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.yaml
+secrets.json
+
+# =============================================================================
+# Logs & Temporary files
+# =============================================================================
+*.log
+*.tmp
+*.bak
+
+geo/testdata/*
+gmaps/testdata/*
