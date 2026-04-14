@@ -1,5 +1,7 @@
 # google-maps-scraper-lite
 
+> **Based on [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper)** by [Georgios Somarakis](https://github.com/gosom). This is a trimmed-down fork focused on a lightweight CLI experience with Playwright browser pooling and geo-spatial BIA analysis. Licensed under the [MIT License](LICENSE).
+
 A standalone Go CLI for scraping Google Maps search results with Playwright. It supports single-query runs, geo-anchored searches, optional email extraction, optional review expansion, JSON or CSV output, Postgres output, and a `suggest-zoom` helper for planning `-geo` coverage.
 
 ## Features
@@ -349,3 +351,11 @@ One line per evaluated point:
   ```bash
   jq -s '[.[]] | unique_by(.cid)' output/**/*.json > deduped.json
   ```
+
+## Credits
+
+This project is a fork of [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) by [Georgios Somarakis](https://github.com/gosom). The original project provided the core scraping pipeline and data extraction approach that this fork builds upon.
+
+## License
+
+[MIT](LICENSE)
