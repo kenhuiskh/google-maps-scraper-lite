@@ -31,6 +31,8 @@ func main() {
 	jsonOut := flag.Bool("json", false, "output as JSON instead of CSV")
 	outDir := flag.String("o", "gmdata", "output directory for CSV/JSON files (ignored when -dsn is set)")
 	dsn := flag.String("dsn", "", "postgres connection string (e.g. postgres://user:pass@host/db)")
+	tableRestaurant := flag.String("table-restaurant", "restaurants", "postgres table name for places (used with -dsn)")
+	tableReview := flag.String("table-review", "restaurant_reviews", "postgres table name for reviews (used with -dsn)")
 	extractEmail := flag.Bool("email", false, "extract emails from websites")
 	extraReviews := flag.Int("reviews", 0, "minimum number of reviews to scrape (0 = use page default)")
 	lang := flag.String("lang", "en", "language code")
@@ -38,6 +40,8 @@ func main() {
 	radius := flag.Float64("radius", 0, "filter results within this radius in meters from -geo center (0 = no filter)")
 	headless := flag.Bool("headless", true, "run browser in headless mode")
 	errorLog := flag.String("error-log", "", "path to error log file (appended; default: stderr only)")
+	urlsOnly := flag.String("urls-only", "", "debug: collect feed URLs only and write to this file (no place scraping)")
+	limit := flag.Int("limit", 0, "max number of places to scrape (0 = no limit)")
 	flag.Parse()
 
 	if *errorLog != "" {
@@ -72,6 +76,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	if *urlsOnly != "" {
+		runURLsOnly(ctx, *urlsOnly, *queries, *depth, *lang, *geo)
+		return
+	}
+
 	br, err := browser.New(browser.Options{
 		Concurrency: *concurrency,
 		Headless:    *headless,
@@ -85,7 +94,7 @@ func main() {
 	var w output.Writer
 	switch {
 	case *dsn != "":
-		pw, err := output.NewPostgresWriter(ctx, *dsn)
+		pw, err := output.NewPostgresWriter(ctx, *dsn, *tableRestaurant, *tableReview)
 		if err != nil {
 			log.Fatalf("postgres writer init: %v", err)
 		}
@@ -124,6 +133,7 @@ func main() {
 			Radius:       *radius,
 			ExtractEmail: *extractEmail,
 			ExtraReviews: *extraReviews,
+			Limit:        *limit,
 		},
 		Pool: br,
 	}
@@ -157,4 +167,42 @@ func main() {
 	if err := w.Close(); err != nil {
 		log.Printf("writer close error: %v", err)
 	}
+}
+
+// runURLsOnly collects feed URLs for all queries and writes them one-per-line
+// to outFile. No place detail scraping is performed.
+func runURLsOnly(ctx context.Context, outFile, queries string, depth int, lang, geo string) {
+	br, err := browser.New(browser.Options{Concurrency: 1, Headless: true, Lang: lang})
+	if err != nil {
+		log.Fatalf("browser init: %v", err)
+	}
+	defer br.Close()
+
+	feedOpts := gmaps.FeedOptions{MaxDepth: depth, LangCode: lang, Geo: geo}
+
+	f, err := os.Create(outFile)
+	if err != nil {
+		log.Fatalf("create output file: %v", err)
+	}
+	defer f.Close()
+
+	qs := strings.Split(queries, ",")
+	var total int
+	for i, q := range qs {
+		q = strings.TrimSpace(q)
+		log.Printf("Query %d/%d %q — collecting URLs", i+1, len(qs), q)
+		page := br.AcquirePage()
+		urls, err := gmaps.ScrapeFeed(ctx, page, q, feedOpts)
+		br.ReleasePage(page)
+		if err != nil {
+			log.Printf("Query %d/%d %q — feed error: %v", i+1, len(qs), q, err)
+			continue
+		}
+		for _, u := range urls {
+			fmt.Fprintln(f, u)
+		}
+		log.Printf("Query %d/%d %q — %d URLs", i+1, len(qs), q, len(urls))
+		total += len(urls)
+	}
+	log.Printf("Done: %d URLs written to %s", total, outFile)
 }

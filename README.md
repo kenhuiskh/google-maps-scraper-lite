@@ -89,7 +89,17 @@ Note: `-radius` requires `-geo`. Results outside the radius are discarded after 
   -dsn "postgres://user:pass@localhost:5432/maps"
 ```
 
-The Postgres writer uses a connection pool with a 30-second per-write timeout. It upserts into `restaurants` (on `cid`) and inserts into `restaurant_reviews` (on conflict do nothing).
+Table names default to `restaurants` and `restaurant_reviews` but can be overridden:
+
+```bash
+./google-maps-scraper-lite \
+  -queries "restaurants" \
+  -dsn "postgres://user:pass@localhost:5432/maps" \
+  -table-restaurant my_places \
+  -table-review my_reviews
+```
+
+The Postgres writer uses a connection pool with a 30-second per-write timeout. It upserts into the places table (on `cid`) and inserts into the reviews table (on conflict do nothing, keyed on `cid` + `reviewer_name`).
 
 ### Email Extraction and Review Expansion
 
@@ -133,9 +143,12 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
 | `-queries` | string | required | Comma-separated search queries. |
 | `-c` | int | `1` | Concurrency level. |
 | `-depth` | int | `10` | Max scroll depth per query. |
+| `-limit` | int | `0` | Cap the total number of places scraped. `0` = no limit. |
 | `-json` | bool | `false` | Output JSON instead of CSV. |
 | `-o` | string | `gmdata` | Output directory for JSON files. Ignored when `-dsn` is set. |
 | `-dsn` | string | `""` | Postgres connection string. Enables DB output instead of file/stdout. |
+| `-table-restaurant` | string | `restaurants` | Postgres table name for places. Used with `-dsn`. |
+| `-table-review` | string | `restaurant_reviews` | Postgres table name for reviews. Used with `-dsn`. |
 | `-email` | bool | `false` | Visit business websites and extract emails. |
 | `-reviews` | int | `0` | Minimum number of reviews to scrape. `0` uses default page data only. |
 | `-lang` | string | `en` | Browser and Maps language. |
@@ -143,6 +156,7 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
 | `-radius` | float | `0` | Keep only results within this many meters of the `-geo` center. Requires `-geo`. |
 | `-headless` | bool | `true` | Run browser headless. |
 | `-error-log` | string | `""` | Append application logs to a file as well as stderr. |
+| `-urls-only` | string | `""` | Debug: collect feed URLs only and write them to this file. No place scraping is performed. |
 
 ## Output
 
@@ -220,10 +234,10 @@ CSV columns:
 
 When `-dsn` is set, the tool creates two tables if they do not exist and upserts on each write:
 
-- `restaurants` — one row per place, upserted on `cid`
-- `restaurant_reviews` — one row per review, inserted on conflict do nothing
+- places table (default `restaurants`) — one row per place, upserted on `cid`
+- reviews table (default `restaurant_reviews`) — one row per review, conflict key is `(cid, reviewer_name)`
 
-The connection pool handles reconnects and idle timeouts automatically. Each write uses a 30-second timeout context.
+Table names are configurable via `-table-restaurant` and `-table-review`. The connection pool handles reconnects and idle timeouts automatically. Each write uses a 30-second timeout context.
 
 ## `suggest-zoom` Subcommand
 

@@ -13,6 +13,10 @@ import (
 )
 
 var (
+	// mapsTabRE matches the !10eN segment in Google Maps data= URLs that forces a
+	// specific panel/tab view (e.g. hours tab). Stripping it loads the main overview.
+	mapsTabRE = regexp.MustCompile(`!10e\d+`)
+
 	daysAgoRE   = regexp.MustCompile(`(?i)^(\d+)\s+days?\s+ago$`)
 	weeksAgoRE  = regexp.MustCompile(`(?i)^(\d+)\s+weeks?\s+ago$`)
 	aWeekAgoRE  = regexp.MustCompile(`(?i)^a\s+week\s+ago$`)
@@ -36,13 +40,13 @@ type PlaceOptions struct {
 // ScrapePlace navigates to placeURL, extracts the place's JSON data, parses it
 // into an Entry, and optionally extracts email addresses from the place's website.
 func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
-	fullURL := placeURL
+	fullURL := mapsTabRE.ReplaceAllString(placeURL, "")
 	if opts.LangCode != "" {
 		sep := "?"
-		if strings.Contains(placeURL, "?") {
+		if strings.Contains(fullURL, "?") {
 			sep = "&"
 		}
-		fullURL = placeURL + sep + "hl=" + opts.LangCode
+		fullURL = fullURL + sep + "hl=" + opts.LangCode
 	}
 
 	if _, err := page.Goto(fullURL, playwright.PageGotoOptions{
@@ -52,7 +56,6 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 	}
 
 	clickRejectCookiesPlaywright(page)
-	expandOpeningHours(page)
 
 	raw, err := extractPlaceJSON(ctx, page)
 	if err != nil {
@@ -66,8 +69,8 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 
 	entry.ReviewTags = extractReviewTags(page)
 
-	if entry.Link == "" {
-		entry.Link = page.URL()
+	if entry.Link == "" || mapsTabRE.MatchString(entry.Link) {
+		entry.Link = fullURL
 	}
 
 	if opts.ExtraReviews > 0 {
@@ -95,7 +98,7 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry, targetReviews int) error {
 	const (
 		maxStaleScrolls = 3
-		scrollPauseMs   = 1200
+		scrollPauseMs   = 1800
 	)
 
 	// Click the "All reviews" / reviews tab to open the reviews panel.
@@ -178,12 +181,16 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 		break
 	}
 
+	reviewKey := func(r Review) string {
+		return strings.TrimSpace(r.Name) + "|" + strings.TrimSpace(r.When) + "|" + strings.TrimSpace(r.Description)
+	}
+
 	seen := make(map[string]bool, len(entry.UserReviews)+len(entry.UserReviewsExtended)+targetReviews)
 	for _, review := range entry.UserReviews {
-		seen[strings.TrimSpace(review.Name)+"|"+strings.TrimSpace(review.When)] = true
+		seen[reviewKey(review)] = true
 	}
 	for _, review := range entry.UserReviewsExtended {
-		seen[strings.TrimSpace(review.Name)+"|"+strings.TrimSpace(review.When)] = true
+		seen[reviewKey(review)] = true
 	}
 
 	// Scroll the reviews panel until target is met or stale.
@@ -202,7 +209,7 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 
 		newCount := 0
 		for _, review := range reviews {
-			key := strings.TrimSpace(review.Name) + "|" + strings.TrimSpace(review.When)
+			key := reviewKey(review)
 			if seen[key] {
 				continue
 			}

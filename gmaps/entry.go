@@ -817,7 +817,6 @@ func decodeURL(url string) (string, error) {
 	return unquoted, nil
 }
 
-
 type EntryWithDistance struct {
 	Entry    *Entry
 	Distance float64

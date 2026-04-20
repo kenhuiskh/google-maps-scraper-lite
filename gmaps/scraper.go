@@ -23,6 +23,7 @@ type Config struct {
 	Radius       float64 // meters; 0 = no filter
 	ExtractEmail bool
 	ExtraReviews int
+	Limit        int // max places to scrape; 0 = no limit
 }
 
 // PagePool provides playwright pages to workers.
@@ -78,6 +79,9 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- *Entry) 
 		dedupedURLs = append(dedupedURLs, u)
 	}
 	placeURLs = dedupedURLs
+	if s.Config.Limit > 0 && len(placeURLs) > s.Config.Limit {
+		placeURLs = placeURLs[:s.Config.Limit]
+	}
 	duplicatesRemoved := originalCount - len(placeURLs)
 	if duplicatesRemoved > 0 {
 		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(placeURLs), total, duplicatesRemoved)

@@ -233,9 +233,13 @@ func extractPlaceURLs(content string) ([]string, error) {
 
 	feed.Find(`div[jsaction] > a[href]`).Each(func(_ int, s *goquery.Selection) {
 		href := s.AttrOr("href", "")
-		if href == "" {
+		if href == "" || !strings.Contains(href, "/maps/place/") {
 			return
 		}
+
+		// Strip tab/panel specifiers (e.g. !10e2 = hours tab) before deduplication
+		// so hours-specific links are normalised to the main overview URL.
+		href = mapsTabRE.ReplaceAllString(href, "")
 
 		if _, exists := seen[href]; !exists {
 			seen[href] = struct{}{}

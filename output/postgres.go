@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const createRestaurantsSQL = `
-CREATE TABLE IF NOT EXISTS restaurants (
+const createRestaurantsSQLFmt = `
+CREATE TABLE IF NOT EXISTS %s (
 	cid                TEXT        PRIMARY KEY,
 	input_id           TEXT,
 	link               TEXT,
@@ -54,10 +54,10 @@ CREATE TABLE IF NOT EXISTS restaurants (
 	closed_at          TIMESTAMPTZ
 )`
 
-const createReviewsSQL = `
-CREATE TABLE IF NOT EXISTS restaurant_reviews (
+const createReviewsSQLFmt = `
+CREATE TABLE IF NOT EXISTS %s (
 	id              BIGSERIAL   PRIMARY KEY,
-	cid             TEXT        NOT NULL REFERENCES restaurants(cid) ON DELETE CASCADE,
+	cid             TEXT        NOT NULL REFERENCES %s(cid) ON DELETE CASCADE,
 	reviewer_name   TEXT,
 	profile_picture TEXT,
 	rating          INTEGER,
@@ -65,11 +65,56 @@ CREATE TABLE IF NOT EXISTS restaurant_reviews (
 	images          JSONB,
 	reviewed_at     DATE,
 	created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-	UNIQUE (cid, reviewer_name, reviewed_at)
+	UNIQUE (cid, reviewer_name)
 )`
 
-const upsertRestaurantSQL = `
-INSERT INTO restaurants (
+type PostgresWriter struct {
+	pool            *pgxpool.Pool
+	written         int64
+	failed          int64
+	tableRestaurant string
+	tableReview     string
+}
+
+func NewPostgresWriter(ctx context.Context, dsn, tableRestaurant, tableReview string) (*PostgresWriter, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("connect to postgres: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantsSQLFmt, tableRestaurant)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("create %s table: %w", tableRestaurant, err)
+	}
+
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createReviewsSQLFmt, tableReview, tableRestaurant)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("create %s table: %w", tableReview, err)
+	}
+
+	return &PostgresWriter{pool: pool, tableRestaurant: tableRestaurant, tableReview: tableReview}, nil
+}
+
+func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	toJSON := func(field string, v any) []byte {
+		b, err := json.Marshal(v)
+		if err != nil {
+			log.Printf("postgres: json.Marshal failed for field %q: %v", field, err)
+			return []byte("null")
+		}
+		return b
+	}
+
+	upsertSQL := fmt.Sprintf(`
+INSERT INTO %s (
 	cid, input_id, link, title, categories, category, address,
 	open_hours, popular_times, web_site, phone, plus_code,
 	review_count, review_rating, reviews_per_rating, latitude, longitude,
@@ -119,61 +164,12 @@ INSERT INTO restaurants (
 	review_tags        = EXCLUDED.review_tags,
 	updated_at         = NOW(),
 	closed_at = CASE
-		WHEN EXCLUDED.status ILIKE '%permanently closed%'
-		THEN COALESCE(restaurants.closed_at, NOW())
-		ELSE restaurants.closed_at
-	END`
+		WHEN EXCLUDED.status ILIKE '%%permanently closed%%'
+		THEN COALESCE(%s.closed_at, NOW())
+		ELSE %s.closed_at
+	END`, p.tableRestaurant, p.tableRestaurant, p.tableRestaurant)
 
-const insertReviewSQL = `
-INSERT INTO restaurant_reviews (
-	cid, reviewer_name, profile_picture, rating, description, images, reviewed_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7)
-ON CONFLICT (cid, reviewer_name, reviewed_at) DO NOTHING`
-
-type PostgresWriter struct {
-	pool    *pgxpool.Pool
-	written int64
-	failed  int64
-}
-
-func NewPostgresWriter(ctx context.Context, dsn string) (*PostgresWriter, error) {
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("connect to postgres: %w", err)
-	}
-
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-
-	if _, err := pool.Exec(ctx, createRestaurantsSQL); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("create restaurants table: %w", err)
-	}
-
-	if _, err := pool.Exec(ctx, createReviewsSQL); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("create restaurant_reviews table: %w", err)
-	}
-
-	return &PostgresWriter{pool: pool}, nil
-}
-
-func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	toJSON := func(field string, v any) []byte {
-		b, err := json.Marshal(v)
-		if err != nil {
-			log.Printf("postgres: json.Marshal failed for field %q: %v", field, err)
-			return []byte("null")
-		}
-		return b
-	}
-
-	_, err := p.pool.Exec(ctx, upsertRestaurantSQL,
+	_, err := p.pool.Exec(ctx, upsertSQL,
 		entry.Cid,
 		entry.ID,
 		entry.Link,
@@ -214,6 +210,12 @@ func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
 		log.Printf("postgres: write failed for %q: %v", entry.Cid, err)
 		return fmt.Errorf("upsert restaurant %q: %w", entry.Cid, err)
 	}
+
+	insertReviewSQL := fmt.Sprintf(`
+INSERT INTO %s (
+	cid, reviewer_name, profile_picture, rating, description, images, reviewed_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7)
+ON CONFLICT (cid, reviewer_name) DO NOTHING`, p.tableReview)
 
 	for _, r := range entry.UserReviews {
 		reviewedAt := parseReviewDate(r.When)
