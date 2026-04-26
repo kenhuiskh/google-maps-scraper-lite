@@ -2,7 +2,7 @@
 
 > **Based on [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper)** by [Georgios Somarakis](https://github.com/gosom). This is a trimmed-down fork focused on a lightweight CLI experience with Playwright browser pooling and geo-spatial BIA analysis. Licensed under the [MIT License](LICENSE).
 
-A standalone Go CLI for scraping Google Maps search results with Playwright. It supports single-query runs, geo-anchored searches, optional email extraction, optional review expansion, JSON or CSV output, Postgres output, and a `suggest-zoom` helper for planning `-geo` coverage.
+A standalone Go CLI for scraping Google Maps search results with Playwright. It supports single-query runs, geo-anchored searches, optional email extraction, optional review expansion, JSON or CSV output, Postgres output, checkpoint-based resume, and a `suggest-zoom` helper for planning `-geo` coverage.
 
 ## Features
 
@@ -13,6 +13,7 @@ A standalone Go CLI for scraping Google Maps search results with Playwright. It 
 - Write directly to Postgres with `-dsn`.
 - Extract emails from business websites with `-email`.
 - Scrape additional reviews with `-reviews`.
+- Auto-save a checkpoint file and resume a blocked run with `--resume`.
 - Use `suggest-zoom` to estimate practical zoom anchors before building a sweep plan.
 
 ## Requirements
@@ -116,6 +117,28 @@ The Postgres writer uses a connection pool with a 30-second per-write timeout. I
 
 `-reviews N` fetches additional review pages until at least N reviews are collected.
 
+### Resuming a Blocked Run
+
+Google Maps may block the Playwright session mid-scrape (rate limiting or bot detection). When this happens, consecutive place scrapes begin failing. The scraper detects this after 10 consecutive failures across all workers, saves the checkpoint, and exits with a clear message:
+
+```
+session blocked by Google — resume with: --resume gmdata/2026-04-20_10-30-00.checkpoint.json
+```
+
+Every run automatically creates a checkpoint file in the output directory (`-o`) stamped with the run's start time. The checkpoint records all collected place URLs and marks each one done as it completes. Re-running with `--resume` skips the feed phase entirely and only scrapes the remaining URLs:
+
+```bash
+# Original run (blocked partway through)
+./google-maps-scraper-lite -queries "restaurants in Toronto" -c 3 -o gmdata
+
+# Resume (no -queries needed — queries come from the checkpoint)
+./google-maps-scraper-lite --resume gmdata/2026-04-20_10-30-00.checkpoint.json -c 3 -o gmdata
+```
+
+A resumed run writes its results to a **new** output file (same directory, new timestamp). If you're using `-dsn`, results from both runs land in the same database table — no manual merge needed.
+
+The checkpoint also survives a clean `Ctrl-C` interrupt, so any partial progress is always recoverable.
+
 ### Logging
 
 ```bash
@@ -140,7 +163,8 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-queries` | string | required | Comma-separated search queries. |
+| `-queries` | string | required* | Comma-separated search queries. Not required when `--resume` is set. |
+| `--resume` | string | `""` | Path to a checkpoint file to resume a blocked or interrupted run. Skips the feed phase; queries are read from the checkpoint. |
 | `-c` | int | `1` | Concurrency level. |
 | `-depth` | int | `10` | Max scroll depth per query. |
 | `-limit` | int | `0` | Cap the total number of places scraped. `0` = no limit. |
@@ -347,6 +371,7 @@ One line per evaluated point:
 ├── browser/           Playwright lifecycle and thread-safe page pool
 ├── geo/               Overpass client, BIA index, zoom scoring logic
 ├── gmaps/
+│   ├── checkpoint.go  Checkpoint struct: persist/resume progress, block detection
 │   ├── feed.go        Navigate search, scroll results, return place URLs
 │   ├── place.go       Navigate place URL, extract APP_INITIALIZATION_STATE JSON
 │   ├── entry.go       Entry struct (28 fields) and all JSON parsing logic

@@ -16,14 +16,15 @@ import (
 
 // Config controls what the Scraper extracts.
 type Config struct {
-	Concurrency  int
-	Depth        int
-	Lang         string
-	Geo          string
-	Radius       float64 // meters; 0 = no filter
-	ExtractEmail bool
-	ExtraReviews int
-	Limit        int // max places to scrape; 0 = no limit
+	Concurrency    int
+	Depth          int
+	Lang           string
+	Geo            string
+	Radius         float64 // meters; 0 = no filter
+	ExtractEmail   bool
+	ExtraReviews   int
+	Limit          int    // max places to scrape; 0 = no limit
+	CheckpointPath string // path to checkpoint file; empty = no checkpointing
 }
 
 // PagePool provides playwright pages to workers.
@@ -52,41 +53,62 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- *Entry) 
 		ExtraReviews: s.Config.ExtraReviews,
 	}
 
-	// Collect all place URLs first (serially, one feed page per query)
+	var cp *Checkpoint
 	var placeURLs []string
-	total := len(queries)
-	for i, q := range queries {
-		log.Printf("Query %d/%d %q — starting", i+1, total, q)
-		start := time.Now()
-		page := s.Pool.AcquirePage()
-		urls, err := ScrapeFeed(ctx, page, q, feedOpts)
-		s.Pool.ReleasePage(page)
-		if err != nil {
-			log.Printf("Query %d/%d %q — feed error after %ds: %v", i+1, total, q, int(time.Since(start).Seconds()), err)
-			continue
+
+	// Resume from an existing checkpoint if the file is present and has URLs.
+	if s.Config.CheckpointPath != "" {
+		if loaded, err := LoadCheckpoint(s.Config.CheckpointPath); err == nil && len(loaded.URLs) > 0 {
+			cp = loaded
+			placeURLs = loaded.URLs
+			log.Printf("Resuming from checkpoint %s: %d URLs total, %d already done",
+				s.Config.CheckpointPath, len(placeURLs), len(loaded.Done))
 		}
-		log.Printf("Query %d/%d %q — %d URLs found (%ds)", i+1, total, q, len(urls), int(time.Since(start).Seconds()))
-		placeURLs = append(placeURLs, urls...)
 	}
-	originalCount := len(placeURLs)
-	seen := make(map[string]struct{}, originalCount)
-	dedupedURLs := make([]string, 0, originalCount)
-	for _, u := range placeURLs {
-		if _, ok := seen[u]; ok {
-			continue
+
+	// Feed phase — skipped when resuming from a checkpoint.
+	if placeURLs == nil {
+		total := len(queries)
+		for i, q := range queries {
+			log.Printf("Query %d/%d %q — starting", i+1, total, q)
+			start := time.Now()
+			page := s.Pool.AcquirePage()
+			urls, err := ScrapeFeed(ctx, page, q, feedOpts)
+			s.Pool.ReleasePage(page)
+			if err != nil {
+				log.Printf("Query %d/%d %q — feed error after %ds: %v", i+1, total, q, int(time.Since(start).Seconds()), err)
+				continue
+			}
+			log.Printf("Query %d/%d %q — %d URLs found (%ds)", i+1, total, q, len(urls), int(time.Since(start).Seconds()))
+			placeURLs = append(placeURLs, urls...)
 		}
-		seen[u] = struct{}{}
-		dedupedURLs = append(dedupedURLs, u)
-	}
-	placeURLs = dedupedURLs
-	if s.Config.Limit > 0 && len(placeURLs) > s.Config.Limit {
-		placeURLs = placeURLs[:s.Config.Limit]
-	}
-	duplicatesRemoved := originalCount - len(placeURLs)
-	if duplicatesRemoved > 0 {
-		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(placeURLs), total, duplicatesRemoved)
-	} else {
-		log.Printf("Feed collection done: %d URLs queued across %d queries", len(placeURLs), total)
+		originalCount := len(placeURLs)
+		seen := make(map[string]struct{}, originalCount)
+		dedupedURLs := make([]string, 0, originalCount)
+		for _, u := range placeURLs {
+			if _, ok := seen[u]; ok {
+				continue
+			}
+			seen[u] = struct{}{}
+			dedupedURLs = append(dedupedURLs, u)
+		}
+		placeURLs = dedupedURLs
+		if s.Config.Limit > 0 && len(placeURLs) > s.Config.Limit {
+			placeURLs = placeURLs[:s.Config.Limit]
+		}
+		duplicatesRemoved := originalCount - len(placeURLs)
+		if duplicatesRemoved > 0 {
+			log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(placeURLs), total, duplicatesRemoved)
+		} else {
+			log.Printf("Feed collection done: %d URLs queued across %d queries", len(placeURLs), total)
+		}
+
+		if s.Config.CheckpointPath != "" {
+			cp = NewCheckpoint(s.Config.CheckpointPath, queries, placeURLs)
+			if err := cp.Save(); err != nil {
+				log.Printf("checkpoint write warning: %v", err)
+			}
+		}
 	}
 
 	// Fan-out place detail scraping
@@ -108,6 +130,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- *Entry) 
 		entries []*Entry // only populated when useRadiusFilter
 	)
 	var completed int64
+	var consecFails int64
 
 	g, gctx := errgroup.WithContext(ctx)
 	for i := 0; i < conc; i++ {
@@ -115,6 +138,11 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- *Entry) 
 		g.Go(func() error {
 			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID)))
 			for placeURL := range urlsCh {
+				if cp != nil && cp.IsDone(placeURL) {
+					atomic.AddInt64(&completed, 1)
+					continue
+				}
+
 				time.Sleep(time.Duration(rng.Intn(1000)) * time.Millisecond)
 
 				page := s.Pool.AcquirePage()
@@ -128,8 +156,19 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- *Entry) 
 				s.Pool.ReleasePage(page)
 				if err != nil {
 					log.Printf("place scrape error %s: %v", placeURL, err)
+					if atomic.AddInt64(&consecFails, 1) >= blockThreshold {
+						log.Printf("session blocked after %d consecutive failures — checkpoint saved at %s",
+							blockThreshold, s.Config.CheckpointPath)
+						return ErrSessionBlocked
+					}
 					continue
 				}
+
+				atomic.StoreInt64(&consecFails, 0)
+				if cp != nil {
+					cp.MarkDone(placeURL)
+				}
+
 				done := atomic.AddInt64(&completed, 1)
 				if done%10 == 0 {
 					log.Printf("Places %d/%d completed", done, int64(len(placeURLs)))
@@ -152,7 +191,8 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- *Entry) 
 
 	err := g.Wait()
 
-	if useRadiusFilter && (err == nil || errors.Is(err, context.Canceled)) {
+	// Emit radius-filtered results even if the session was blocked mid-run.
+	if useRadiusFilter && (err == nil || errors.Is(err, context.Canceled) || errors.Is(err, ErrSessionBlocked)) {
 		lat, lon, _ := ParseGeoCenter(s.Config.Geo) // already validated by caller
 		filtered := filterAndSortEntriesWithinRadius(entries, lat, lon, s.Config.Radius)
 		for _, e := range filtered {

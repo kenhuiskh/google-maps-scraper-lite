@@ -26,6 +26,7 @@ func main() {
 	}
 
 	queries := flag.String("queries", "", "comma-separated search queries")
+	resume := flag.String("resume", "", "path to checkpoint file to resume a blocked run (skips feed phase)")
 	concurrency := flag.Int("c", 1, "concurrency level")
 	depth := flag.Int("depth", 10, "max scroll depth per query")
 	jsonOut := flag.Bool("json", false, "output as JSON instead of CSV")
@@ -53,8 +54,8 @@ func main() {
 		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
 
-	if *queries == "" {
-		fmt.Fprintln(os.Stderr, "error: -queries is required")
+	if *resume == "" && *queries == "" {
+		fmt.Fprintln(os.Stderr, "error: -queries is required (or use -resume to continue a previous run)")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -91,6 +92,20 @@ func main() {
 	}
 	defer br.Close()
 
+	ts := time.Now().Format("2006-01-02_15-04-05")
+
+	// Ensure output dir exists (needed for both checkpoint and file output).
+	if err := os.MkdirAll(*outDir, 0o755); err != nil {
+		log.Fatalf("create output dir: %v", err)
+	}
+
+	// Resolve checkpoint path: use the resume file if provided, otherwise create
+	// a new one stamped with the current run's timestamp in the output directory.
+	checkpointPath := filepath.Join(*outDir, ts+".checkpoint.json")
+	if *resume != "" {
+		checkpointPath = *resume
+	}
+
 	var w output.Writer
 	switch {
 	case *dsn != "":
@@ -100,15 +115,11 @@ func main() {
 		}
 		w = pw
 	default:
-		ts := time.Now().Format("2006-01-02_15-04-05")
 		ext := ".csv"
 		if *jsonOut {
 			ext = ".json"
 		}
 		outPath := filepath.Join(*outDir, ts+ext)
-		if err := os.MkdirAll(*outDir, 0o755); err != nil {
-			log.Fatalf("create output dir: %v", err)
-		}
 		f, err := os.Create(outPath)
 		if err != nil {
 			log.Fatalf("create output file: %v", err)
@@ -126,21 +137,33 @@ func main() {
 
 	s := gmaps.Scraper{
 		Config: gmaps.Config{
-			Concurrency:  *concurrency,
-			Depth:        *depth,
-			Lang:         *lang,
-			Geo:          *geo,
-			Radius:       *radius,
-			ExtractEmail: *extractEmail,
-			ExtraReviews: *extraReviews,
-			Limit:        *limit,
+			Concurrency:    *concurrency,
+			Depth:          *depth,
+			Lang:           *lang,
+			Geo:            *geo,
+			Radius:         *radius,
+			ExtractEmail:   *extractEmail,
+			ExtraReviews:   *extraReviews,
+			Limit:          *limit,
+			CheckpointPath: checkpointPath,
 		},
 		Pool: br,
 	}
 
-	qs := strings.Split(*queries, ",")
-	for i, q := range qs {
-		qs[i] = strings.TrimSpace(q)
+	// Build query list: from checkpoint when resuming, from flag otherwise.
+	var qs []string
+	if *resume != "" {
+		cp, err := gmaps.LoadCheckpoint(*resume)
+		if err != nil {
+			log.Fatalf("load checkpoint: %v", err)
+		}
+		qs = cp.Queries
+		log.Printf("Resuming checkpoint %s: %d URLs, %d already done", *resume, len(cp.URLs), len(cp.Done))
+	} else {
+		qs = strings.Split(*queries, ",")
+		for i, q := range qs {
+			qs[i] = strings.TrimSpace(q)
+		}
 	}
 
 	errCh := make(chan error, 1)
@@ -148,8 +171,16 @@ func main() {
 		errCh <- s.Run(ctx, qs, out)
 	}()
 
-	var written, failed int
+	var written, failed, dupes int
+	seenPlaceIDs := make(map[string]struct{})
 	for entry := range out {
+		if entry.PlaceID != "" {
+			if _, seen := seenPlaceIDs[entry.PlaceID]; seen {
+				dupes++
+				continue
+			}
+			seenPlaceIDs[entry.PlaceID] = struct{}{}
+		}
 		if err := w.Write(entry); err != nil {
 			log.Printf("write error: %v", err)
 			failed++
@@ -157,11 +188,18 @@ func main() {
 			written++
 		}
 	}
+	if dupes > 0 {
+		log.Printf("dedup: %d duplicate place_id records discarded", dupes)
+	}
 
 	log.Printf("run complete: written=%d failed=%d", written, failed)
 
 	if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("scraper error: %v", err)
+		if errors.Is(err, gmaps.ErrSessionBlocked) {
+			log.Printf("session blocked by Google — resume with: --resume %s", checkpointPath)
+		} else {
+			log.Printf("scraper error: %v", err)
+		}
 	}
 
 	if err := w.Close(); err != nil {
