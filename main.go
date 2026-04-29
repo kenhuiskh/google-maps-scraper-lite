@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,8 +27,11 @@ func main() {
 	}
 
 	queries := flag.String("queries", "", "comma-separated search queries")
-	resume := flag.String("resume", "", "path to checkpoint file to resume a blocked run (skips feed phase)")
+	jobID := flag.String("job", "", "SQLite job ID to resume")
+	stateDB := flag.String("state-db", filepath.Join("gmdata", "scraper-state.sqlite"), "path to local SQLite scraper state database")
+	controlAddr := flag.String("control-addr", "", "optional local HTTP control UI address, e.g. 127.0.0.1:8080")
 	concurrency := flag.Int("c", 1, "concurrency level")
+	maxConcurrency := flag.Int("max-c", 0, "maximum dynamic browser tab concurrency; overrides -c when set")
 	depth := flag.Int("depth", 10, "max scroll depth per query")
 	jsonOut := flag.Bool("json", false, "output as JSON instead of CSV")
 	outDir := flag.String("o", "gmdata", "output directory for CSV/JSON files (ignored when -dsn is set)")
@@ -45,6 +49,13 @@ func main() {
 	limit := flag.Int("limit", 0, "max number of places to scrape (0 = no limit)")
 	flag.Parse()
 
+	if *maxConcurrency > 0 {
+		*concurrency = *maxConcurrency
+	}
+	if *concurrency < 1 {
+		*concurrency = 1
+	}
+
 	if *errorLog != "" {
 		f, err := os.OpenFile(*errorLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -54,8 +65,8 @@ func main() {
 		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
 
-	if *resume == "" && *queries == "" {
-		fmt.Fprintln(os.Stderr, "error: -queries is required (or use -resume to continue a previous run)")
+	if *jobID == "" && *queries == "" && *controlAddr == "" {
+		fmt.Fprintln(os.Stderr, "error: -queries is required (or use -job to continue a previous run, or -control-addr for UI-only mode)")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -74,13 +85,95 @@ func main() {
 		}
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	if *urlsOnly != "" {
 		runURLsOnly(ctx, *urlsOnly, *queries, *depth, *lang, *geo)
 		return
 	}
+
+	store, err := gmaps.OpenJobStore(*stateDB)
+	if err != nil {
+		log.Fatalf("open state db: %v", err)
+	}
+	defer store.Close()
+	log.Printf("using state db %s", *stateDB)
+
+	if *controlAddr != "" {
+		if _, err := startControlServer(ctx, *controlAddr, store, newProcessResumeLauncher(store, *stateDB)); err != nil {
+			log.Fatalf("control server: %v", err)
+		}
+	}
+
+	if *jobID == "" && *queries == "" {
+		log.Printf("control UI only; press Ctrl-C to stop")
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
+		select {
+		case sig := <-sigCh:
+			log.Printf("received %s: shutting down control UI", sig)
+		case <-ctx.Done():
+		}
+		return
+	}
+
+	var (
+		currentJobMu sync.Mutex
+		currentJobID = *jobID
+		pauseWanted  bool
+		forceStop    bool
+	)
+	requestPause := func() {
+		currentJobMu.Lock()
+		defer currentJobMu.Unlock()
+		pauseWanted = true
+		if currentJobID == "" {
+			log.Printf("pause requested; it will apply after the job is created")
+			return
+		}
+		if err := store.RequestPause(context.Background(), currentJobID); err != nil {
+			log.Printf("pause request error: %v", err)
+			return
+		}
+		log.Printf("pause requested for job %s; active URL scrapes will finish", currentJobID)
+	}
+	setCurrentJob := func(id string) {
+		currentJobMu.Lock()
+		defer currentJobMu.Unlock()
+		currentJobID = id
+		if pauseWanted {
+			if err := store.RequestPause(context.Background(), currentJobID); err != nil {
+				log.Printf("pause request error: %v", err)
+			}
+		}
+	}
+
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		for sig := range sigCh {
+			currentJobMu.Lock()
+			alreadyPauseWanted := pauseWanted
+			currentJobMu.Unlock()
+			if !alreadyPauseWanted {
+				log.Printf("received %s: requesting graceful pause", sig)
+				requestPause()
+				continue
+			}
+			currentJobMu.Lock()
+			if !forceStop {
+				forceStop = true
+				currentJobMu.Unlock()
+				log.Printf("received %s again: forcing shutdown", sig)
+				cancel()
+				continue
+			}
+			currentJobMu.Unlock()
+		}
+	}()
 
 	br, err := browser.New(browser.Options{
 		Concurrency: *concurrency,
@@ -94,16 +187,9 @@ func main() {
 
 	ts := time.Now().Format("2006-01-02_15-04-05")
 
-	// Ensure output dir exists (needed for both checkpoint and file output).
+	// Ensure output dir exists (needed for file output and the default state DB).
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatalf("create output dir: %v", err)
-	}
-
-	// Resolve checkpoint path: use the resume file if provided, otherwise create
-	// a new one stamped with the current run's timestamp in the output directory.
-	checkpointPath := filepath.Join(*outDir, ts+".checkpoint.json")
-	if *resume != "" {
-		checkpointPath = *resume
 	}
 
 	var w output.Writer
@@ -133,37 +219,41 @@ func main() {
 		}
 	}
 
-	out := make(chan *gmaps.Entry, *concurrency*2)
+	out := make(chan gmaps.PlaceResult, *concurrency*2)
 
 	s := gmaps.Scraper{
 		Config: gmaps.Config{
-			Concurrency:    *concurrency,
-			Depth:          *depth,
-			Lang:           *lang,
-			Geo:            *geo,
-			Radius:         *radius,
-			ExtractEmail:   *extractEmail,
-			ExtraReviews:   *extraReviews,
-			Limit:          *limit,
-			CheckpointPath: checkpointPath,
+			Concurrency:      *concurrency,
+			Depth:            *depth,
+			Lang:             *lang,
+			Geo:              *geo,
+			Radius:           *radius,
+			ExtractEmail:     *extractEmail,
+			ExtraReviews:     *extraReviews,
+			Limit:            *limit,
+			JobID:            *jobID,
+			AutoRecover:      true,
+			RecoveryMinDelay: 10 * time.Minute,
+			RecoveryMaxDelay: 60 * time.Minute,
+			BrowseStartDelay: 500 * time.Millisecond,
 		},
-		Pool: br,
+		Pool:       br,
+		Store:      store,
+		OnJobReady: setCurrentJob,
 	}
 
-	// Build query list: from checkpoint when resuming, from flag otherwise.
 	var qs []string
-	if *resume != "" {
-		cp, err := gmaps.LoadCheckpoint(*resume)
-		if err != nil {
-			log.Fatalf("load checkpoint: %v", err)
-		}
-		qs = cp.Queries
-		log.Printf("Resuming checkpoint %s: %d URLs, %d already done", *resume, len(cp.URLs), len(cp.Done))
-	} else {
+	if *jobID == "" {
 		qs = strings.Split(*queries, ",")
 		for i, q := range qs {
 			qs[i] = strings.TrimSpace(q)
 		}
+	} else {
+		job, err := store.GetJob(ctx, *jobID)
+		if err != nil {
+			log.Fatalf("load job: %v", err)
+		}
+		qs = job.Queries
 	}
 
 	errCh := make(chan error, 1)
@@ -172,39 +262,110 @@ func main() {
 	}()
 
 	var written, failed, dupes int
-	seenPlaceIDs := make(map[string]struct{})
-	for entry := range out {
-		if entry.PlaceID != "" {
-			if _, seen := seenPlaceIDs[entry.PlaceID]; seen {
-				dupes++
-				continue
+	dedupe := newPlaceDeduper()
+	for result := range out {
+		entry := result.Entry
+		if dedupe.Seen(entry) {
+			dupes++
+			if result.URLID != 0 {
+				_ = store.MarkURLDone(context.Background(), result.URLID)
 			}
-			seenPlaceIDs[entry.PlaceID] = struct{}{}
+			continue
 		}
 		if err := w.Write(entry); err != nil {
 			log.Printf("write error: %v", err)
+			if result.URLID != 0 {
+				_ = store.MarkURLFailed(context.Background(), result.URLID, err)
+			}
 			failed++
 		} else {
+			if result.URLID != 0 {
+				if err := store.MarkURLDone(context.Background(), result.URLID); err != nil {
+					log.Printf("state update error: %v", err)
+				}
+			}
 			written++
 		}
 	}
 	if dupes > 0 {
-		log.Printf("dedup: %d duplicate place_id records discarded", dupes)
+		log.Printf("dedup: %d duplicate cid/place_id/data_id records discarded", dupes)
 	}
 
 	log.Printf("run complete: written=%d failed=%d", written, failed)
 
-	if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
-		if errors.Is(err, gmaps.ErrSessionBlocked) {
-			log.Printf("session blocked by Google — resume with: --resume %s", checkpointPath)
+	runErr := <-errCh
+	currentJobMu.Lock()
+	finalJobID := currentJobID
+	currentJobMu.Unlock()
+	if runErr == nil && finalJobID != "" {
+		if stats, err := store.JobStats(context.Background(), finalJobID); err == nil && stats.Pending == 0 && stats.InProgress == 0 {
+			if stats.Failed > 0 {
+				_ = store.SetJobStatus(context.Background(), finalJobID, gmaps.JobStatusFailed, nil)
+			} else {
+				_ = store.SetJobStatus(context.Background(), finalJobID, gmaps.JobStatusDone, nil)
+			}
+		}
+	}
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		if errors.Is(runErr, gmaps.ErrSessionBlocked) {
+			currentJobMu.Lock()
+			id := currentJobID
+			currentJobMu.Unlock()
+			log.Printf("session blocked by Google — resume with: --job %s", id)
+		} else if errors.Is(runErr, gmaps.ErrJobPaused) {
+			log.Printf("job paused — resume with: --job %s", finalJobID)
 		} else {
-			log.Printf("scraper error: %v", err)
+			log.Printf("scraper error: %v", runErr)
 		}
 	}
 
 	if err := w.Close(); err != nil {
 		log.Printf("writer close error: %v", err)
 	}
+}
+
+type placeDeduper struct {
+	cids     map[string]struct{}
+	placeIDs map[string]struct{}
+	dataIDs  map[string]struct{}
+}
+
+func newPlaceDeduper() *placeDeduper {
+	return &placeDeduper{
+		cids:     make(map[string]struct{}),
+		placeIDs: make(map[string]struct{}),
+		dataIDs:  make(map[string]struct{}),
+	}
+}
+
+func (d *placeDeduper) Seen(entry *gmaps.Entry) bool {
+	if entry.Cid != "" {
+		if _, ok := d.cids[entry.Cid]; ok {
+			return true
+		}
+	}
+	if entry.PlaceID != "" {
+		if _, ok := d.placeIDs[entry.PlaceID]; ok {
+			return true
+		}
+	}
+	if entry.DataID != "" {
+		if _, ok := d.dataIDs[entry.DataID]; ok {
+			return true
+		}
+	}
+
+	if entry.Cid != "" {
+		d.cids[entry.Cid] = struct{}{}
+	}
+	if entry.PlaceID != "" {
+		d.placeIDs[entry.PlaceID] = struct{}{}
+	}
+	if entry.DataID != "" {
+		d.dataIDs[entry.DataID] = struct{}{}
+	}
+
+	return false
 }
 
 // runURLsOnly collects feed URLs for all queries and writes them one-per-line
