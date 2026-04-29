@@ -3,6 +3,7 @@ package browser
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/playwright-community/playwright-go"
 )
@@ -13,6 +14,9 @@ type Browser struct {
 	browser playwright.Browser
 	context playwright.BrowserContext
 	pages   chan playwright.Page
+	mu      sync.Mutex
+	created int
+	max     int
 }
 
 // Options configures the browser.
@@ -22,9 +26,11 @@ type Options struct {
 	Lang        string
 }
 
-// New launches playwright, creates a browser and a shared context, and pre-creates
-// Concurrency pages as a pool. All pages share the same context so cookies (needed
-// for the reviews RPC credentials:include fetch) are shared across workers.
+// New launches playwright, creates a browser and a shared context. Pages are
+// created lazily up to Concurrency, so the browser can ramp from one tab to the
+// configured maximum as workers need them. All pages share the same context so
+// cookies (needed for the reviews RPC credentials:include fetch) are shared
+// across workers.
 func New(opts Options) (*Browser, error) {
 	// Skip install when PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is set (e.g. CI with pre-installed browsers).
 	if os.Getenv("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD") == "" {
@@ -83,22 +89,41 @@ func New(opts Options) (*Browser, error) {
 	}
 
 	pool := make(chan playwright.Page, opts.Concurrency)
-	for i := 0; i < opts.Concurrency; i++ {
-		page, err := ctx.NewPage()
-		if err != nil {
-			_ = ctx.Close()
-			_ = br.Close()
-			_ = pw.Stop()
-			return nil, fmt.Errorf("new page %d: %w", i, err)
-		}
-		pool <- page
+	page, err := ctx.NewPage()
+	if err != nil {
+		_ = ctx.Close()
+		_ = br.Close()
+		_ = pw.Stop()
+		return nil, fmt.Errorf("new page: %w", err)
 	}
+	pool <- page
 
-	return &Browser{pw: pw, browser: br, context: ctx, pages: pool}, nil
+	return &Browser{pw: pw, browser: br, context: ctx, pages: pool, created: 1, max: opts.Concurrency}, nil
 }
 
-// AcquirePage takes a page from the pool (blocks until one is available).
+// AcquirePage takes a page from the pool, creating a new tab lazily until the
+// configured maximum is reached.
 func (b *Browser) AcquirePage() playwright.Page {
+	select {
+	case page := <-b.pages:
+		return page
+	default:
+	}
+
+	b.mu.Lock()
+	if b.created < b.max {
+		b.created++
+		b.mu.Unlock()
+		page, err := b.context.NewPage()
+		if err == nil {
+			return page
+		}
+		b.mu.Lock()
+		b.created--
+		b.mu.Unlock()
+	} else {
+		b.mu.Unlock()
+	}
 	return <-b.pages
 }
 
@@ -106,12 +131,11 @@ func (b *Browser) AcquirePage() playwright.Page {
 // closed, a fresh replacement is created so the pool size stays constant.
 func (b *Browser) ReleasePage(page playwright.Page) {
 	if page.IsClosed() {
-		newPage, err := b.context.NewPage()
-		if err != nil {
-			// Can't recreate — shrink the pool rather than block forever.
-			return
+		b.mu.Lock()
+		if b.created > 0 {
+			b.created--
 		}
-		b.pages <- newPage
+		b.mu.Unlock()
 		return
 	}
 	b.pages <- page

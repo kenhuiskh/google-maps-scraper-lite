@@ -3,13 +3,16 @@ package output
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/gosom/google-maps-scraper-lite/gmaps"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -68,6 +71,16 @@ CREATE TABLE IF NOT EXISTS %s (
 	UNIQUE (cid, reviewer_name)
 )`
 
+const createRestaurantPlaceIDIndexSQLFmt = `
+CREATE UNIQUE INDEX IF NOT EXISTS %s_place_id_unique
+ON %s (place_id)
+WHERE place_id IS NOT NULL AND place_id <> ''`
+
+const createRestaurantDataIDIndexSQLFmt = `
+CREATE UNIQUE INDEX IF NOT EXISTS %s_data_id_unique
+ON %s (data_id)
+WHERE data_id IS NOT NULL AND data_id <> ''`
+
 type PostgresWriter struct {
 	pool            *pgxpool.Pool
 	written         int64
@@ -92,12 +105,33 @@ func NewPostgresWriter(ctx context.Context, dsn, tableRestaurant, tableReview st
 		return nil, fmt.Errorf("create %s table: %w", tableRestaurant, err)
 	}
 
+	indexPrefix := postgresIndexName(tableRestaurant)
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantPlaceIDIndexSQLFmt, indexPrefix, tableRestaurant)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("create %s place_id unique index: %w", tableRestaurant, err)
+	}
+
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantDataIDIndexSQLFmt, indexPrefix, tableRestaurant)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("create %s data_id unique index: %w", tableRestaurant, err)
+	}
+
 	if _, err := pool.Exec(ctx, fmt.Sprintf(createReviewsSQLFmt, tableReview, tableRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s table: %w", tableReview, err)
 	}
 
 	return &PostgresWriter{pool: pool, tableRestaurant: tableRestaurant, tableReview: tableReview}, nil
+}
+
+func postgresIndexName(table string) string {
+	re := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	name := re.ReplaceAllString(table, "_")
+	name = strings.Trim(name, "_")
+	if name == "" {
+		return "restaurants"
+	}
+	return name
 }
 
 func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
@@ -111,6 +145,13 @@ func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
 			return []byte("null")
 		}
 		return b
+	}
+
+	canonicalCID, err := p.canonicalCID(ctx, entry)
+	if err != nil {
+		atomic.AddInt64(&p.failed, 1)
+		log.Printf("postgres: canonical lookup failed for %q: %v", entry.Cid, err)
+		return fmt.Errorf("canonical restaurant lookup %q: %w", entry.Cid, err)
 	}
 
 	upsertSQL := fmt.Sprintf(`
@@ -169,8 +210,8 @@ INSERT INTO %s (
 		ELSE %s.closed_at
 	END`, p.tableRestaurant, p.tableRestaurant, p.tableRestaurant)
 
-	_, err := p.pool.Exec(ctx, upsertSQL,
-		entry.Cid,
+	_, err = p.pool.Exec(ctx, upsertSQL,
+		canonicalCID,
 		entry.ID,
 		entry.Link,
 		entry.Title,
@@ -207,8 +248,8 @@ INSERT INTO %s (
 	)
 	if err != nil {
 		atomic.AddInt64(&p.failed, 1)
-		log.Printf("postgres: write failed for %q: %v", entry.Cid, err)
-		return fmt.Errorf("upsert restaurant %q: %w", entry.Cid, err)
+		log.Printf("postgres: write failed for %q: %v", canonicalCID, err)
+		return fmt.Errorf("upsert restaurant %q: %w", canonicalCID, err)
 	}
 
 	insertReviewSQL := fmt.Sprintf(`
@@ -220,7 +261,7 @@ ON CONFLICT (cid, reviewer_name) DO NOTHING`, p.tableReview)
 	for _, r := range entry.UserReviews {
 		reviewedAt := parseReviewDate(r.When)
 		_, err := p.pool.Exec(ctx, insertReviewSQL,
-			entry.Cid,
+			canonicalCID,
 			r.Name,
 			r.ProfilePicture,
 			r.Rating,
@@ -230,8 +271,8 @@ ON CONFLICT (cid, reviewer_name) DO NOTHING`, p.tableReview)
 		)
 		if err != nil {
 			atomic.AddInt64(&p.failed, 1)
-			log.Printf("postgres: write failed for %q: %v", entry.Cid, err)
-			return fmt.Errorf("insert review for %q: %w", entry.Cid, err)
+			log.Printf("postgres: write failed for %q: %v", canonicalCID, err)
+			return fmt.Errorf("insert review for %q: %w", canonicalCID, err)
 		}
 	}
 
@@ -241,6 +282,32 @@ ON CONFLICT (cid, reviewer_name) DO NOTHING`, p.tableReview)
 	}
 
 	return nil
+}
+
+func (p *PostgresWriter) canonicalCID(ctx context.Context, entry *gmaps.Entry) (string, error) {
+	query := fmt.Sprintf(`
+SELECT cid
+FROM %s
+WHERE ($1 <> '' AND cid = $1)
+	OR ($2 <> '' AND place_id = $2)
+	OR ($3 <> '' AND data_id = $3)
+ORDER BY CASE
+	WHEN $1 <> '' AND cid = $1 THEN 1
+	WHEN $2 <> '' AND place_id = $2 THEN 2
+	WHEN $3 <> '' AND data_id = $3 THEN 3
+	ELSE 4
+END
+LIMIT 1`, p.tableRestaurant)
+
+	var cid string
+	if err := p.pool.QueryRow(ctx, query, entry.Cid, entry.PlaceID, entry.DataID).Scan(&cid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return entry.Cid, nil
+		}
+		return "", err
+	}
+
+	return cid, nil
 }
 
 // parseReviewDate parses a "YYYY-M-D" review date into time.Time.

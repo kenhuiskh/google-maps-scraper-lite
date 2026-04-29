@@ -6,6 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/google/open-location-code/go v0.0.0-20250620134813-83986da0156b
 	github.com/jackc/pgx/v5 v5.9.1
+	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/mcnijman/go-emailaddress v1.1.1
 	github.com/paulmach/orb v0.13.0
 	github.com/playwright-community/playwright-go v0.5200.1

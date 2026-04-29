@@ -2,7 +2,7 @@
 
 > **Based on [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper)** by [Georgios Somarakis](https://github.com/gosom). This is a trimmed-down fork focused on a lightweight CLI experience with Playwright browser pooling and geo-spatial BIA analysis. Licensed under the [MIT License](LICENSE).
 
-A standalone Go CLI for scraping Google Maps search results with Playwright. It supports single-query runs, geo-anchored searches, optional email extraction, optional review expansion, JSON or CSV output, Postgres output, checkpoint-based resume, and a `suggest-zoom` helper for planning `-geo` coverage.
+A standalone Go CLI for scraping Google Maps search results with Playwright. It supports single-query runs, geo-anchored searches, optional email extraction, optional review expansion, JSON or CSV output, Postgres output, SQLite-backed pause/resume, and a `suggest-zoom` helper for planning `-geo` coverage.
 
 ## Features
 
@@ -13,12 +13,13 @@ A standalone Go CLI for scraping Google Maps search results with Playwright. It 
 - Write directly to Postgres with `-dsn`.
 - Extract emails from business websites with `-email`.
 - Scrape additional reviews with `-reviews`.
-- Auto-save a checkpoint file and resume a blocked run with `--resume`.
+- Auto-save scraper state in SQLite and resume a blocked or paused run with `-job`.
 - Use `suggest-zoom` to estimate practical zoom anchors before building a sweep plan.
 
 ## Requirements
 
 - Go 1.22+
+- A C compiler and SQLite development headers for native SQLite (`github.com/mattn/go-sqlite3`)
 - Chromium installed through Playwright
 - Internet access for Google Maps
 - Internet access for Overpass API if you use `suggest-zoom`
@@ -29,7 +30,34 @@ A standalone Go CLI for scraping Google Maps search results with Playwright. It 
 cd google-maps-scraper-lite
 
 go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+CGO_ENABLED=1 go build -o google-maps-scraper-lite .
+```
+
+### macOS Local Setup
+
+```bash
+xcode-select --install
+brew install sqlite
+go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+CGO_ENABLED=1 go build -o google-maps-scraper-lite .
+```
+
+If Go cannot find Homebrew SQLite:
+
+```bash
+CGO_ENABLED=1 \
+CGO_CFLAGS="-I$(brew --prefix sqlite)/include" \
+CGO_LDFLAGS="-L$(brew --prefix sqlite)/lib" \
 go build -o google-maps-scraper-lite .
+```
+
+### Ubuntu/Debian Local Setup
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential libsqlite3-dev
+go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+CGO_ENABLED=1 go build -o google-maps-scraper-lite .
 ```
 
 ## How It Works
@@ -40,7 +68,7 @@ The scraper follows a **Feed → Place → Details** pipeline:
 2. **Place** — visits each place URL and extracts the `APP_INITIALIZATION_STATE` JSON blob via JS injection.
 3. **Details** — parses the raw JSON into a structured `Entry` (28 fields).
 
-**Concurrency:** feeds are collected serially (one per query), then all place URLs are fanned out using `errgroup` with a semaphore controlled by `-c`. The browser page pool matches the concurrency level — each worker acquires and releases a page around each scrape.
+**Concurrency:** feeds are collected serially (one per query), then place URLs are claimed from the local SQLite state database by workers controlled by `-c`. The browser page pool matches the concurrency level — each worker acquires and releases a page around each scrape.
 
 ## CLI Usage
 
@@ -100,7 +128,7 @@ Table names default to `restaurants` and `restaurant_reviews` but can be overrid
   -table-review my_reviews
 ```
 
-The Postgres writer uses a connection pool with a 30-second per-write timeout. It upserts into the places table (on `cid`) and inserts into the reviews table (on conflict do nothing, keyed on `cid` + `reviewer_name`).
+The Postgres writer uses a connection pool with a 30-second per-write timeout. It deduplicates places by `cid`, `place_id`, or `data_id`, then upserts using the existing row's canonical `cid`. Reviews are inserted with `ON CONFLICT DO NOTHING`, keyed on `cid` + `reviewer_name`.
 
 ### Email Extraction and Review Expansion
 
@@ -117,27 +145,53 @@ The Postgres writer uses a connection pool with a 30-second per-write timeout. I
 
 `-reviews N` fetches additional review pages until at least N reviews are collected.
 
-### Resuming a Blocked Run
+### Pause and Resume
 
-Google Maps may block the Playwright session mid-scrape (rate limiting or bot detection). When this happens, consecutive place scrapes begin failing. The scraper detects this after 10 consecutive failures across all workers, saves the checkpoint, and exits with a clear message:
+Every normal run creates a job in the local SQLite state database. The default path is `gmdata/scraper-state.sqlite`, which is inside the gitignored `gmdata/` directory. Each collected place URL is tracked as pending, in progress, done, or failed.
+
+Google Maps may block the Playwright session mid-scrape (rate limiting or bot detection). When this happens, consecutive place scrapes begin failing. The scraper detects this after 10 consecutive failures across all workers, saves the job state, and exits with a clear message:
 
 ```
-session blocked by Google — resume with: --resume gmdata/2026-04-20_10-30-00.checkpoint.json
+session blocked by Google — resume with: --job job_20260428_103000_123456
 ```
 
-Every run automatically creates a checkpoint file in the output directory (`-o`) stamped with the run's start time. The checkpoint records all collected place URLs and marks each one done as it completes. Re-running with `--resume` skips the feed phase entirely and only scrapes the remaining URLs:
+Pressing `Ctrl-C` once requests a graceful pause. Active URL scrapes finish and no new URLs are claimed. Pressing `Ctrl-C` a second time forces shutdown.
 
 ```bash
-# Original run (blocked partway through)
+# Original run
 ./google-maps-scraper-lite -queries "restaurants in Toronto" -c 3 -o gmdata
 
-# Resume (no -queries needed — queries come from the checkpoint)
-./google-maps-scraper-lite --resume gmdata/2026-04-20_10-30-00.checkpoint.json -c 3 -o gmdata
+# Resume by job ID
+./google-maps-scraper-lite -job job_20260428_103000_123456 -c 3 -o gmdata
 ```
 
 A resumed run writes its results to a **new** output file (same directory, new timestamp). If you're using `-dsn`, results from both runs land in the same database table — no manual merge needed.
 
-The checkpoint also survives a clean `Ctrl-C` interrupt, so any partial progress is always recoverable.
+You can choose a different state DB path:
+
+```bash
+./google-maps-scraper-lite \
+  -queries "restaurants in Toronto" \
+  -state-db gmdata/scraper-state.sqlite
+```
+
+To enable the local control UI:
+
+```bash
+./google-maps-scraper-lite \
+  -queries "restaurants in Toronto" \
+  -control-addr 127.0.0.1:8080
+```
+
+To run only the control UI against the saved SQLite jobs:
+
+```bash
+./google-maps-scraper-lite \
+  -state-db gmdata/scraper-state.sqlite \
+  -control-addr 127.0.0.1:8080
+```
+
+The UI lists jobs in the selected state DB. The **Pause** button requests a graceful pause. The **Resume** button starts a new local scraper process for that job using the same `-state-db`.
 
 ### Logging
 
@@ -163,9 +217,12 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-queries` | string | required* | Comma-separated search queries. Not required when `--resume` is set. |
-| `--resume` | string | `""` | Path to a checkpoint file to resume a blocked or interrupted run. Skips the feed phase; queries are read from the checkpoint. |
+| `-queries` | string | required* | Comma-separated search queries. Not required when `-job` is set. |
+| `-job` | string | `""` | SQLite job ID to resume. Skips the feed phase; queries and URLs are read from the state DB. |
+| `-state-db` | string | `gmdata/scraper-state.sqlite` | Local SQLite state database path. |
+| `-control-addr` | string | `""` | Optional local HTTP control UI address, e.g. `127.0.0.1:8080`. Can be used without `-queries`/`-job` for UI-only mode. |
 | `-c` | int | `1` | Concurrency level. |
+| `-max-c` | int | `0` | Maximum dynamic browser tab concurrency. Overrides `-c` when set. Tabs are opened lazily from 1 up to this ceiling. |
 | `-depth` | int | `10` | Max scroll depth per query. |
 | `-limit` | int | `0` | Cap the total number of places scraped. `0` = no limit. |
 | `-json` | bool | `false` | Output JSON instead of CSV. |
@@ -181,6 +238,8 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
 | `-headless` | bool | `true` | Run browser headless. |
 | `-error-log` | string | `""` | Append application logs to a file as well as stderr. |
 | `-urls-only` | string | `""` | Debug: collect feed URLs only and write them to this file. No place scraping is performed. |
+
+Place workers start 500ms apart and wait 500ms before each place navigation. If a place tab returns a scrape error, the job is paused, the URL is requeued, the process waits a random 10-60 minutes, and then the job resumes automatically. Press `Ctrl-C` during the countdown to cancel the wait.
 
 ## Output
 
@@ -258,10 +317,10 @@ CSV columns:
 
 When `-dsn` is set, the tool creates two tables if they do not exist and upserts on each write:
 
-- places table (default `restaurants`) — one row per place, upserted on `cid`
+- places table (default `restaurants`) — one row per place, deduplicated by `cid`, `place_id`, or `data_id`
 - reviews table (default `restaurant_reviews`) — one row per review, conflict key is `(cid, reviewer_name)`
 
-Table names are configurable via `-table-restaurant` and `-table-review`. The connection pool handles reconnects and idle timeouts automatically. Each write uses a 30-second timeout context.
+Table names are configurable via `-table-restaurant` and `-table-review`. The places table keeps `cid` as the primary key and adds unique indexes for non-empty `place_id` and `data_id`; if an existing database already contains duplicates in either field, those rows must be cleaned before the indexes can be created. The connection pool handles reconnects and idle timeouts automatically. Each write uses a 30-second timeout context.
 
 ## `suggest-zoom` Subcommand
 
@@ -371,7 +430,7 @@ One line per evaluated point:
 ├── browser/           Playwright lifecycle and thread-safe page pool
 ├── geo/               Overpass client, BIA index, zoom scoring logic
 ├── gmaps/
-│   ├── checkpoint.go  Checkpoint struct: persist/resume progress, block detection
+│   ├── jobstore.go    SQLite job state, pause/resume progress, block detection
 │   ├── feed.go        Navigate search, scroll results, return place URLs
 │   ├── place.go       Navigate place URL, extract APP_INITIALIZATION_STATE JSON
 │   ├── entry.go       Entry struct (28 fields) and all JSON parsing logic
@@ -386,7 +445,7 @@ One line per evaluated point:
 - Place data comes from Google Maps' `window.APP_INITIALIZATION_STATE` JavaScript variable. The JSON structure has at least two known variants; parsing handles both with fallback logic.
 - When `-radius` is set, all place details are fetched first and the filter is applied after `g.Wait()` completes. No records are written until the full fan-out finishes.
 - `suggest-zoom` depends on the public Overpass API. Use reasonable request pacing for bulk point scoring.
-- Deduplicate multi-zone output by `cid` field:
+- Deduplicate multi-zone output by `cid` field, or by `place_id`/`data_id` when you need stricter matching:
   ```bash
   jq -s '[.[]] | unique_by(.cid)' output/**/*.json > deduped.json
   ```
