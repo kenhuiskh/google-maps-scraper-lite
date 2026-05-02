@@ -17,6 +17,10 @@ import (
 // Config controls what the Scraper extracts.
 type Config struct {
 	Concurrency      int
+	MaxConcurrency   int
+	ConcurrencyMode  string
+	ConcurrencyValue int
+	QueueWaitMinutes int
 	Depth            int
 	Lang             string
 	Geo              string
@@ -25,6 +29,9 @@ type Config struct {
 	ExtraReviews     int
 	Limit            int // max places to scrape; 0 = no limit
 	JobID            string
+	OutputMode       string // "database" or "file"; metadata for UI resume
+	JSONOut          bool
+	OutDir           string
 	AutoRecover      bool
 	RecoveryMinDelay time.Duration
 	RecoveryMaxDelay time.Duration
@@ -365,6 +372,24 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 
 func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts FeedOptions) (string, error) {
 	if s.Config.JobID != "" {
+		job, err := s.Store.GetJob(ctx, s.Config.JobID)
+		if err != nil {
+			return "", err
+		}
+		if job.Status == JobStatusStarting {
+			placeURLs := s.collectPlaceURLs(ctx, queries, feedOpts)
+			if err := s.Store.QueueStartingJobURLs(ctx, s.Config.JobID, placeURLs); err != nil {
+				return "", err
+			}
+			if err := s.Store.StartJob(ctx, s.Config.JobID); err != nil {
+				return "", err
+			}
+			log.Printf("Started job %s: %d URLs queued", s.Config.JobID, len(placeURLs))
+			if s.OnJobReady != nil {
+				s.OnJobReady(s.Config.JobID)
+			}
+			return s.Config.JobID, nil
+		}
 		if err := s.Store.ResetInProgress(ctx, s.Config.JobID); err != nil {
 			return "", err
 		}
@@ -379,6 +404,23 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 		return s.Config.JobID, nil
 	}
 
+	placeURLs := s.collectPlaceURLs(ctx, queries, feedOpts)
+	jobID, err := s.Store.CreateJob(ctx, queries, s.Config, placeURLs)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("Created job %s", jobID)
+	if err := s.Store.StartJob(ctx, jobID); err != nil {
+		return "", err
+	}
+	s.Config.JobID = jobID
+	if s.OnJobReady != nil {
+		s.OnJobReady(jobID)
+	}
+	return jobID, nil
+}
+
+func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions) []string {
 	var placeURLs []string
 	total := len(queries)
 	for i, q := range queries {
@@ -415,20 +457,7 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 	} else {
 		log.Printf("Feed collection done: %d URLs queued across %d queries", len(placeURLs), total)
 	}
-
-	jobID, err := s.Store.CreateJob(ctx, queries, s.Config, placeURLs)
-	if err != nil {
-		return "", err
-	}
-	log.Printf("Created job %s", jobID)
-	if err := s.Store.StartJob(ctx, jobID); err != nil {
-		return "", err
-	}
-	s.Config.JobID = jobID
-	if s.OnJobReady != nil {
-		s.OnJobReady(jobID)
-	}
-	return jobID, nil
+	return placeURLs
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {
