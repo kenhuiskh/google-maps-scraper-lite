@@ -2,6 +2,7 @@ package gmaps
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -155,5 +156,125 @@ func TestJobStoreClaimResumeRejectsDoneJob(t *testing.T) {
 
 	if _, err := store.ClaimResume(ctx, jobID); !errors.Is(err, ErrJobNotResumable) {
 		t.Fatalf("claim done job error = %v, want ErrJobNotResumable", err)
+	}
+}
+
+func TestJobStoreCreateStartingJobQueuesBehindActiveJob(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, map[string]string{"output": "file"})
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get starting job: %v", err)
+	}
+	if job.Status != JobStatusStarting {
+		t.Fatalf("status = %q, want starting", job.Status)
+	}
+	queuedID, err := store.CreateStartingJob(ctx, []string{"tea"}, nil)
+	if err != nil {
+		t.Fatalf("create queued job: %v", err)
+	}
+	queued, err := store.GetJob(ctx, queuedID)
+	if err != nil {
+		t.Fatalf("get queued job: %v", err)
+	}
+	if queued.Status != JobStatusPending {
+		t.Fatalf("queued status = %q, want pending", queued.Status)
+	}
+}
+
+func TestJobStoreClaimNextPendingJobAfterDone(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	firstID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create first job: %v", err)
+	}
+	secondID, err := store.CreateStartingJob(ctx, []string{"tea"}, nil)
+	if err != nil {
+		t.Fatalf("create second job: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, firstID, JobStatusDone, nil); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+	peek, err := store.NextPendingJobAfterDone(ctx)
+	if err != nil {
+		t.Fatalf("next pending: %v", err)
+	}
+	if peek.ID != secondID {
+		t.Fatalf("peek ID = %q, want %q", peek.ID, secondID)
+	}
+	claimed, err := store.ClaimNextPendingJob(ctx)
+	if err != nil {
+		t.Fatalf("claim next pending: %v", err)
+	}
+	if claimed.ID != secondID || claimed.Status != JobStatusStarting {
+		t.Fatalf("claimed = %q/%q, want %q/starting", claimed.ID, claimed.Status, secondID)
+	}
+	if _, err := store.ClaimNextPendingJob(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("second claim error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestJobStoreSaveAndListJobTemplates(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	params := map[string]any{"queries": []string{"coffee"}, "lang": "en"}
+	id, err := store.SaveJobTemplate(ctx, "coffee [file/en]", params)
+	if err != nil {
+		t.Fatalf("save template: %v", err)
+	}
+	if _, err := store.SaveJobTemplate(ctx, "coffee [file/en]", params); err != nil {
+		t.Fatalf("upsert template: %v", err)
+	}
+	templates, err := store.ListJobTemplates(ctx)
+	if err != nil {
+		t.Fatalf("list templates: %v", err)
+	}
+	if len(templates) != 1 {
+		t.Fatalf("templates len = %d, want 1", len(templates))
+	}
+	if templates[0].ID != id || templates[0].Name != "coffee [file/en]" {
+		t.Fatalf("template = %#v, want id %q and saved name", templates[0], id)
+	}
+}
+
+func TestJobStoreQueueStartingJobURLs(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if err := store.QueueStartingJobURLs(ctx, jobID, []string{"u1", "u2"}); err != nil {
+		t.Fatalf("queue URLs: %v", err)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Pending != 2 || stats.Total != 2 {
+		t.Fatalf("pending/total = %d/%d, want 2/2", stats.Pending, stats.Total)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start job: %v", err)
+	}
+	if err := store.QueueStartingJobURLs(ctx, jobID, []string{"u3"}); err == nil {
+		t.Fatal("expected queueing a non-starting job to fail")
+	}
+}
+
+func TestJobStoreClaimResumeRejectsStartingJob(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if _, err := store.ClaimResume(ctx, jobID); !errors.Is(err, ErrJobNotResumable) {
+		t.Fatalf("claim starting job error = %v, want ErrJobNotResumable", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,6 +49,13 @@ func main() {
 	urlsOnly := flag.String("urls-only", "", "debug: collect feed URLs only and write to this file (no place scraping)")
 	limit := flag.Int("limit", 0, "max number of places to scrape (0 = no limit)")
 	flag.Parse()
+
+	explicitTables := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "table-restaurant" || f.Name == "table-review" {
+			explicitTables[f.Name] = true
+		}
+	})
 
 	if *maxConcurrency > 0 {
 		*concurrency = *maxConcurrency
@@ -101,7 +109,7 @@ func main() {
 	log.Printf("using state db %s", *stateDB)
 
 	if *controlAddr != "" {
-		if _, err := startControlServer(ctx, *controlAddr, store, newProcessResumeLauncher(store, *stateDB)); err != nil {
+		if _, err := startControlServer(ctx, *controlAddr, store, *stateDB, newProcessResumeLauncher(store, *stateDB), newProcessStartLauncher(*stateDB)); err != nil {
 			log.Fatalf("control server: %v", err)
 		}
 	}
@@ -195,6 +203,13 @@ func main() {
 	var w output.Writer
 	switch {
 	case *dsn != "":
+		defaultRestaurant, defaultReview := languagePostgresTables(*lang)
+		if !explicitTables["table-restaurant"] {
+			*tableRestaurant = defaultRestaurant
+		}
+		if !explicitTables["table-review"] {
+			*tableReview = defaultReview
+		}
 		pw, err := output.NewPostgresWriter(ctx, *dsn, *tableRestaurant, *tableReview)
 		if err != nil {
 			log.Fatalf("postgres writer init: %v", err)
@@ -224,6 +239,7 @@ func main() {
 	s := gmaps.Scraper{
 		Config: gmaps.Config{
 			Concurrency:      *concurrency,
+			MaxConcurrency:   *maxConcurrency,
 			Depth:            *depth,
 			Lang:             *lang,
 			Geo:              *geo,
@@ -232,6 +248,9 @@ func main() {
 			ExtraReviews:     *extraReviews,
 			Limit:            *limit,
 			JobID:            *jobID,
+			OutputMode:       outputMode(*dsn),
+			JSONOut:          *jsonOut,
+			OutDir:           *outDir,
 			AutoRecover:      true,
 			RecoveryMinDelay: 10 * time.Minute,
 			RecoveryMaxDelay: 60 * time.Minute,
@@ -322,6 +341,28 @@ func main() {
 	if err := w.Close(); err != nil {
 		log.Printf("writer close error: %v", err)
 	}
+}
+
+func outputMode(dsn string) string {
+	if dsn != "" {
+		return "database"
+	}
+	return "file"
+}
+
+func languagePostgresTables(lang string) (string, string) {
+	suffix := postgresLanguageSuffix(lang)
+	return "restaurants_" + suffix, "restaurant_reviews_" + suffix
+}
+
+func postgresLanguageSuffix(lang string) string {
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	suffix := strings.Trim(re.ReplaceAllString(lang, "_"), "_")
+	if suffix == "" {
+		return "en"
+	}
+	return suffix
 }
 
 type placeDeduper struct {

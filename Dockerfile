@@ -55,6 +55,6 @@ COPY --from=builder /ms-playwright /ms-playwright
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Default: run the binary directly.
-# Coolify cron jobs override this with: bash /data/gta-sweep.sh
+# Default: serve the control UI. Override CMD to run a one-shot scrape.
 ENTRYPOINT ["/app/google-maps-scraper-lite"]
+CMD ["-state-db", "/data/gmdata/scraper-state.sqlite", "-control-addr", "0.0.0.0:8080"]

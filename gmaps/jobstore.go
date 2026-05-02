@@ -2,24 +2,27 @@ package gmaps
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
-	JobStatusPending = "pending"
-	JobStatusRunning = "running"
-	JobStatusPaused  = "paused"
-	JobStatusBlocked = "blocked"
-	JobStatusDone    = "done"
-	JobStatusFailed  = "failed"
+	JobStatusPending  = "pending"
+	JobStatusStarting = "starting"
+	JobStatusRunning  = "running"
+	JobStatusPaused   = "paused"
+	JobStatusBlocked  = "blocked"
+	JobStatusDone     = "done"
+	JobStatusFailed   = "failed"
 
 	URLStatusPending    = "pending"
 	URLStatusInProgress = "in_progress"
@@ -31,6 +34,7 @@ var (
 	ErrJobPaused       = errors.New("scraper: job pause requested")
 	ErrNoPendingURL    = errors.New("scraper: no pending URLs")
 	ErrJobNotResumable = errors.New("scraper: job is already running or done")
+	ErrActiveJobExists = errors.New("scraper: a job is already starting or running")
 )
 
 // ErrSessionBlocked is returned by Scraper.Run when consecutive place-scrape
@@ -65,6 +69,14 @@ type JobStats struct {
 	InProgress int
 	Done       int
 	Failed     int
+}
+
+type JobTemplate struct {
+	ID         string
+	Name       string
+	ParamsJSON string
+	CreatedAt  time.Time
+	LastUsedAt time.Time
 }
 
 type ClaimedURL struct {
@@ -135,6 +147,13 @@ func (s *JobStore) Init(ctx context.Context) error {
 			message TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS job_templates (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			params_json TEXT NOT NULL,
+			created_at DATETIME NOT NULL,
+			last_used_at DATETIME NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -177,6 +196,141 @@ func (s *JobStore) CreateJob(ctx context.Context, queries []string, config any, 
 		return "", err
 	}
 	return id, tx.Commit()
+}
+
+func (s *JobStore) CreateStartingJob(ctx context.Context, queries []string, config any) (string, error) {
+	now := time.Now().UTC()
+	id := newJobID(now)
+	queriesJSON, err := json.Marshal(queries)
+	if err != nil {
+		return "", err
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE status IN (?, ?)`,
+		JobStatusStarting, JobStatusRunning).Scan(&active); err != nil {
+		return "", err
+	}
+	status := JobStatusStarting
+	event := "starting"
+	message := "job accepted by control UI"
+	if active > 0 {
+		status = JobStatusPending
+		event = "queued"
+		message = "job queued by control UI"
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs
+		(id, queries_json, config_json, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, id, string(queriesJSON), string(configJSON), status, now, now); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
+		id, event, message, now); err != nil {
+		return "", err
+	}
+	return id, tx.Commit()
+}
+
+func (s *JobStore) ClaimNextPendingJob(ctx context.Context) (*Job, error) {
+	now := time.Now().UTC()
+	row := s.db.QueryRowContext(ctx, `UPDATE jobs
+		SET status = ?, pause_requested = 0,
+			started_at = COALESCE(started_at, ?), updated_at = ?,
+			finished_at = NULL, last_error = NULL
+		WHERE id = (
+			SELECT id
+			FROM jobs
+			WHERE status = ?
+				AND NOT EXISTS (SELECT 1 FROM jobs WHERE status IN (?, ?))
+				AND COALESCE((SELECT status FROM jobs WHERE status <> ? ORDER BY updated_at DESC, created_at DESC LIMIT 1), ?) = ?
+			ORDER BY created_at ASC
+			LIMIT 1
+		)
+		RETURNING id, queries_json, config_json, status, pause_requested,
+			created_at, started_at, updated_at, finished_at, last_error`,
+		JobStatusStarting, now, now,
+		JobStatusPending, JobStatusStarting, JobStatusRunning, JobStatusPending, JobStatusDone, JobStatusDone)
+	var j Job
+	var queriesJSON string
+	var pause int
+	if err := row.Scan(&j.ID, &queriesJSON, &j.ConfigJSON, &j.Status, &pause,
+		&j.CreatedAt, &j.StartedAt, &j.UpdatedAt, &j.FinishedAt, &j.LastError); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	j.PauseRequested = pause != 0
+	if err := json.Unmarshal([]byte(queriesJSON), &j.Queries); err != nil {
+		return nil, err
+	}
+	stats, err := s.JobStats(ctx, j.ID)
+	if err != nil {
+		return nil, err
+	}
+	j.Stats = stats
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
+		j.ID, "starting", "queued job claimed by scheduler", now)
+	return &j, nil
+}
+
+func (s *JobStore) NextPendingJobAfterDone(ctx context.Context) (*Job, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id
+		FROM jobs
+		WHERE status = ?
+			AND NOT EXISTS (SELECT 1 FROM jobs WHERE status IN (?, ?))
+			AND COALESCE((SELECT status FROM jobs WHERE status <> ? ORDER BY updated_at DESC, created_at DESC LIMIT 1), ?) = ?
+		ORDER BY created_at ASC
+		LIMIT 1`,
+		JobStatusPending, JobStatusStarting, JobStatusRunning, JobStatusPending, JobStatusDone, JobStatusDone).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return s.GetJob(ctx, id)
+}
+
+func (s *JobStore) QueueStartingJobURLs(ctx context.Context, jobID string, urls []string) error {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, jobID).Scan(&status); err != nil {
+		return err
+	}
+	if status != JobStatusStarting {
+		return fmt.Errorf("scraper: job %s is %s, not starting", jobID, status)
+	}
+	for i, u := range urls {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO job_urls
+			(job_id, position, url, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)`, jobID, i, u, URLStatusPending, now, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
+		jobID, "created", fmt.Sprintf("%d URLs queued", len(urls)), now); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE jobs SET updated_at = ? WHERE id = ?`, now, jobID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *JobStore) GetJob(ctx context.Context, jobID string) (*Job, error) {
@@ -233,6 +387,50 @@ func (s *JobStore) ListJobs(ctx context.Context) ([]Job, error) {
 	return jobs, nil
 }
 
+func (s *JobStore) SaveJobTemplate(ctx context.Context, name string, params any) (string, error) {
+	now := time.Now().UTC()
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(paramsJSON)
+	id := fmt.Sprintf("tpl_%x", sum[:12])
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = id
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO job_templates (id, name, params_json, created_at, last_used_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			params_json = excluded.params_json,
+			last_used_at = excluded.last_used_at`,
+		id, name, string(paramsJSON), now, now)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *JobStore) ListJobTemplates(ctx context.Context) ([]JobTemplate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, params_json, created_at, last_used_at
+		FROM job_templates
+		ORDER BY last_used_at DESC, created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var templates []JobTemplate
+	for rows.Next() {
+		var tpl JobTemplate
+		if err := rows.Scan(&tpl.ID, &tpl.Name, &tpl.ParamsJSON, &tpl.CreatedAt, &tpl.LastUsedAt); err != nil {
+			return nil, err
+		}
+		templates = append(templates, tpl)
+	}
+	return templates, rows.Err()
+}
+
 func (s *JobStore) StartJob(ctx context.Context, jobID string) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, pause_requested = 0,
@@ -247,10 +445,10 @@ func (s *JobStore) ClaimResume(ctx context.Context, jobID string) (*Job, error) 
 		SET status = ?, pause_requested = 0,
 			started_at = COALESCE(started_at, ?), updated_at = ?,
 			finished_at = NULL, last_error = NULL
-		WHERE id = ? AND status NOT IN (?, ?)
+		WHERE id = ? AND status NOT IN (?, ?, ?)
 		RETURNING id, queries_json, config_json, status, pause_requested,
 			created_at, started_at, updated_at, finished_at, last_error`,
-		JobStatusRunning, now, now, jobID, JobStatusRunning, JobStatusDone)
+		JobStatusRunning, now, now, jobID, JobStatusStarting, JobStatusRunning, JobStatusDone)
 	var j Job
 	var queriesJSON string
 	var pause int

@@ -191,7 +191,7 @@ To run only the control UI against the saved SQLite jobs:
   -control-addr 127.0.0.1:8080
 ```
 
-The UI lists jobs in the selected state DB. The **Pause** button requests a graceful pause. The **Resume** button starts a new local scraper process for that job using the same `-state-db`.
+The UI lists jobs in the selected state DB. **Create Job** stores the selected parameters, saves them as a reusable template, and either starts immediately or queues behind the active job. Queued jobs start only after the previous job finishes with `done`; the saved queue wait defaults to 20 minutes. The form also lets you choose whether the concurrency value is passed as `-c` or `-max-c`. The **Pause** button requests a graceful pause. The **Resume** button starts a new local scraper process for that job using the same `-state-db`.
 
 ### Logging
 
@@ -317,10 +317,10 @@ CSV columns:
 
 When `-dsn` is set, the tool creates two tables if they do not exist and upserts on each write:
 
-- places table (default `restaurants`) — one row per place, deduplicated by `cid`, `place_id`, or `data_id`
-- reviews table (default `restaurant_reviews`) — one row per review, conflict key is `(cid, reviewer_name)`
+- places table (default `restaurants_<lang>`) — one row per place, deduplicated by `cid`, `place_id`, or `data_id`
+- reviews table (default `restaurant_reviews_<lang>`) — one row per review, conflict key is `(cid, reviewer_name)`
 
-Table names are configurable via `-table-restaurant` and `-table-review`. The places table keeps `cid` as the primary key and adds unique indexes for non-empty `place_id` and `data_id`; if an existing database already contains duplicates in either field, those rows must be cleaned before the indexes can be created. The connection pool handles reconnects and idle timeouts automatically. Each write uses a 30-second timeout context.
+Language suffixes are lower-case and non-alphanumeric separators become `_`, so `-lang zh-TW` writes to `restaurants_zh_tw` and `restaurant_reviews_zh_tw`. Table names are still configurable via `-table-restaurant` and `-table-review`. The places table keeps `cid` as the primary key and adds unique indexes for non-empty `place_id` and `data_id`; if an existing database already contains duplicates in either field, those rows must be cleaned before the indexes can be created. The connection pool handles reconnects and idle timeouts automatically. Each write uses a 30-second timeout context.
 
 ## `suggest-zoom` Subcommand
 
