@@ -97,6 +97,10 @@ Desktop.ini
 .claude/
 CLAUDE.md
 
+# Codex
+.codex-go*
+.codex
+
 # Air (live-reload tool)
 tmp/
 
