@@ -387,6 +387,76 @@ func (s *JobStore) ListJobs(ctx context.Context) ([]Job, error) {
 	return jobs, nil
 }
 
+func (s *JobStore) CountJobs(ctx context.Context) (int, error) {
+	return s.CountJobsFiltered(ctx, "")
+}
+
+func (s *JobStore) CountJobsFiltered(ctx context.Context, filter string) (int, error) {
+	var total int
+	where, args := jobsFilterWhere(filter)
+	query := `SELECT COUNT(*) FROM jobs` + where
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *JobStore) ListJobsPage(ctx context.Context, limit, offset int) ([]Job, error) {
+	return s.ListJobsPageFiltered(ctx, "", limit, offset)
+}
+
+func (s *JobStore) ListJobsPageFiltered(ctx context.Context, filter string, limit, offset int) ([]Job, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	where, args := jobsFilterWhere(filter)
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	jobs := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		j, err := s.GetJob(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, *j)
+	}
+	return jobs, nil
+}
+
+func jobsFilterWhere(filter string) (string, []any) {
+	switch filter {
+	case "pending":
+		return ` WHERE status = ?`, []any{JobStatusPending}
+	case "active":
+		return ` WHERE status IN (?, ?)`, []any{JobStatusStarting, JobStatusRunning}
+	case "done":
+		return ` WHERE status = ?`, []any{JobStatusDone}
+	default:
+		return "", nil
+	}
+}
+
 func (s *JobStore) SaveJobTemplate(ctx context.Context, name string, params any) (string, error) {
 	now := time.Now().UTC()
 	paramsJSON, err := json.Marshal(params)

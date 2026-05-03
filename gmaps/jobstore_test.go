@@ -219,6 +219,99 @@ func TestJobStoreClaimNextPendingJobAfterDone(t *testing.T) {
 	}
 }
 
+func TestJobStoreListJobsPage(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	var ids []string
+	for _, query := range []string{"one", "two", "three"} {
+		id, err := store.CreateJob(ctx, []string{query}, nil, []string{"url-" + query})
+		if err != nil {
+			t.Fatalf("create %s: %v", query, err)
+		}
+		ids = append(ids, id)
+	}
+	total, err := store.CountJobs(ctx)
+	if err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+	jobs, err := store.ListJobsPage(ctx, 2, 1)
+	if err != nil {
+		t.Fatalf("list page: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("jobs len = %d, want 2", len(jobs))
+	}
+	if jobs[0].ID != ids[1] || jobs[1].ID != ids[0] {
+		t.Fatalf("page IDs = %q/%q, want %q/%q", jobs[0].ID, jobs[1].ID, ids[1], ids[0])
+	}
+}
+
+func TestJobStoreListJobsPageFiltered(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	activeID, err := store.CreateStartingJob(ctx, []string{"active"}, nil)
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	if err := store.StartJob(ctx, activeID); err != nil {
+		t.Fatalf("start active: %v", err)
+	}
+	pendingID, err := store.CreateStartingJob(ctx, []string{"pending"}, nil)
+	if err != nil {
+		t.Fatalf("create pending: %v", err)
+	}
+	doneID, err := store.CreateStartingJob(ctx, []string{"done"}, nil)
+	if err != nil {
+		t.Fatalf("create done: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, doneID, JobStatusDone, nil); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+	blockedID, err := store.CreateStartingJob(ctx, []string{"blocked"}, nil)
+	if err != nil {
+		t.Fatalf("create blocked: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, blockedID, JobStatusBlocked, nil); err != nil {
+		t.Fatalf("set blocked: %v", err)
+	}
+
+	tests := []struct {
+		filter string
+		want   []string
+	}{
+		{filter: "pending", want: []string{pendingID}},
+		{filter: "active", want: []string{activeID}},
+		{filter: "done", want: []string{doneID}},
+		{filter: "unknown", want: []string{blockedID, doneID, pendingID, activeID}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filter, func(t *testing.T) {
+			total, err := store.CountJobsFiltered(ctx, tt.filter)
+			if err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if total != len(tt.want) {
+				t.Fatalf("total = %d, want %d", total, len(tt.want))
+			}
+			jobs, err := store.ListJobsPageFiltered(ctx, tt.filter, 10, 0)
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			if len(jobs) != len(tt.want) {
+				t.Fatalf("jobs len = %d, want %d", len(jobs), len(tt.want))
+			}
+			for i, want := range tt.want {
+				if jobs[i].ID != want {
+					t.Fatalf("jobs[%d] = %q, want %q", i, jobs[i].ID, want)
+				}
+			}
+		})
+	}
+}
+
 func TestJobStoreSaveAndListJobTemplates(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)

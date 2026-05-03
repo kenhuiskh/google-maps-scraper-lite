@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -67,11 +68,222 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), jobID) {
 		t.Fatalf("index did not include job ID %s: %s", jobID, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), "Scraper Control") {
+		t.Fatalf("index did not include admin shell title: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Pending jobs") {
+		t.Fatalf("index did not include summary cards: %s", rec.Body.String())
+	}
 	if !strings.Contains(rec.Body.String(), `data-job-id="`+jobID+`"`) {
 		t.Fatalf("index did not include refreshable row for job ID %s: %s", jobID, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `refreshJob('`+jobID+`')`) {
 		t.Fatalf("index did not include refresh button for job ID %s: %s", jobID, rec.Body.String())
+	}
+}
+
+func TestControlSummaryCountsActiveAndPendingJobs(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	activeID, err := store.CreateStartingJob(ctx, []string{"coffee"}, gmaps.Config{OutputMode: "file"})
+	if err != nil {
+		t.Fatalf("create active job: %v", err)
+	}
+	if err := store.QueueStartingJobURLs(ctx, activeID, []string{"u1", "u2"}); err != nil {
+		t.Fatalf("queue urls: %v", err)
+	}
+	if err := store.StartJob(ctx, activeID); err != nil {
+		t.Fatalf("start active job: %v", err)
+	}
+	if _, err := store.CreateStartingJob(ctx, []string{"tea"}, gmaps.Config{OutputMode: "file"}); err != nil {
+		t.Fatalf("create pending job: %v", err)
+	}
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	summary := newControlSummaryView(jobs)
+	if !summary.HasActiveJob || summary.ActiveJobID != activeID {
+		t.Fatalf("active summary = %#v, want active job %s", summary, activeID)
+	}
+	if summary.ActiveJobTitle != "coffee" {
+		t.Fatalf("active title = %q, want coffee", summary.ActiveJobTitle)
+	}
+	if summary.RunningJobs != 1 || summary.PendingJobs != 1 {
+		t.Fatalf("running/pending jobs = %d/%d, want 1/1", summary.RunningJobs, summary.PendingJobs)
+	}
+	if summary.PendingURLs != 2 {
+		t.Fatalf("pending URLs = %d, want 2", summary.PendingURLs)
+	}
+}
+
+func TestControlUIPartialsRenderSummaryAndJobs(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/summary", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `id="summary"`) {
+		t.Fatalf("summary partial missing wrapper: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ui/jobs", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("jobs status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `data-job-id="`+jobID+`"`) {
+		t.Fatalf("jobs partial missing job row: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "pause-action") || strings.Contains(rec.Body.String(), "resume-action") {
+		t.Fatalf("jobs partial should render one lifecycle action, not separate pause/resume buttons: %s", rec.Body.String())
+	}
+}
+
+func TestControlJobsPartialPaginates(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	var ids []string
+	for i := 1; i <= 12; i++ {
+		query := "query " + strconv.Itoa(i)
+		id, err := store.CreateJob(ctx, []string{query}, nil, []string{"url-" + query})
+		if err != nil {
+			t.Fatalf("create %s: %v", query, err)
+		}
+		ids = append(ids, id)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodGet, "/ui/jobs?page=2&page_size=10", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="jobs-panel" data-page="2" data-page-size="10"`) {
+		t.Fatalf("page data missing: %s", body)
+	}
+	if !strings.Contains(body, "Showing 11-12 of 12") {
+		t.Fatalf("pagination range missing: %s", body)
+	}
+	for _, id := range []string{ids[1], ids[0]} {
+		if !strings.Contains(body, `data-job-id="`+id+`"`) {
+			t.Fatalf("missing job %s in second page: %s", id, body)
+		}
+	}
+	if strings.Contains(body, `data-job-id="`+ids[11]+`"`) {
+		t.Fatalf("newest job should not appear on second page: %s", body)
+	}
+}
+
+func TestControlJobsPartialFiltersActiveJobs(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	activeID, err := store.CreateStartingJob(ctx, []string{"active"}, nil)
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	if err := store.StartJob(ctx, activeID); err != nil {
+		t.Fatalf("start active: %v", err)
+	}
+	pendingID, err := store.CreateStartingJob(ctx, []string{"pending"}, nil)
+	if err != nil {
+		t.Fatalf("create pending: %v", err)
+	}
+	doneID, err := store.CreateStartingJob(ctx, []string{"done"}, nil)
+	if err != nil {
+		t.Fatalf("create done: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, doneID, gmaps.JobStatusDone, nil); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodGet, "/ui/jobs?filter=active&page=1&page_size=10", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `data-filter="active"`) {
+		t.Fatalf("active filter state missing: %s", body)
+	}
+	if !strings.Contains(body, `data-job-id="`+activeID+`"`) {
+		t.Fatalf("active job missing: %s", body)
+	}
+	if strings.Contains(body, `data-job-id="`+pendingID+`"`) || strings.Contains(body, `data-job-id="`+doneID+`"`) {
+		t.Fatalf("non-active jobs should not render: %s", body)
+	}
+}
+
+func TestControlIndexRendersFiltersInJobHeader(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"}); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodGet, "/?jobs_filter=active", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="panel-actions"`) || !strings.Contains(body, `data-filter-option="active"`) {
+		t.Fatalf("filter controls should render in the job header: %s", body)
+	}
+	if strings.Contains(body, "queue-toolbar") {
+		t.Fatalf("filter controls should not render as a separate queue toolbar: %s", body)
+	}
+}
+
+func TestJobsPaginationView(t *testing.T) {
+	page := newJobsPagination(3, 10, 25, "done")
+	if page.Page != 3 || page.TotalPages != 3 || page.StartItem != 21 || page.EndItem != 25 {
+		t.Fatalf("page = %#v, want page 3 of 3 showing 21-25", page)
+	}
+	if page.Filter != "done" || page.FilterLabel != "Done" {
+		t.Fatalf("filter = %q/%q, want done/Done", page.Filter, page.FilterLabel)
+	}
+	if !page.HasPrevious || page.HasNext {
+		t.Fatalf("previous/next = %v/%v, want true/false", page.HasPrevious, page.HasNext)
+	}
+	page = newJobsPagination(-1, 999, 0, "invalid")
+	if page.Page != 1 || page.PageSize != defaultJobsPageSize || page.Filter != defaultJobsFilter || page.TotalPages != 1 || page.StartItem != 0 || page.EndItem != 0 {
+		t.Fatalf("empty normalized page = %#v", page)
 	}
 }
 
@@ -111,6 +323,7 @@ func TestControlJobEndpointReturnsCurrentJob(t *testing.T) {
 
 func TestJobViewShowsPausingForRunningPauseRequested(t *testing.T) {
 	view := newJobView(gmaps.Job{
+		ID:             "job_1",
 		Status:         gmaps.JobStatusRunning,
 		PauseRequested: true,
 		Stats:          gmaps.JobStats{Total: 3, Done: 1, Pending: 1, InProgress: 1},
@@ -118,8 +331,8 @@ func TestJobViewShowsPausingForRunningPauseRequested(t *testing.T) {
 	if view.StatusLabel != "Pausing" {
 		t.Fatalf("StatusLabel = %q, want Pausing", view.StatusLabel)
 	}
-	if view.ShowPause {
-		t.Fatal("pause action should be hidden while pause is already requested")
+	if view.ActionLabel != "Pausing" || !view.ActionDisabled {
+		t.Fatalf("action = %q disabled=%v, want disabled Pausing", view.ActionLabel, view.ActionDisabled)
 	}
 	if view.Progress != "1 / 3 done, 1 pending, 1 active" {
 		t.Fatalf("Progress = %q", view.Progress)
@@ -127,15 +340,74 @@ func TestJobViewShowsPausingForRunningPauseRequested(t *testing.T) {
 }
 
 func TestJobViewActionsForPausedJob(t *testing.T) {
-	view := newJobView(gmaps.Job{Status: gmaps.JobStatusPaused})
+	view := newJobView(gmaps.Job{ID: "job_1", Status: gmaps.JobStatusPaused})
 	if view.StatusLabel != "Paused" {
 		t.Fatalf("StatusLabel = %q, want Paused", view.StatusLabel)
 	}
-	if !view.ShowResume {
-		t.Fatal("paused job should show resume")
+	if view.ActionLabel != "Resume" || view.ActionDisabled || view.ActionPath != "/api/jobs/job_1/resume" {
+		t.Fatalf("action = %#v/%q disabled=%v, want enabled resume path", view.ActionLabel, view.ActionPath, view.ActionDisabled)
 	}
-	if view.ShowPause {
-		t.Fatal("paused job should not show pause")
+}
+
+func TestJobLifecycleActionMatrix(t *testing.T) {
+	tests := []struct {
+		name     string
+		job      gmaps.Job
+		label    string
+		path     string
+		disabled bool
+	}{
+		{
+			name:  "running can pause",
+			job:   gmaps.Job{ID: "job_1", Status: gmaps.JobStatusRunning},
+			label: "Pause",
+			path:  "/api/jobs/job_1/pause",
+		},
+		{
+			name:     "running pause requested is pausing",
+			job:      gmaps.Job{ID: "job_1", Status: gmaps.JobStatusRunning, PauseRequested: true},
+			label:    "Pausing",
+			disabled: true,
+		},
+		{
+			name:  "blocked can resume",
+			job:   gmaps.Job{ID: "job_1", Status: gmaps.JobStatusBlocked},
+			label: "Resume",
+			path:  "/api/jobs/job_1/resume",
+		},
+		{
+			name:  "failed can resume",
+			job:   gmaps.Job{ID: "job_1", Status: gmaps.JobStatusFailed},
+			label: "Resume",
+			path:  "/api/jobs/job_1/resume",
+		},
+		{
+			name:     "pending is queued",
+			job:      gmaps.Job{ID: "job_1", Status: gmaps.JobStatusPending},
+			label:    "Queued",
+			disabled: true,
+		},
+		{
+			name:     "starting is disabled",
+			job:      gmaps.Job{ID: "job_1", Status: gmaps.JobStatusStarting},
+			label:    "Starting",
+			disabled: true,
+		},
+		{
+			name:     "done is disabled",
+			job:      gmaps.Job{ID: "job_1", Status: gmaps.JobStatusDone},
+			label:    "Done",
+			disabled: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := newJobView(tt.job)
+			if view.ActionLabel != tt.label || view.ActionPath != tt.path || view.ActionDisabled != tt.disabled {
+				t.Fatalf("action = label %q path %q disabled %v, want %q %q %v",
+					view.ActionLabel, view.ActionPath, view.ActionDisabled, tt.label, tt.path, tt.disabled)
+			}
+		})
 	}
 }
 

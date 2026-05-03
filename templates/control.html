@@ -1,0 +1,646 @@
+{{define "control"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scraper Control</title>
+  <style>
+    :root {
+      --blue-900: #1e3a8a;
+      --blue-800: #1e40af;
+      --blue-600: #2563eb;
+      --blue-500: #3b82f6;
+      --amber-500: #f59e0b;
+      --slate-950: #020617;
+      --slate-900: #0f172a;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-500: #64748b;
+      --slate-200: #e2e8f0;
+      --slate-100: #f1f5f9;
+      --slate-50: #f8fafc;
+      --white: #ffffff;
+      --danger: #b42318;
+      --success: #027a48;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--slate-50);
+      color: var(--slate-900);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      min-height: 34px;
+      border: 1px solid var(--slate-200);
+      border-radius: 6px;
+      background: var(--white);
+      color: var(--slate-700);
+      cursor: pointer;
+      transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    button:hover:not([disabled]) { border-color: #bfdbfe; color: var(--blue-800); background: #eff6ff; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid #bfdbfe;
+      outline-offset: 1px;
+    }
+    button[disabled] { color: #94a3b8; background: #f8fafc; cursor: not-allowed; }
+    .app-shell { min-height: 100vh; }
+    .topbar {
+      background: var(--blue-800);
+      color: var(--white);
+      border-bottom: 1px solid #1d4ed8;
+    }
+    .topbar-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 18px 24px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--blue-800);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    h1 { font-size: 1.18rem; line-height: 1.2; margin: 0; letter-spacing: 0; }
+    .subtitle { margin: 3px 0 0; color: #dbeafe; font-size: 0.88rem; }
+    .topbar-meta { text-align: right; color: #dbeafe; font-size: 0.86rem; }
+    .container { max-width: 1440px; margin: 0 auto; padding: 24px; }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: minmax(260px, 1.45fr) repeat(4, minmax(130px, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .metric-card, .panel {
+      background: var(--white);
+      border: 1px solid var(--slate-200);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .metric-card { padding: 16px; min-height: 112px; }
+    .metric-label { color: var(--slate-600); font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0; }
+    .metric-value { margin-top: 8px; font-size: 1.9rem; font-weight: 800; color: var(--slate-950); letter-spacing: 0; }
+    .metric-note { margin-top: 6px; color: var(--slate-600); font-size: 0.88rem; overflow-wrap: anywhere; }
+    .active-card { border-color: #bfdbfe; background: linear-gradient(180deg, #ffffff 0%, #eff6ff 100%); }
+    .content-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .panel-header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--slate-200);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .panel-title { margin: 0; font-size: 1rem; color: var(--slate-950); }
+    .panel-body { padding: 18px; }
+    .muted { color: var(--slate-600); }
+    .tiny { font-size: 0.82rem; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 0.78rem;
+      font-weight: 750;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .status-starting, .status-pausing { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+    .status-running { background: #ecfdf3; color: var(--success); border-color: #abefc6; }
+    .status-paused, .status-pending { background: #eff6ff; color: var(--blue-800); border-color: #bfdbfe; }
+    .status-blocked { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+    .status-done { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+    .status-failed { background: #fef3f2; color: var(--danger); border-color: #fecdca; }
+    .status-unknown { background: #f1f5f9; color: var(--slate-700); border-color: #cbd5e1; }
+    form { display: grid; gap: 18px; }
+    fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; }
+    legend { padding: 0 0 8px; font-weight: 800; color: var(--blue-900); font-size: 0.86rem; text-transform: uppercase; letter-spacing: 0; }
+    .field { display: grid; gap: 6px; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { color: var(--slate-700); font-size: 0.86rem; font-weight: 650; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: var(--white);
+      color: var(--slate-900);
+      padding: 9px 10px;
+    }
+    textarea { min-height: 108px; resize: vertical; }
+    input[type="checkbox"] { width: auto; }
+    .check-field { display: flex; align-items: center; gap: 9px; padding-top: 4px; }
+    .primary-button {
+      width: 100%;
+      min-height: 42px;
+      border-color: var(--blue-800);
+      background: var(--blue-800);
+      color: var(--white);
+      font-weight: 800;
+    }
+    .primary-button:hover:not([disabled]) { background: #1d4ed8; color: var(--white); border-color: #1d4ed8; }
+    #start-result { min-height: 22px; font-size: 0.9rem; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 840px; }
+    th, td { border-bottom: 1px solid var(--slate-200); padding: 12px 14px; text-align: left; vertical-align: top; }
+    th {
+      color: var(--slate-600);
+      background: #f8fafc;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      font-weight: 800;
+    }
+    tbody tr:hover { background: #f8fafc; }
+    tbody tr.active-row { background: #eff6ff; }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 0.82rem; color: var(--blue-900); }
+    .job-title { font-weight: 750; color: var(--slate-950); max-width: 340px; overflow-wrap: anywhere; }
+    .job-meta { margin-top: 5px; display: flex; gap: 8px; flex-wrap: wrap; color: var(--slate-600); font-size: 0.82rem; }
+    .raw-status { display: block; margin-top: 5px; font-size: 0.78rem; }
+    .progress-line { display: flex; justify-content: space-between; gap: 12px; color: var(--slate-700); font-size: 0.86rem; }
+    .progress-track { height: 8px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: inherit; background: var(--blue-500); }
+    .progress-stats { display: flex; gap: 8px; flex-wrap: wrap; color: var(--slate-600); font-size: 0.78rem; }
+    .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.82rem; overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .actions button { padding: 6px 10px; }
+    .actions .action-refresh { color: var(--slate-700); }
+    .actions .action-primary { background: var(--blue-800); border-color: var(--blue-800); color: var(--white); font-weight: 800; }
+    .actions .action-primary:hover:not([disabled]) { background: #1d4ed8; border-color: #1d4ed8; color: var(--white); }
+    .actions .action-warning { background: #fffbeb; border-color: #fcd34d; color: #92400e; font-weight: 800; }
+    .actions .action-warning:hover:not([disabled]) { background: #fef3c7; border-color: #f59e0b; color: #78350f; }
+    .actions .action-muted { color: #94a3b8; background: #f8fafc; }
+    .empty-row td { padding: 30px 14px; color: var(--slate-600); text-align: center; }
+    .pager {
+      padding: 12px 14px;
+      border-top: 1px solid var(--slate-200);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: #ffffff;
+    }
+    .pager-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pager button { padding: 6px 10px; }
+    .pager select { width: auto; min-width: 78px; padding: 6px 28px 6px 8px; }
+    .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .filter-tabs { display: inline-flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--slate-200); border-radius: 8px; background: #f8fafc; }
+    .filter-tabs button { min-height: 30px; padding: 5px 10px; border-color: transparent; background: transparent; }
+    .filter-tabs button[aria-pressed="true"] { background: var(--blue-800); border-color: var(--blue-800); color: var(--white); font-weight: 800; }
+    .filter-tabs button[aria-pressed="true"]:hover { background: #1d4ed8; color: var(--white); }
+    @media (max-width: 1100px) {
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .active-card { grid-column: 1 / -1; }
+      .content-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .topbar-inner, .container { padding-left: 16px; padding-right: 16px; }
+      .topbar-inner { align-items: flex-start; flex-direction: column; }
+      .topbar-meta { text-align: left; }
+      .summary-grid { grid-template-columns: 1fr; }
+      .field-row { grid-template-columns: 1fr; }
+      .panel-header { align-items: flex-start; flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">Go</div>
+          <div>
+            <h1>Scraper Control</h1>
+            <p class="subtitle">Admin CMS for Google Maps scraper jobs</p>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <div>{{.Summary.TotalJobs}} jobs tracked</div>
+          <div>Last refreshed <span id="last-refreshed">{{.LastRefreshed}}</span></div>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      {{template "summary" .}}
+
+      <div class="content-grid">
+        <section class="panel" aria-labelledby="create-title">
+          <div class="panel-header">
+            <div>
+              <h2 id="create-title" class="panel-title">Create Job</h2>
+              <div class="muted tiny">Use a saved template or define a new scrape.</div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <form id="start-form">
+              <fieldset>
+                <legend>Template</legend>
+                <div class="field">
+                  <label for="template_select">Saved template</label>
+                  <select id="template_select">
+                    <option value="">Select a previous job...</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="job_title">Job title</label>
+                  <input id="job_title" name="job_title" type="text" placeholder="Optional template title">
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Search</legend>
+                <div class="field">
+                  <label for="queries">Queries *</label>
+                  <textarea id="queries" name="queries" required placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
+                </div>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="depth">Depth</label>
+                    <input id="depth" name="depth" type="number" min="1" placeholder="default 10">
+                  </div>
+                  <div class="field">
+                    <label for="limit">Limit</label>
+                    <input id="limit" name="limit" type="number" min="0" placeholder="0 = no limit">
+                  </div>
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Location</legend>
+                <div class="field">
+                  <label for="geo">Geo center</label>
+                  <input id="geo" name="geo" type="text" placeholder="lat,lng,zoomz e.g. 43.65,-79.38,14z">
+                </div>
+                <div class="field">
+                  <label for="radius">Radius (m)</label>
+                  <input id="radius" name="radius" type="number" min="0" step="100" placeholder="0 = no filter">
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Execution</legend>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="concurrency_mode">Concurrency flag</label>
+                    <select id="concurrency_mode" name="concurrency_mode">
+                      <option value="max-c">Max concurrency (-max-c)</option>
+                      <option value="c">Concurrency (-c)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="concurrency_value">Concurrency value</label>
+                    <input id="concurrency_value" name="concurrency_value" type="number" min="1" placeholder="default 1">
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="reviews">Min reviews</label>
+                    <input id="reviews" name="reviews" type="number" min="0" placeholder="0 = page default">
+                  </div>
+                  <div class="field">
+                    <label for="queue_wait_minutes">Queue wait</label>
+                    <input id="queue_wait_minutes" name="queue_wait_minutes" type="number" min="0" value="20">
+                  </div>
+                </div>
+                <label class="check-field" for="email">
+                  <input id="email" name="email" type="checkbox" value="on">
+                  <span>Extract emails from business websites</span>
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>Output</legend>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="output_mode">Output</label>
+                    <select id="output_mode" name="output_mode">
+                      <option value="file">File (JSON)</option>
+                      <option value="database">Database (DSN from env)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="lang">Language</label>
+                    <input id="lang" name="lang" type="text" placeholder="en">
+                  </div>
+                </div>
+              </fieldset>
+
+              <button class="primary-button" type="submit">Create Job</button>
+              <div id="start-result" role="status" aria-live="polite"></div>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="jobs-title">
+          <div class="panel-header">
+            <div>
+              <h2 id="jobs-title" class="panel-title">Job Queue</h2>
+              <div class="muted tiny">Running, pending, paused, and completed scraper jobs.</div>
+            </div>
+            <div class="panel-actions">
+              <div class="filter-tabs" aria-label="Job status filter">
+                {{range .Pagination.FilterOptions}}
+                  <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
+                {{end}}
+              </div>
+              <button type="button" onclick="refreshPartials()" title="Refresh dashboard and job table.">Refresh</button>
+            </div>
+          </div>
+          {{template "jobs-panel" .}}
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    async function post(path) {
+      const res = await fetch(path, { method: 'POST' });
+      if (!res.ok) {
+        const msg = await res.text();
+        alert('Error: ' + msg);
+      }
+      await refreshPartials();
+    }
+
+    async function refreshJob(jobID) {
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobID));
+        if (!res.ok) {
+          const msg = await res.text();
+          alert('Error: ' + msg);
+          return;
+        }
+        await refreshPartials();
+      } catch (err) {
+        alert('Error: ' + err);
+      }
+    }
+
+    let jobsPage = {{.Pagination.Page}};
+    let jobsPageSize = {{.Pagination.PageSize}};
+    let jobsFilter = '{{.Pagination.Filter}}';
+
+    async function refreshPartials() {
+      const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
+      const [summaryRes, jobsRes] = await Promise.all([fetch('/ui/summary'), fetch(jobsPath)]);
+      if (summaryRes.ok) {
+        document.getElementById('summary').outerHTML = await summaryRes.text();
+      }
+      if (jobsRes.ok) {
+        document.getElementById('jobs-panel').outerHTML = await jobsRes.text();
+        const panel = document.getElementById('jobs-panel');
+        if (panel) {
+          jobsPage = Number(panel.dataset.page) || jobsPage;
+          jobsPageSize = Number(panel.dataset.pageSize) || jobsPageSize;
+          jobsFilter = panel.dataset.filter || jobsFilter;
+          syncJobsFilterButtons();
+        }
+      }
+      const refreshed = document.getElementById('last-refreshed');
+      if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    async function goJobsPage(page) {
+      jobsPage = page;
+      await refreshPartials();
+    }
+
+    async function setJobsPageSize(value) {
+      jobsPageSize = Number(value) || 10;
+      jobsPage = 1;
+      await refreshPartials();
+    }
+
+    async function setJobsFilter(value) {
+      jobsFilter = value || 'all';
+      jobsPage = 1;
+      syncJobsFilterButtons();
+      await refreshPartials();
+    }
+
+    function syncJobsFilterButtons() {
+      document.querySelectorAll('[data-filter-option]').forEach(function(button) {
+        button.setAttribute('aria-pressed', button.dataset.filterOption === jobsFilter ? 'true' : 'false');
+      });
+    }
+
+    async function loadTemplates() {
+      const select = document.getElementById('template_select');
+      try {
+        const res = await fetch('/api/job-templates');
+        if (!res.ok) return;
+        const templates = await res.json();
+        for (const tpl of templates || []) {
+          const opt = document.createElement('option');
+          opt.value = tpl.ParamsJSON || '';
+          opt.textContent = tpl.Name || tpl.ID;
+          select.appendChild(opt);
+        }
+      } catch (_) {}
+    }
+
+    function setValue(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (value === null || value === undefined) return;
+      el.value = value === 0 ? '0' : (value || '');
+    }
+
+    document.getElementById('template_select').addEventListener('change', function() {
+      if (!this.value) return;
+      let p;
+      try {
+        p = JSON.parse(this.value);
+      } catch (_) {
+        return;
+      }
+      setValue('job_title', p.JobTitle);
+      setValue('queries', (p.Queries || []).join('\n'));
+      setValue('output_mode', p.OutputMode);
+      setValue('geo', p.Geo);
+      setValue('radius', p.Radius);
+      setValue('depth', p.Depth);
+      setValue('concurrency_mode', p.ConcurrencyMode);
+      setValue('concurrency_value', p.ConcurrencyValue);
+      setValue('reviews', p.Reviews);
+      setValue('limit', p.Limit);
+      setValue('lang', p.Lang);
+      setValue('queue_wait_minutes', p.QueueWaitMinutes);
+      document.getElementById('email').checked = !!p.Email;
+    });
+
+    document.getElementById('start-form').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('start-result');
+      result.textContent = '';
+      const data = new URLSearchParams(new FormData(this));
+      const res = await fetch('/api/jobs/start', { method: 'POST', body: data });
+      const msg = await res.text();
+      if (!res.ok) {
+        result.style.color = '#c0392b';
+        result.textContent = 'Error: ' + msg;
+      } else {
+        result.style.color = '#27ae60';
+        try {
+          const payload = JSON.parse(msg);
+          result.textContent = payload.status === 'queued' ? 'Job queued.' : 'Job started.';
+        } catch (_) {
+          result.textContent = 'Job created.';
+        }
+        await refreshPartials();
+      }
+    });
+    loadTemplates();
+    setInterval(refreshPartials, 5000);
+  </script>
+</body>
+</html>{{end}}
+
+{{define "summary"}}
+<section id="summary" class="summary-grid" aria-label="Job summary">
+  <article class="metric-card active-card">
+    <div class="metric-label">Active job</div>
+    {{if .Summary.HasActiveJob}}
+      <div class="metric-note">
+        <span class="status {{.Summary.ActiveStatusClass}}">{{.Summary.ActiveStatus}}</span>
+      </div>
+      <div class="metric-note"><strong>{{.Summary.ActiveJobTitle}}</strong></div>
+      <div class="metric-note"><code>{{.Summary.ActiveJobID}}</code></div>
+      <div class="metric-note">{{.Summary.ActiveProgress}}</div>
+    {{else}}
+      <div class="metric-value">Idle</div>
+      <div class="metric-note">No scraper job is starting or running.</div>
+    {{end}}
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Pending jobs</div>
+    <div class="metric-value">{{.Summary.PendingJobs}}</div>
+    <div class="metric-note">Waiting behind the active job</div>
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Running</div>
+    <div class="metric-value">{{.Summary.RunningJobs}}</div>
+    <div class="metric-note">{{.Summary.ActiveURLs}} URLs active</div>
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Pending URLs</div>
+    <div class="metric-value">{{.Summary.PendingURLs}}</div>
+    <div class="metric-note">Across all saved jobs</div>
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Needs attention</div>
+    <div class="metric-value">{{.Summary.NeedsAttention}}</div>
+    <div class="metric-note">{{.Summary.FailedJobs}} failed, {{.Summary.CompletedJobs}} completed</div>
+  </article>
+</section>
+{{end}}
+
+{{define "jobs-panel"}}
+<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Status</th>
+          <th>Progress</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="jobs-tbody">
+        {{template "jobs-body" .}}
+      </tbody>
+    </table>
+  </div>
+  <div class="pager" aria-label="Job queue pagination">
+    <div class="muted tiny">
+      {{if .Pagination.TotalJobs}}
+        Showing {{.Pagination.StartItem}}-{{.Pagination.EndItem}} of {{.Pagination.TotalJobs}}
+      {{else}}
+        No jobs to show
+      {{end}}
+    </div>
+    <div class="pager-controls">
+      <label class="muted tiny" for="jobs-page-size">Rows</label>
+      <select id="jobs-page-size" onchange="setJobsPageSize(this.value)">
+        {{range .Pagination.PageSizeOptions}}
+          <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
+        {{end}}
+      </select>
+      <button type="button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}}>Previous</button>
+      <span class="muted tiny">Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
+      <button type="button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}}>Next</button>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "jobs-body"}}
+{{range .Jobs}}
+  <tr data-job-id="{{.ID}}" class="{{if .Active}}active-row{{end}}">
+    <td>
+      <div class="job-title">{{.QueriesPreview}}</div>
+      <div class="job-meta">
+        <code>{{.ID}}</code>
+        <span>{{.OutputMode}}</span>
+        <span>{{.Lang}}</span>
+      </div>
+    </td>
+    <td>
+      <span class="status {{.StatusClass}}" title="{{.StatusHelp}}">{{.StatusLabel}}</span>
+      <span class="raw-status muted" title="Raw DB state">raw: {{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span>
+      <span class="error-text" title="{{.LastError}}"{{if not .LastError}} hidden{{end}}>{{.LastError}}</span>
+    </td>
+    <td>
+      <div class="progress-line">
+        <span>{{.Progress}}</span>
+        <span>{{.ProgressPercent}}%</span>
+      </div>
+      <div class="progress-track" aria-hidden="true">
+        <div class="progress-fill" style="width: {{.ProgressPercent}}%"></div>
+      </div>
+      <div class="progress-stats">
+        <span>{{.Done}} done</span>
+        <span>{{.Pending}} pending</span>
+        <span>{{.InProgress}} active</span>
+        <span>{{.Failed}} failed</span>
+      </div>
+    </td>
+    <td>
+      <div>{{.UpdatedAt}}</div>
+      <div class="muted tiny">Created {{.CreatedAt}}</div>
+    </td>
+    <td>
+      <div class="actions">
+        <button class="action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
+        {{if .ActionDisabled}}
+          <button class="{{.ActionClass}}" disabled title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+        {{else}}
+          <button class="{{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+        {{end}}
+      </div>
+    </td>
+  </tr>
+{{else}}
+  <tr class="empty-row"><td colspan="5">No jobs yet.</td></tr>
+{{end}}
+{{end}}
