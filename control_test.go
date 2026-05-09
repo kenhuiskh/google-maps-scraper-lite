@@ -80,6 +80,60 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `refreshJob('`+jobID+`')`) {
 		t.Fatalf("index did not include refresh button for job ID %s: %s", jobID, rec.Body.String())
 	}
+	if strings.Contains(rec.Body.String(), `id="start-form"`) {
+		t.Fatalf("index should not include job creation form: %s", rec.Body.String())
+	}
+}
+
+func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	templateID, err := store.SaveJobTemplateJSON(ctx, "", "coffee template", `{"Queries":["coffee"],"OutputMode":"file"}`)
+	if err != nil {
+		t.Fatalf("save template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning sweep", "daily", []string{templateID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodGet, "/templates", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("templates status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Job Templates", `class="nav-link active" href="/templates"`, `id="start-form"`, `id="template-form"`, `data-template-row="` + templateID + `"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("templates page missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `id="jobs-panel"`) {
+		t.Fatalf("templates page should not render job queue: %s", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/strategies", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("strategies status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	body = rec.Body.String()
+	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("strategies page missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `id="jobs-panel"`) {
+		t.Fatalf("strategies page should not render job queue: %s", body)
+	}
 }
 
 func TestControlSummaryCountsActiveAndPendingJobs(t *testing.T) {
@@ -661,6 +715,55 @@ func TestStartJobReturnsImmediately(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "started") {
 		t.Fatalf("response should contain 'started', got: %s", body)
+	}
+}
+
+func TestRunStrategyCreatesOrderedJobsWithSource(t *testing.T) {
+	store := newStartStore(t)
+	ctx := context.Background()
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "tea", `{"Queries":["tea"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "batch", []string{firstID, secondID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	var launched []startParams
+	launcher := startLauncher(func(_ context.Context, p startParams) error {
+		launched = append(launched, p)
+		return nil
+	})
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, launcher)
+	req := httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/run", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	if len(launched) != 1 || launched[0].TemplateID != firstID || launched[0].StrategyID != strategyID {
+		t.Fatalf("launched = %#v, want first template sourced launch", launched)
+	}
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("jobs len = %d, want 2", len(jobs))
+	}
+	var sourced int
+	for _, job := range jobs {
+		if job.StrategyID.String == strategyID && job.StrategyRunID.String != "" {
+			sourced++
+		}
+	}
+	if sourced != 2 {
+		t.Fatalf("sourced jobs = %d, want 2", sourced)
 	}
 }
 

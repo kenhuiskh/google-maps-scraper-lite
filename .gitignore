@@ -101,6 +101,8 @@ CLAUDE.md
 .codex-go*
 .codex
 
+mcp.json
+
 # Air (live-reload tool)
 tmp/
 

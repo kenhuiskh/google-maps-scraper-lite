@@ -3,217 +3,336 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Scraper Control</title>
+  <title>{{.PageTitle}} - Scraper Control</title>
   <style>
     :root {
-      --blue-900: #1e3a8a;
-      --blue-800: #1e40af;
-      --blue-600: #2563eb;
-      --blue-500: #3b82f6;
-      --amber-500: #f59e0b;
-      --slate-950: #020617;
-      --slate-900: #0f172a;
-      --slate-700: #334155;
-      --slate-600: #475569;
-      --slate-500: #64748b;
-      --slate-200: #e2e8f0;
-      --slate-100: #f1f5f9;
-      --slate-50: #f8fafc;
-      --white: #ffffff;
+      --bg: #f6f8fb;
+      --surface: #ffffff;
+      --surface-muted: #eef2f7;
+      --border: #d8e0ea;
+      --border-strong: #c4cfdd;
+      --text: #0f172a;
+      --muted: #475569;
+      --muted-2: #64748b;
+      --primary: #1e40af;
+      --primary-hover: #1d4ed8;
+      --primary-soft: #eaf1ff;
+      --info: #2563eb;
       --danger: #b42318;
+      --danger-soft: #fef3f2;
       --success: #027a48;
+      --success-soft: #ecfdf3;
+      --warning: #b45309;
+      --warning-soft: #fffbeb;
       --radius: 8px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--slate-50);
-      color: var(--slate-900);
+      background: var(--bg);
+      color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.45;
+      font-size: 14px;
+      line-height: 1.42;
+      font-variant-numeric: tabular-nums;
     }
     button, input, select, textarea { font: inherit; }
     button {
-      min-height: 34px;
-      border: 1px solid var(--slate-200);
+      min-height: 32px;
+      border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--white);
-      color: var(--slate-700);
+      background: var(--surface);
+      color: #1e293b;
       cursor: pointer;
+      padding: 6px 10px;
       transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
     }
-    button:hover:not([disabled]) { border-color: #bfdbfe; color: var(--blue-800); background: #eff6ff; }
-    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    button:hover:not([disabled]) { border-color: #b7c8e1; color: var(--primary); background: #f8fbff; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
       outline: 3px solid #bfdbfe;
       outline-offset: 1px;
     }
     button[disabled] { color: #94a3b8; background: #f8fafc; cursor: not-allowed; }
+    a { color: inherit; text-decoration: none; }
+    code {
+      color: #334155;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      overflow-wrap: anywhere;
+    }
     .app-shell { min-height: 100vh; }
     .topbar {
-      background: var(--blue-800);
-      color: var(--white);
-      border-bottom: 1px solid #1d4ed8;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(255, 255, 255, 0.96);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(14px);
     }
     .topbar-inner {
       max-width: 1440px;
       margin: 0 auto;
-      padding: 18px 24px;
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
+      padding: 12px 24px;
+      display: grid;
+      grid-template-columns: minmax(220px, auto) minmax(0, 1fr) auto;
+      gap: 18px;
       align-items: center;
     }
-    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .brand-mark {
-      width: 36px;
-      height: 36px;
+      width: 34px;
+      height: 34px;
       border-radius: 8px;
-      background: #ffffff;
-      color: var(--blue-800);
+      background: var(--primary);
+      color: #fff;
       display: grid;
       place-items: center;
       font-weight: 800;
-      letter-spacing: 0;
     }
-    h1 { font-size: 1.18rem; line-height: 1.2; margin: 0; letter-spacing: 0; }
-    .subtitle { margin: 3px 0 0; color: #dbeafe; font-size: 0.88rem; }
-    .topbar-meta { text-align: right; color: #dbeafe; font-size: 0.86rem; }
-    .container { max-width: 1440px; margin: 0 auto; padding: 24px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 1.08rem; line-height: 1.2; font-weight: 800; letter-spacing: 0; }
+    .subtitle { margin-top: 2px; color: var(--muted); font-size: 0.82rem; }
+    .main-nav { display: flex; align-items: center; gap: 4px; justify-self: center; }
+    .nav-link {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 7px;
+      padding: 7px 12px;
+      color: var(--muted);
+      font-weight: 750;
+    }
+    .nav-link:hover { background: #f1f5f9; color: var(--text); }
+    .nav-link.active { background: var(--primary); color: #fff; }
+    .topbar-meta { color: var(--muted); font-size: 0.82rem; text-align: right; white-space: nowrap; }
+    .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px 28px; }
+    .page-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .page-title { font-size: 1.24rem; font-weight: 850; letter-spacing: 0; }
+    .page-meta { color: var(--muted); font-size: 0.84rem; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
     .summary-grid {
       display: grid;
-      grid-template-columns: minmax(260px, 1.45fr) repeat(4, minmax(130px, 1fr));
-      gap: 14px;
-      margin-bottom: 20px;
+      grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
     }
-    .metric-card, .panel {
-      background: var(--white);
-      border: 1px solid var(--slate-200);
+    .metric-card, .panel, .stat-cell, .compact-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: var(--radius);
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
     }
-    .metric-card { padding: 16px; min-height: 112px; }
-    .metric-label { color: var(--slate-600); font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0; }
-    .metric-value { margin-top: 8px; font-size: 1.9rem; font-weight: 800; color: var(--slate-950); letter-spacing: 0; }
-    .metric-note { margin-top: 6px; color: var(--slate-600); font-size: 0.88rem; overflow-wrap: anywhere; }
-    .active-card { border-color: #bfdbfe; background: linear-gradient(180deg, #ffffff 0%, #eff6ff 100%); }
-    .content-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .metric-card { padding: 9px 11px; min-height: 70px; }
+    .metric-label {
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .metric-value { margin-top: 3px; font-size: 1.32rem; font-weight: 850; color: var(--text); letter-spacing: 0; }
+    .metric-note { margin-top: 3px; color: var(--muted); font-size: 0.78rem; overflow-wrap: anywhere; }
+    .active-card { border-color: #b7c8e1; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
+    .dashboard-grid { display: grid; gap: 10px; }
+    .management-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 14px; align-items: start; }
+    .templates-workspace { display: grid; grid-template-columns: minmax(260px, 0.85fr) minmax(320px, 1fr) minmax(320px, 0.9fr); gap: 12px; align-items: start; }
     .panel-header {
-      padding: 16px 18px;
-      border-bottom: 1px solid var(--slate-200);
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      min-height: 57px;
     }
-    .panel-title { margin: 0; font-size: 1rem; color: var(--slate-950); }
-    .panel-body { padding: 18px; }
-    .muted { color: var(--slate-600); }
-    .tiny { font-size: 0.82rem; }
+    .panel-title { font-size: 0.98rem; color: var(--text); font-weight: 850; }
+    .panel-body { padding: 14px; }
+    .muted { color: var(--muted); }
+    .tiny { font-size: 0.8rem; }
     .status {
       display: inline-flex;
       align-items: center;
-      border-radius: 999px;
-      padding: 3px 9px;
-      font-size: 0.78rem;
-      font-weight: 750;
+      border-radius: 5px;
+      padding: 3px 8px;
+      font-size: 0.76rem;
+      font-weight: 800;
       border: 1px solid transparent;
       white-space: nowrap;
     }
     .status-starting, .status-pausing { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
-    .status-running { background: #ecfdf3; color: var(--success); border-color: #abefc6; }
-    .status-paused, .status-pending { background: #eff6ff; color: var(--blue-800); border-color: #bfdbfe; }
-    .status-blocked { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+    .status-running { background: var(--success-soft); color: var(--success); border-color: #abefc6; }
+    .status-paused, .status-pending { background: var(--primary-soft); color: var(--primary); border-color: #bfdbfe; }
+    .status-blocked { background: var(--warning-soft); color: #92400e; border-color: #fde68a; }
     .status-done { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
-    .status-failed { background: #fef3f2; color: var(--danger); border-color: #fecdca; }
-    .status-unknown { background: #f1f5f9; color: var(--slate-700); border-color: #cbd5e1; }
-    form { display: grid; gap: 18px; }
-    fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; }
-    legend { padding: 0 0 8px; font-weight: 800; color: var(--blue-900); font-size: 0.86rem; text-transform: uppercase; letter-spacing: 0; }
-    .field { display: grid; gap: 6px; }
-    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    label { color: var(--slate-700); font-size: 0.86rem; font-weight: 650; }
-    input, select, textarea {
-      width: 100%;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      background: var(--white);
-      color: var(--slate-900);
-      padding: 9px 10px;
-    }
-    textarea { min-height: 108px; resize: vertical; }
-    input[type="checkbox"] { width: auto; }
-    .check-field { display: flex; align-items: center; gap: 9px; padding-top: 4px; }
-    .primary-button {
-      width: 100%;
-      min-height: 42px;
-      border-color: var(--blue-800);
-      background: var(--blue-800);
-      color: var(--white);
-      font-weight: 800;
-    }
-    .primary-button:hover:not([disabled]) { background: #1d4ed8; color: var(--white); border-color: #1d4ed8; }
-    #start-result { min-height: 22px; font-size: 0.9rem; }
-    .table-wrap { overflow-x: auto; }
-    table { border-collapse: collapse; width: 100%; min-width: 840px; }
-    th, td { border-bottom: 1px solid var(--slate-200); padding: 12px 14px; text-align: left; vertical-align: top; }
-    th {
-      color: var(--slate-600);
-      background: #f8fafc;
+    .status-failed { background: var(--danger-soft); color: var(--danger); border-color: #fecdca; }
+    .status-unknown { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
+    form { display: grid; gap: 14px; }
+    fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+    legend {
+      padding: 0 0 4px;
+      font-weight: 850;
+      color: #334155;
       font-size: 0.78rem;
       text-transform: uppercase;
       letter-spacing: 0;
-      font-weight: 800;
+    }
+    .field { display: grid; gap: 5px; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { color: #334155; font-size: 0.82rem; font-weight: 700; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 9px;
+    }
+    textarea { min-height: 98px; resize: vertical; }
+    textarea.code-field {
+      min-height: 300px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      background: #f8fafc;
+    }
+    input[type="checkbox"] { width: auto; }
+    .check-field { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+    .primary-button {
+      width: 100%;
+      min-height: 38px;
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+      font-weight: 850;
+    }
+    .primary-button:hover:not([disabled]) { background: var(--primary-hover); color: #fff; border-color: var(--primary-hover); }
+    .secondary-button { font-weight: 750; }
+    .danger-button { color: var(--danger); }
+    .result { min-height: 20px; font-size: 0.86rem; }
+    #start-result, #template-result, #strategy-result { min-height: 20px; font-size: 0.86rem; }
+    .table-wrap { overflow-x: auto; max-width: 100%; }
+    table { border-collapse: collapse; width: 100%; min-width: 920px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th {
+      color: var(--muted);
+      background: #f8fafc;
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      font-weight: 850;
     }
     tbody tr:hover { background: #f8fafc; }
-    tbody tr.active-row { background: #eff6ff; }
-    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 0.82rem; color: var(--blue-900); }
-    .job-title { font-weight: 750; color: var(--slate-950); max-width: 340px; overflow-wrap: anywhere; }
-    .job-meta { margin-top: 5px; display: flex; gap: 8px; flex-wrap: wrap; color: var(--slate-600); font-size: 0.82rem; }
-    .raw-status { display: block; margin-top: 5px; font-size: 0.78rem; }
-    .progress-line { display: flex; justify-content: space-between; gap: 12px; color: var(--slate-700); font-size: 0.86rem; }
-    .progress-track { height: 8px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
-    .progress-fill { height: 100%; border-radius: inherit; background: var(--blue-500); }
-    .progress-stats { display: flex; gap: 8px; flex-wrap: wrap; color: var(--slate-600); font-size: 0.78rem; }
-    .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.82rem; overflow-wrap: anywhere; }
-    .actions { display: flex; gap: 7px; flex-wrap: wrap; }
-    .actions button { padding: 6px 10px; }
-    .actions .action-refresh { color: var(--slate-700); }
-    .actions .action-primary { background: var(--blue-800); border-color: var(--blue-800); color: var(--white); font-weight: 800; }
-    .actions .action-primary:hover:not([disabled]) { background: #1d4ed8; border-color: #1d4ed8; color: var(--white); }
-    .actions .action-warning { background: #fffbeb; border-color: #fcd34d; color: #92400e; font-weight: 800; }
-    .actions .action-warning:hover:not([disabled]) { background: #fef3c7; border-color: #f59e0b; color: #78350f; }
+    tbody tr.active-row { background: #f8fbff; }
+    .job-title, .item-title { font-weight: 850; color: var(--text); overflow-wrap: anywhere; }
+    .job-title { max-width: 340px; }
+    .job-meta, .item-meta {
+      margin-top: 4px;
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .raw-status { display: block; margin-top: 5px; font-size: 0.76rem; }
+    .progress-line { display: flex; justify-content: space-between; gap: 12px; color: #334155; font-size: 0.84rem; }
+    .progress-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: inherit; background: var(--success); }
+    .progress-stats { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 0.76rem; }
+    .analytics-compact { display: grid; gap: 3px; color: var(--muted); font-size: 0.76rem; }
+    .analytics-compact strong { color: #334155; font-weight: 850; }
+    .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.8rem; overflow-wrap: anywhere; }
+    .actions, .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .actions button, .item-actions button { min-height: 30px; padding: 5px 9px; }
+    .actions .action-refresh { color: #334155; }
+    .actions .action-primary, .item-actions .action-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+      font-weight: 800;
+    }
+    .actions .action-warning { background: var(--warning-soft); border-color: #fcd34d; color: #92400e; font-weight: 800; }
     .actions .action-muted { color: #94a3b8; background: #f8fafc; }
-    .empty-row td { padding: 30px 14px; color: var(--slate-600); text-align: center; }
+    .empty-row td, .empty-state {
+      padding: 24px 14px;
+      color: var(--muted);
+      text-align: center;
+      background: #f8fafc;
+      border-radius: 7px;
+    }
     .pager {
-      padding: 12px 14px;
-      border-top: 1px solid var(--slate-200);
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
-      background: #ffffff;
+      background: #fff;
     }
-    .pager-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .pager button { padding: 6px 10px; }
-    .pager select { width: auto; min-width: 78px; padding: 6px 28px 6px 8px; }
-    .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-    .filter-tabs { display: inline-flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--slate-200); border-radius: 8px; background: #f8fafc; }
-    .filter-tabs button { min-height: 30px; padding: 5px 10px; border-color: transparent; background: transparent; }
-    .filter-tabs button[aria-pressed="true"] { background: var(--blue-800); border-color: var(--blue-800); color: var(--white); font-weight: 800; }
-    .filter-tabs button[aria-pressed="true"]:hover { background: #1d4ed8; color: var(--white); }
+    .pager-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .pager select { width: auto; min-width: 76px; padding: 6px 26px 6px 8px; }
+    .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+    .filter-tabs { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: #f8fafc; }
+    .filter-tabs button { min-height: 28px; padding: 4px 9px; border-color: transparent; background: transparent; }
+    .filter-tabs button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 850; }
+    .compact-list { display: grid; gap: 9px; }
+    .compact-item { padding: 11px; }
+    .compact-item.selected { border-color: #b7c8e1; background: #f8fbff; }
+    .item-actions { margin-top: 9px; }
+    .item-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(180px, 0.9fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
+    .stat-cell { padding: 9px 11px; }
+    .stat-value { margin-top: 3px; font-size: 1.05rem; font-weight: 850; color: var(--text); }
+    .ordered-list { display: grid; gap: 7px; }
+    .ordered-item {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      background: #f8fafc;
+    }
+    .order-index {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--surface-muted);
+      color: #334155;
+      font-weight: 850;
+      font-size: 0.78rem;
+    }
+    .split-actions { display: flex; gap: 8px; align-items: center; }
     @media (max-width: 1100px) {
+      .topbar-inner { grid-template-columns: 1fr; align-items: start; }
+      .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
+      .topbar-meta { text-align: left; }
       .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .active-card { grid-column: 1 / -1; }
-      .content-grid { grid-template-columns: 1fr; }
+      .dashboard-grid, .management-grid, .templates-workspace { grid-template-columns: 1fr; }
+      .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 640px) {
-      .topbar-inner, .container { padding-left: 16px; padding-right: 16px; }
-      .topbar-inner { align-items: flex-start; flex-direction: column; }
-      .topbar-meta { text-align: left; }
-      .summary-grid { grid-template-columns: 1fr; }
-      .field-row { grid-template-columns: 1fr; }
+      .topbar-inner, .container { padding-left: 14px; padding-right: 14px; }
+      .page-head { align-items: flex-start; flex-direction: column; }
+      .page-meta { justify-content: flex-start; }
+      .summary-grid, .stat-strip { grid-template-columns: 1fr; }
+      .field-row, .item-grid { grid-template-columns: 1fr; }
       .panel-header { align-items: flex-start; flex-direction: column; }
+      .pager { align-items: flex-start; flex-direction: column; }
     }
     @media (prefers-reduced-motion: reduce) {
       * { transition: none !important; scroll-behavior: auto !important; }
@@ -224,13 +343,18 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <div class="brand">
+        <a class="brand" href="/">
           <div class="brand-mark" aria-hidden="true">Go</div>
           <div>
             <h1>Scraper Control</h1>
-            <p class="subtitle">Admin CMS for Google Maps scraper jobs</p>
+            <p class="subtitle">Google Maps scraper operations</p>
           </div>
-        </div>
+        </a>
+        <nav class="main-nav" aria-label="Control navigation">
+          <a class="nav-link {{if eq .ActivePage "jobs"}}active{{end}}" href="/">Jobs</a>
+          <a class="nav-link {{if eq .ActivePage "templates"}}active{{end}}" href="/templates">Templates</a>
+          <a class="nav-link {{if eq .ActivePage "strategies"}}active{{end}}" href="/strategies">Strategies</a>
+        </nav>
         <div class="topbar-meta">
           <div>{{.Summary.TotalJobs}} jobs tracked</div>
           <div>Last refreshed <span id="last-refreshed">{{.LastRefreshed}}</span></div>
@@ -239,301 +363,382 @@
     </header>
 
     <main class="container">
-      {{template "summary" .}}
-
-      <div class="content-grid">
-        <section class="panel" aria-labelledby="create-title">
-          <div class="panel-header">
-            <div>
-              <h2 id="create-title" class="panel-title">Create Job</h2>
-              <div class="muted tiny">Use a saved template or define a new scrape.</div>
-            </div>
-          </div>
-          <div class="panel-body">
-            <form id="start-form">
-              <fieldset>
-                <legend>Template</legend>
-                <div class="field">
-                  <label for="template_select">Saved template</label>
-                  <select id="template_select">
-                    <option value="">Select a previous job...</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="job_title">Job title</label>
-                  <input id="job_title" name="job_title" type="text" placeholder="Optional template title">
-                </div>
-              </fieldset>
-
-              <fieldset>
-                <legend>Search</legend>
-                <div class="field">
-                  <label for="queries">Queries *</label>
-                  <textarea id="queries" name="queries" required placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
-                </div>
-                <div class="field-row">
-                  <div class="field">
-                    <label for="depth">Depth</label>
-                    <input id="depth" name="depth" type="number" min="1" placeholder="default 10">
-                  </div>
-                  <div class="field">
-                    <label for="limit">Limit</label>
-                    <input id="limit" name="limit" type="number" min="0" placeholder="0 = no limit">
-                  </div>
-                </div>
-              </fieldset>
-
-              <fieldset>
-                <legend>Location</legend>
-                <div class="field">
-                  <label for="geo">Geo center</label>
-                  <input id="geo" name="geo" type="text" placeholder="lat,lng,zoomz e.g. 43.65,-79.38,14z">
-                </div>
-                <div class="field">
-                  <label for="radius">Radius (m)</label>
-                  <input id="radius" name="radius" type="number" min="0" step="100" placeholder="0 = no filter">
-                </div>
-              </fieldset>
-
-              <fieldset>
-                <legend>Execution</legend>
-                <div class="field-row">
-                  <div class="field">
-                    <label for="concurrency_mode">Concurrency flag</label>
-                    <select id="concurrency_mode" name="concurrency_mode">
-                      <option value="max-c">Max concurrency (-max-c)</option>
-                      <option value="c">Concurrency (-c)</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label for="concurrency_value">Concurrency value</label>
-                    <input id="concurrency_value" name="concurrency_value" type="number" min="1" placeholder="default 1">
-                  </div>
-                </div>
-                <div class="field-row">
-                  <div class="field">
-                    <label for="reviews">Min reviews</label>
-                    <input id="reviews" name="reviews" type="number" min="0" placeholder="0 = page default">
-                  </div>
-                  <div class="field">
-                    <label for="queue_wait_minutes">Queue wait</label>
-                    <input id="queue_wait_minutes" name="queue_wait_minutes" type="number" min="0" value="20">
-                  </div>
-                </div>
-                <label class="check-field" for="email">
-                  <input id="email" name="email" type="checkbox" value="on">
-                  <span>Extract emails from business websites</span>
-                </label>
-              </fieldset>
-
-              <fieldset>
-                <legend>Output</legend>
-                <div class="field-row">
-                  <div class="field">
-                    <label for="output_mode">Output</label>
-                    <select id="output_mode" name="output_mode">
-                      <option value="file">File (JSON)</option>
-                      <option value="database">Database (DSN from env)</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label for="lang">Language</label>
-                    <input id="lang" name="lang" type="text" placeholder="en">
-                  </div>
-                </div>
-              </fieldset>
-
-              <button class="primary-button" type="submit">Create Job</button>
-              <div id="start-result" role="status" aria-live="polite"></div>
-            </form>
-          </div>
-        </section>
-
-        <section class="panel" aria-labelledby="jobs-title">
-          <div class="panel-header">
-            <div>
-              <h2 id="jobs-title" class="panel-title">Job Queue</h2>
-              <div class="muted tiny">Running, pending, paused, and completed scraper jobs.</div>
-            </div>
-            <div class="panel-actions">
-              <div class="filter-tabs" aria-label="Job status filter">
-                {{range .Pagination.FilterOptions}}
-                  <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
-                {{end}}
-              </div>
-              <button type="button" onclick="refreshPartials()" title="Refresh dashboard and job table.">Refresh</button>
-            </div>
-          </div>
-          {{template "jobs-panel" .}}
-        </section>
-      </div>
+      {{if eq .ActivePage "templates"}}
+        {{template "templates-page" .}}
+      {{else if eq .ActivePage "strategies"}}
+        {{template "strategies-page" .}}
+      {{else}}
+        {{template "jobs-page" .}}
+      {{end}}
     </main>
   </div>
 
-  <script>
-    async function post(path) {
-      const res = await fetch(path, { method: 'POST' });
-      if (!res.ok) {
-        const msg = await res.text();
-        alert('Error: ' + msg);
-      }
-      await refreshPartials();
-    }
-
-    async function refreshJob(jobID) {
-      try {
-        const res = await fetch('/api/jobs/' + encodeURIComponent(jobID));
-        if (!res.ok) {
-          const msg = await res.text();
-          alert('Error: ' + msg);
-          return;
-        }
-        await refreshPartials();
-      } catch (err) {
-        alert('Error: ' + err);
-      }
-    }
-
-    let jobsPage = {{.Pagination.Page}};
-    let jobsPageSize = {{.Pagination.PageSize}};
-    let jobsFilter = '{{.Pagination.Filter}}';
-
-    async function refreshPartials() {
-      const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
-      const [summaryRes, jobsRes] = await Promise.all([fetch('/ui/summary'), fetch(jobsPath)]);
-      if (summaryRes.ok) {
-        document.getElementById('summary').outerHTML = await summaryRes.text();
-      }
-      if (jobsRes.ok) {
-        document.getElementById('jobs-panel').outerHTML = await jobsRes.text();
-        const panel = document.getElementById('jobs-panel');
-        if (panel) {
-          jobsPage = Number(panel.dataset.page) || jobsPage;
-          jobsPageSize = Number(panel.dataset.pageSize) || jobsPageSize;
-          jobsFilter = panel.dataset.filter || jobsFilter;
-          syncJobsFilterButtons();
-        }
-      }
-      const refreshed = document.getElementById('last-refreshed');
-      if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    }
-
-    async function goJobsPage(page) {
-      jobsPage = page;
-      await refreshPartials();
-    }
-
-    async function setJobsPageSize(value) {
-      jobsPageSize = Number(value) || 10;
-      jobsPage = 1;
-      await refreshPartials();
-    }
-
-    async function setJobsFilter(value) {
-      jobsFilter = value || 'all';
-      jobsPage = 1;
-      syncJobsFilterButtons();
-      await refreshPartials();
-    }
-
-    function syncJobsFilterButtons() {
-      document.querySelectorAll('[data-filter-option]').forEach(function(button) {
-        button.setAttribute('aria-pressed', button.dataset.filterOption === jobsFilter ? 'true' : 'false');
-      });
-    }
-
-    async function loadTemplates() {
-      const select = document.getElementById('template_select');
-      try {
-        const res = await fetch('/api/job-templates');
-        if (!res.ok) return;
-        const templates = await res.json();
-        for (const tpl of templates || []) {
-          const opt = document.createElement('option');
-          opt.value = tpl.ParamsJSON || '';
-          opt.textContent = tpl.Name || tpl.ID;
-          select.appendChild(opt);
-        }
-      } catch (_) {}
-    }
-
-    function setValue(id, value) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      if (value === null || value === undefined) return;
-      el.value = value === 0 ? '0' : (value || '');
-    }
-
-    document.getElementById('template_select').addEventListener('change', function() {
-      if (!this.value) return;
-      let p;
-      try {
-        p = JSON.parse(this.value);
-      } catch (_) {
-        return;
-      }
-      setValue('job_title', p.JobTitle);
-      setValue('queries', (p.Queries || []).join('\n'));
-      setValue('output_mode', p.OutputMode);
-      setValue('geo', p.Geo);
-      setValue('radius', p.Radius);
-      setValue('depth', p.Depth);
-      setValue('concurrency_mode', p.ConcurrencyMode);
-      setValue('concurrency_value', p.ConcurrencyValue);
-      setValue('reviews', p.Reviews);
-      setValue('limit', p.Limit);
-      setValue('lang', p.Lang);
-      setValue('queue_wait_minutes', p.QueueWaitMinutes);
-      document.getElementById('email').checked = !!p.Email;
-    });
-
-    document.getElementById('start-form').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const result = document.getElementById('start-result');
-      result.textContent = '';
-      const data = new URLSearchParams(new FormData(this));
-      const res = await fetch('/api/jobs/start', { method: 'POST', body: data });
-      const msg = await res.text();
-      if (!res.ok) {
-        result.style.color = '#c0392b';
-        result.textContent = 'Error: ' + msg;
-      } else {
-        result.style.color = '#27ae60';
-        try {
-          const payload = JSON.parse(msg);
-          result.textContent = payload.status === 'queued' ? 'Job queued.' : 'Job started.';
-        } catch (_) {
-          result.textContent = 'Job created.';
-        }
-        await refreshPartials();
-      }
-    });
-    loadTemplates();
-    setInterval(refreshPartials, 5000);
-  </script>
+  {{template "control-script" .}}
 </body>
 </html>{{end}}
+
+{{define "jobs-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">Dashboard</h2>
+    <p class="subtitle">Queue health and lifecycle actions.</p>
+  </div>
+  <div class="page-meta">
+    <span>{{.Pagination.FilterLabel}} filter</span>
+    <span>{{.Pagination.TotalJobs}} listed jobs</span>
+  </div>
+</div>
+
+{{template "summary" .}}
+
+<div class="dashboard-grid">
+  <section class="panel" aria-labelledby="jobs-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="jobs-title" class="panel-title">Job Queue</h2>
+        <div class="muted tiny">Running, pending, paused, and completed scraper jobs.</div>
+      </div>
+      <div class="panel-actions">
+        <div class="filter-tabs" aria-label="Job status filter">
+          {{range .Pagination.FilterOptions}}
+            <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
+          {{end}}
+        </div>
+        <button type="button" onclick="refreshPartials()" title="Refresh dashboard and job table.">Refresh</button>
+      </div>
+    </div>
+    {{template "jobs-panel" .}}
+  </section>
+  {{template "analytics-strip" .}}
+</div>
+{{end}}
+
+{{define "templates-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">Job Templates</h2>
+    <p class="subtitle">Create jobs, edit saved presets, and tune JSON parameters.</p>
+  </div>
+  <div class="page-meta">
+    <span>{{len .Templates}} templates</span>
+    <span>{{len .Strategies}} strategies can reference them</span>
+  </div>
+</div>
+
+<div class="templates-workspace">
+  <section class="panel" aria-labelledby="templates-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="templates-title" class="panel-title">Saved Templates</h2>
+        <div class="muted tiny">Template library and dependency-safe actions.</div>
+      </div>
+      <button type="button" class="secondary-button" onclick="newTemplate()">New Template</button>
+    </div>
+    <div class="panel-body">
+      <div class="compact-list" id="template-list">
+        {{range .Templates}}
+          <div class="compact-item" data-template-row="{{.ID}}">
+            <div class="item-grid">
+              <div>
+                <div class="item-title">{{.Name}}</div>
+                <div class="item-meta"><code>{{.ID}}</code></div>
+              </div>
+              <div class="item-meta">
+                <span>Created {{time .CreatedAt}}</span>
+                <span>Last used {{time .LastUsedAt}}</span>
+              </div>
+              <div class="item-actions">
+                <button type="button" onclick="editTemplate('{{.ID}}')">Edit</button>
+                <button type="button" onclick="copyTemplate('{{.ID}}')">Duplicate</button>
+                <button type="button" class="danger-button" onclick="deleteTemplate('{{.ID}}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        {{else}}
+          <div class="empty-state">No templates saved yet.</div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  {{template "create-job-panel" .}}
+  {{template "template-editor-panel" .}}
+</div>
+{{end}}
+
+{{define "strategies-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">Strategy Management</h2>
+    <p class="subtitle">Run ordered batches of saved scrape templates.</p>
+  </div>
+  <div class="page-meta">
+    <span>{{len .Strategies}} strategies</span>
+    <span>{{.Summary.PendingJobs}} queued jobs</span>
+    <span>{{.Summary.PendingURLs}} pending URLs</span>
+  </div>
+</div>
+
+<div class="management-grid">
+  <section class="panel" aria-labelledby="strategies-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="strategies-title" class="panel-title">Strategies</h2>
+        <div class="muted tiny">Saved template batches with run controls.</div>
+      </div>
+      <button type="button" class="secondary-button" onclick="newStrategy()">New Strategy</button>
+    </div>
+    <div class="panel-body">
+      <div class="compact-list" id="strategy-list">
+        {{range .Strategies}}
+          <div class="compact-item" data-strategy-row="{{.ID}}">
+            <div class="item-grid">
+              <div>
+                <div class="item-title">{{.Name}}</div>
+                <div class="item-meta"><code>{{.ID}}</code><span>{{len .Templates}} templates</span></div>
+              </div>
+              <div class="item-meta">
+                {{if .Notes}}<span>{{.Notes}}</span>{{else}}<span>No notes</span>{{end}}
+                {{if .LastUsedAt.Valid}}<span>Last used {{nullableTime .LastUsedAt}}</span>{{else}}<span>Never run</span>{{end}}
+              </div>
+              <div class="item-actions">
+                <button type="button" onclick="editStrategy('{{.ID}}')">Edit</button>
+                <button type="button" class="action-primary" onclick="runStrategy('{{.ID}}')">Run</button>
+                <button type="button" class="danger-button" onclick="deleteStrategy('{{.ID}}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        {{else}}
+          <div class="empty-state">No strategies saved yet.</div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  {{template "strategy-editor-panel" .}}
+</div>
+{{end}}
+
+{{define "create-job-panel"}}
+<section class="panel" aria-labelledby="create-title">
+  <div class="panel-header">
+    <div>
+      <h2 id="create-title" class="panel-title">Create Job</h2>
+      <div class="muted tiny">Creates or reuses the corresponding template.</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form id="start-form">
+      <fieldset>
+        <legend>Template source</legend>
+        <div class="field">
+          <label for="template_select">Saved template</label>
+          <select id="template_select">
+            <option value="">Select a previous job...</option>
+            {{range .Templates}}
+              <option value="{{.ParamsJSON}}" data-template-id="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+          <input id="template_id" name="template_id" type="hidden">
+        </div>
+        <div class="field">
+          <label for="job_title">Job title</label>
+          <input id="job_title" name="job_title" type="text" placeholder="Optional template title">
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Search</legend>
+        <div class="field">
+          <label for="queries">Queries *</label>
+          <textarea id="queries" name="queries" required placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="depth">Depth</label>
+            <input id="depth" name="depth" type="number" min="1" placeholder="default 10">
+          </div>
+          <div class="field">
+            <label for="limit">Limit</label>
+            <input id="limit" name="limit" type="number" min="0" placeholder="0 = no limit">
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Location</legend>
+        <div class="field">
+          <label for="geo">Geo center</label>
+          <input id="geo" name="geo" type="text" placeholder="lat,lng,zoomz e.g. 43.65,-79.38,14z">
+        </div>
+        <div class="field">
+          <label for="radius">Radius (m)</label>
+          <input id="radius" name="radius" type="number" min="0" step="100" placeholder="0 = no filter">
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Execution</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="concurrency_mode">Concurrency flag</label>
+            <select id="concurrency_mode" name="concurrency_mode">
+              <option value="max-c">Max concurrency (-max-c)</option>
+              <option value="c">Concurrency (-c)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="concurrency_value">Concurrency value</label>
+            <input id="concurrency_value" name="concurrency_value" type="number" min="1" placeholder="default 1">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="reviews">Min reviews</label>
+            <input id="reviews" name="reviews" type="number" min="0" placeholder="0 = page default">
+          </div>
+          <div class="field">
+            <label for="queue_wait_minutes">Queue wait</label>
+            <input id="queue_wait_minutes" name="queue_wait_minutes" type="number" min="0" value="20">
+          </div>
+        </div>
+        <label class="check-field" for="email">
+          <input id="email" name="email" type="checkbox" value="on">
+          <span>Extract emails from business websites</span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Output</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="output_mode">Output</label>
+            <select id="output_mode" name="output_mode">
+              <option value="file">File (JSON)</option>
+              <option value="database">Database (DSN from env)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="lang">Language</label>
+            <input id="lang" name="lang" type="text" placeholder="en">
+          </div>
+        </div>
+      </fieldset>
+
+      <button class="primary-button" type="submit">Create Job + Template</button>
+      <div id="start-result" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "template-editor-panel"}}
+<section class="panel" aria-labelledby="template-editor-title">
+  <div class="panel-header">
+    <div>
+      <h2 id="template-editor-title" class="panel-title">Template Editor</h2>
+      <div class="muted tiny">Name and Params JSON.</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form id="template-form">
+      <input id="template-edit-id" name="id" type="hidden">
+      <div class="field">
+        <label for="template-edit-name">Template name</label>
+        <input id="template-edit-name" name="name" type="text" required>
+      </div>
+      <div class="field">
+        <label for="template-edit-json">Params JSON</label>
+        <textarea id="template-edit-json" class="code-field" name="params_json" required></textarea>
+      </div>
+      <button class="primary-button" type="submit">Save Template</button>
+      <div id="template-result" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "strategy-editor-panel"}}
+<section class="panel" aria-labelledby="strategy-editor-title">
+  <div class="panel-header">
+    <div>
+      <h2 id="strategy-editor-title" class="panel-title">Strategy Editor</h2>
+      <div class="muted tiny">Select templates in run order.</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form id="strategy-form">
+      <input id="strategy-edit-id" name="id" type="hidden">
+      <div class="field">
+        <label for="strategy-name">Strategy name</label>
+        <input id="strategy-name" name="name" type="text" required>
+      </div>
+      <div class="field">
+        <label for="strategy-notes">Notes</label>
+        <textarea id="strategy-notes" name="notes"></textarea>
+      </div>
+      <div class="field">
+        <label for="strategy-template-ids">Templates</label>
+        <select id="strategy-template-ids" name="template_ids" multiple size="8">
+          {{range .Templates}}
+            <option value="{{.ID}}">{{.Name}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label>Selected order</label>
+        <div id="strategy-selected-order" class="ordered-list">
+          <div class="empty-state">No templates selected.</div>
+        </div>
+      </div>
+      <button class="primary-button" type="submit">Save Strategy</button>
+      <div id="strategy-result" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "analytics-strip"}}
+<section class="stat-strip" aria-label="Execution analytics">
+  <div class="stat-cell">
+    <div class="metric-label">Feed URLs</div>
+    <div class="stat-value">{{.Analytics.FeedURLsFound}}</div>
+    <div class="muted tiny">{{.Analytics.FeedDuplicates}} duplicate URLs</div>
+  </div>
+  <div class="stat-cell">
+    <div class="metric-label">Queued</div>
+    <div class="stat-value">{{.Analytics.QueuedURLs}}</div>
+    <div class="muted tiny">Links saved to jobs</div>
+  </div>
+  <div class="stat-cell">
+    <div class="metric-label">Scraped</div>
+    <div class="stat-value">{{.Analytics.ScrapedURLs}}</div>
+    <div class="muted tiny">{{.Analytics.DuplicatePlaces}} duplicate places</div>
+  </div>
+  <div class="stat-cell">
+    <div class="metric-label">Errors</div>
+    <div class="stat-value">{{add .Analytics.ScrapeErrors .Analytics.WriteErrors}}</div>
+    <div class="muted tiny">{{.Analytics.RetryEvents}} retries</div>
+  </div>
+</section>
+{{end}}
 
 {{define "summary"}}
 <section id="summary" class="summary-grid" aria-label="Job summary">
   <article class="metric-card active-card">
     <div class="metric-label">Active job</div>
     {{if .Summary.HasActiveJob}}
-      <div class="metric-note">
-        <span class="status {{.Summary.ActiveStatusClass}}">{{.Summary.ActiveStatus}}</span>
-      </div>
       <div class="metric-note"><strong>{{.Summary.ActiveJobTitle}}</strong></div>
-      <div class="metric-note"><code>{{.Summary.ActiveJobID}}</code></div>
-      <div class="metric-note">{{.Summary.ActiveProgress}}</div>
+      <div class="metric-note"><span class="status {{.Summary.ActiveStatusClass}}">{{.Summary.ActiveStatus}}</span> {{.Summary.ActiveProgress}}</div>
     {{else}}
       <div class="metric-value">Idle</div>
-      <div class="metric-note">No scraper job is starting or running.</div>
+      <div class="metric-note">No scraper job is active.</div>
     {{end}}
   </article>
   <article class="metric-card">
     <div class="metric-label">Pending jobs</div>
     <div class="metric-value">{{.Summary.PendingJobs}}</div>
-    <div class="metric-note">Waiting behind the active job</div>
+    <div class="metric-note">Queued</div>
   </article>
   <article class="metric-card">
     <div class="metric-label">Running</div>
@@ -543,12 +748,12 @@
   <article class="metric-card">
     <div class="metric-label">Pending URLs</div>
     <div class="metric-value">{{.Summary.PendingURLs}}</div>
-    <div class="metric-note">Across all saved jobs</div>
+    <div class="metric-note">Across jobs</div>
   </article>
   <article class="metric-card">
     <div class="metric-label">Needs attention</div>
     <div class="metric-value">{{.Summary.NeedsAttention}}</div>
-    <div class="metric-note">{{.Summary.FailedJobs}} failed, {{.Summary.CompletedJobs}} completed</div>
+    <div class="metric-note">{{.Summary.FailedJobs}} failed</div>
   </article>
 </section>
 {{end}}
@@ -562,6 +767,7 @@
           <th>Job</th>
           <th>Status</th>
           <th>Progress</th>
+          <th>Analytics</th>
           <th>Updated</th>
           <th>Actions</th>
         </tr>
@@ -603,6 +809,8 @@
         <code>{{.ID}}</code>
         <span>{{.OutputMode}}</span>
         <span>{{.Lang}}</span>
+        {{if .TemplateID}}<span>tpl {{.TemplateID}}</span>{{end}}
+        {{if .StrategyID}}<span>strategy {{.StrategyID}}</span>{{end}}
       </div>
     </td>
     <td>
@@ -626,6 +834,13 @@
       </div>
     </td>
     <td>
+      <div class="analytics-compact">
+        <span><strong>{{.FeedURLsFound}}</strong> feed / <strong>{{.ScrapedURLs}}</strong> scraped</span>
+        <span><strong>{{.ScrapeErrors}}</strong> scrape errors / <strong>{{.RetryEvents}}</strong> retries</span>
+        <span>{{.FeedDuplicates}} URL dupes / {{.DuplicatePlaces}} place dupes</span>
+      </div>
+    </td>
+    <td>
       <div>{{.UpdatedAt}}</div>
       <div class="muted tiny">Created {{.CreatedAt}}</div>
     </td>
@@ -641,6 +856,325 @@
     </td>
   </tr>
 {{else}}
-  <tr class="empty-row"><td colspan="5">No jobs yet.</td></tr>
+  <tr class="empty-row"><td colspan="6">No jobs yet.</td></tr>
 {{end}}
+{{end}}
+
+{{define "control-script"}}
+<script>
+  async function post(path) {
+    const res = await fetch(path, { method: 'POST' });
+    if (!res.ok) {
+      const msg = await res.text();
+      alert('Error: ' + msg);
+    }
+    await refreshPartials();
+  }
+
+  async function refreshJob(jobID) {
+    try {
+      const res = await fetch('/api/jobs/' + encodeURIComponent(jobID));
+      if (!res.ok) {
+        const msg = await res.text();
+        alert('Error: ' + msg);
+        return;
+      }
+      await refreshPartials();
+    } catch (err) {
+      alert('Error: ' + err);
+    }
+  }
+
+  let jobsPage = {{.Pagination.Page}};
+  let jobsPageSize = {{.Pagination.PageSize}};
+  let jobsFilter = '{{.Pagination.Filter}}';
+
+  async function refreshPartials() {
+    const jobsPanel = document.getElementById('jobs-panel');
+    const summary = document.getElementById('summary');
+    const requests = [];
+    if (summary) requests.push(fetch('/ui/summary').then(async function(res) {
+      if (res.ok && document.getElementById('summary')) document.getElementById('summary').outerHTML = await res.text();
+    }));
+    if (jobsPanel) {
+      const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
+      requests.push(fetch(jobsPath).then(async function(res) {
+        if (!res.ok || !document.getElementById('jobs-panel')) return;
+        document.getElementById('jobs-panel').outerHTML = await res.text();
+        const panel = document.getElementById('jobs-panel');
+        if (panel) {
+          jobsPage = Number(panel.dataset.page) || jobsPage;
+          jobsPageSize = Number(panel.dataset.pageSize) || jobsPageSize;
+          jobsFilter = panel.dataset.filter || jobsFilter;
+          syncJobsFilterButtons();
+        }
+      }));
+    }
+    await Promise.all(requests);
+    const refreshed = document.getElementById('last-refreshed');
+    if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  async function goJobsPage(page) {
+    jobsPage = page;
+    await refreshPartials();
+  }
+
+  async function setJobsPageSize(value) {
+    jobsPageSize = Number(value) || 10;
+    jobsPage = 1;
+    await refreshPartials();
+  }
+
+  async function setJobsFilter(value) {
+    jobsFilter = value || 'all';
+    jobsPage = 1;
+    syncJobsFilterButtons();
+    await refreshPartials();
+  }
+
+  function syncJobsFilterButtons() {
+    document.querySelectorAll('[data-filter-option]').forEach(function(button) {
+      button.setAttribute('aria-pressed', button.dataset.filterOption === jobsFilter ? 'true' : 'false');
+    });
+  }
+
+  async function loadTemplates() {
+    const select = document.getElementById('template_select');
+    if (!select || select.options.length > 1) return;
+    try {
+      const res = await fetch('/api/job-templates');
+      if (!res.ok) return;
+      const templates = await res.json();
+      for (const tpl of templates || []) {
+        const opt = document.createElement('option');
+        opt.value = tpl.ParamsJSON || '';
+        opt.dataset.templateId = tpl.ID || '';
+        opt.textContent = tpl.Name || tpl.ID;
+        select.appendChild(opt);
+      }
+    } catch (_) {}
+  }
+
+  function setValue(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (value === null || value === undefined) return;
+    el.value = value === 0 ? '0' : (value || '');
+  }
+
+  function newTemplate() {
+    setValue('template-edit-id', '');
+    setValue('template-edit-name', '');
+    setValue('template-edit-json', '{\n  "Queries": []\n}');
+    const result = document.getElementById('template-result');
+    if (result) result.textContent = '';
+  }
+
+  function newStrategy() {
+    setValue('strategy-edit-id', '');
+    setValue('strategy-name', '');
+    setValue('strategy-notes', '');
+    document.querySelectorAll('#strategy-template-ids option').forEach(function(opt) { opt.selected = false; });
+    updateStrategyOrder();
+    const result = document.getElementById('strategy-result');
+    if (result) result.textContent = '';
+  }
+
+  const templateSelect = document.getElementById('template_select');
+  if (templateSelect) {
+    templateSelect.addEventListener('change', function() {
+      if (!this.value) return;
+      let p;
+      try {
+        p = JSON.parse(this.value);
+      } catch (_) {
+        return;
+      }
+      setValue('job_title', p.JobTitle);
+      const templateID = document.getElementById('template_id');
+      if (templateID) templateID.value = this.selectedOptions[0]?.dataset.templateId || '';
+      setValue('queries', (p.Queries || []).join('\n'));
+      setValue('output_mode', p.OutputMode);
+      setValue('geo', p.Geo);
+      setValue('radius', p.Radius);
+      setValue('depth', p.Depth);
+      setValue('concurrency_mode', p.ConcurrencyMode);
+      setValue('concurrency_value', p.ConcurrencyValue);
+      setValue('reviews', p.Reviews);
+      setValue('limit', p.Limit);
+      setValue('lang', p.Lang);
+      setValue('queue_wait_minutes', p.QueueWaitMinutes);
+      const email = document.getElementById('email');
+      if (email) email.checked = !!p.Email;
+    });
+  }
+
+  const startForm = document.getElementById('start-form');
+  if (startForm) {
+    startForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('start-result');
+      result.textContent = '';
+      const data = new URLSearchParams(new FormData(this));
+      const res = await fetch('/api/jobs/start', { method: 'POST', body: data });
+      const msg = await res.text();
+      if (!res.ok) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + msg;
+      } else {
+        result.style.color = '#027a48';
+        try {
+          const payload = JSON.parse(msg);
+          result.textContent = payload.status === 'queued' ? 'Job queued.' : 'Job started.';
+        } catch (_) {
+          result.textContent = 'Job created.';
+        }
+        await refreshPartials();
+      }
+    });
+  }
+
+  async function fetchJSON(path, options) {
+    const res = await fetch(path, options || {});
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || res.statusText);
+    return text ? JSON.parse(text) : {};
+  }
+
+  async function editTemplate(id) {
+    try {
+      const tpl = await fetchJSON('/api/job-templates/' + encodeURIComponent(id));
+      setValue('template-edit-id', tpl.ID || '');
+      setValue('template-edit-name', tpl.Name || '');
+      setValue('template-edit-json', tpl.ParamsJSON || '{}');
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function copyTemplate(id) {
+    await editTemplate(id);
+    setValue('template-edit-id', '');
+    const name = document.getElementById('template-edit-name');
+    if (name) name.value = name.value + ' copy';
+  }
+
+  async function deleteTemplate(id) {
+    if (!confirm('Delete this template?')) return;
+    try {
+      await fetchJSON('/api/job-templates/' + encodeURIComponent(id), { method: 'DELETE' });
+      location.reload();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  const templateForm = document.getElementById('template-form');
+  if (templateForm) {
+    templateForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('template-result');
+      result.textContent = '';
+      try {
+        const data = new URLSearchParams(new FormData(this));
+        await fetchJSON('/api/job-templates', { method: 'POST', body: data });
+        result.style.color = '#027a48';
+        result.textContent = 'Template saved.';
+        location.reload();
+      } catch (err) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + err.message;
+      }
+    });
+  }
+
+  async function editStrategy(id) {
+    try {
+      const strategy = await fetchJSON('/api/strategies/' + encodeURIComponent(id));
+      setValue('strategy-edit-id', strategy.ID || '');
+      setValue('strategy-name', strategy.Name || '');
+      setValue('strategy-notes', strategy.Notes || '');
+      const selected = new Set((strategy.Templates || []).map(function(t) { return t.ID; }));
+      document.querySelectorAll('#strategy-template-ids option').forEach(function(opt) {
+        opt.selected = selected.has(opt.value);
+      });
+      updateStrategyOrder();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function runStrategy(id) {
+    try {
+      const payload = await fetchJSON('/api/strategies/' + encodeURIComponent(id) + '/run', { method: 'POST' });
+      alert((payload.status === 'started' ? 'Strategy started: ' : 'Strategy queued: ') + payload.job_ids.length + ' jobs');
+      await refreshPartials();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function deleteStrategy(id) {
+    if (!confirm('Delete this strategy?')) return;
+    try {
+      await fetchJSON('/api/strategies/' + encodeURIComponent(id), { method: 'DELETE' });
+      location.reload();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  function updateStrategyOrder() {
+    const output = document.getElementById('strategy-selected-order');
+    const select = document.getElementById('strategy-template-ids');
+    if (!output || !select) return;
+    const selected = Array.from(select.selectedOptions);
+    if (!selected.length) {
+      output.innerHTML = '<div class="empty-state">No templates selected.</div>';
+      return;
+    }
+    output.innerHTML = '';
+    selected.forEach(function(opt, index) {
+      const row = document.createElement('div');
+      row.className = 'ordered-item';
+      const num = document.createElement('div');
+      num.className = 'order-index';
+      num.textContent = String(index + 1);
+      const text = document.createElement('div');
+      text.innerHTML = '<div class="item-title"></div><div class="item-meta"><code></code></div>';
+      text.querySelector('.item-title').textContent = opt.textContent;
+      text.querySelector('code').textContent = opt.value;
+      row.appendChild(num);
+      row.appendChild(text);
+      output.appendChild(row);
+    });
+  }
+
+  const strategySelect = document.getElementById('strategy-template-ids');
+  if (strategySelect) strategySelect.addEventListener('change', updateStrategyOrder);
+
+  const strategyForm = document.getElementById('strategy-form');
+  if (strategyForm) {
+    strategyForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('strategy-result');
+      result.textContent = '';
+      try {
+        const data = new URLSearchParams(new FormData(this));
+        await fetchJSON('/api/strategies', { method: 'POST', body: data });
+        result.style.color = '#027a48';
+        result.textContent = 'Strategy saved.';
+        location.reload();
+      } catch (err) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + err.message;
+      }
+    });
+  }
+
+  loadTemplates();
+  updateStrategyOrder();
+  setInterval(refreshPartials, 5000);
+</script>
 {{end}}

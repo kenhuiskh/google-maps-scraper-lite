@@ -14,7 +14,11 @@ type controlPageData struct {
 	Jobs          []jobView
 	Pagination    jobsPaginationView
 	Templates     []gmaps.JobTemplate
+	Strategies    []gmaps.Strategy
+	Analytics     analyticsView
 	LastRefreshed string
+	ActivePage    string
+	PageTitle     string
 }
 
 type jobsPaginationView struct {
@@ -73,6 +77,28 @@ type jobView struct {
 	Lang            string
 	Active          bool
 	Blocked         bool
+	TemplateID      string
+	StrategyID      string
+	StrategyRunID   string
+	FeedURLsFound   int
+	FeedDuplicates  int
+	QueuedURLs      int
+	ScrapedURLs     int
+	DuplicatePlaces int
+	ScrapeErrors    int
+	WriteErrors     int
+	RetryEvents     int
+}
+
+type analyticsView struct {
+	FeedURLsFound   int
+	FeedDuplicates  int
+	QueuedURLs      int
+	ScrapedURLs     int
+	DuplicatePlaces int
+	ScrapeErrors    int
+	WriteErrors     int
+	RetryEvents     int
 }
 
 type controlSummaryView struct {
@@ -94,11 +120,11 @@ type controlSummaryView struct {
 	ActiveURLs        int
 }
 
-func newControlPageData(jobs []gmaps.Job, templates []gmaps.JobTemplate) controlPageData {
-	return newControlPageDataWithPagination(jobs, jobs, templates, newJobsPagination(1, defaultJobsPageSize, len(jobs), defaultJobsFilter))
+func newControlPageData(jobs []gmaps.Job, templates []gmaps.JobTemplate, strategies []gmaps.Strategy) controlPageData {
+	return newControlPageDataWithPagination(jobs, jobs, templates, strategies, newJobsPagination(1, defaultJobsPageSize, len(jobs), defaultJobsFilter))
 }
 
-func newControlPageDataWithPagination(summaryJobs, pageJobs []gmaps.Job, templates []gmaps.JobTemplate, pagination jobsPaginationView) controlPageData {
+func newControlPageDataWithPagination(summaryJobs, pageJobs []gmaps.Job, templates []gmaps.JobTemplate, strategies []gmaps.Strategy, pagination jobsPaginationView) controlPageData {
 	views := make([]jobView, 0, len(pageJobs))
 	for _, job := range pageJobs {
 		views = append(views, newJobView(job))
@@ -108,8 +134,18 @@ func newControlPageDataWithPagination(summaryJobs, pageJobs []gmaps.Job, templat
 		Jobs:          views,
 		Pagination:    pagination,
 		Templates:     templates,
+		Strategies:    strategies,
+		Analytics:     newAnalyticsView(summaryJobs),
 		LastRefreshed: time.Now().Format("15:04:05"),
+		ActivePage:    "jobs",
+		PageTitle:     "Scraper Control",
 	}
+}
+
+func (d controlPageData) WithPage(activePage, title string) controlPageData {
+	d.ActivePage = activePage
+	d.PageTitle = title
+	return d
 }
 
 const defaultJobsPageSize = 10
@@ -235,6 +271,17 @@ func newJobView(job gmaps.Job) jobView {
 		Lang:            cfg.Lang,
 		Active:          job.Status == gmaps.JobStatusStarting || job.Status == gmaps.JobStatusRunning,
 		Blocked:         job.Status == gmaps.JobStatusBlocked || job.Status == gmaps.JobStatusFailed,
+		TemplateID:      job.TemplateID.String,
+		StrategyID:      job.StrategyID.String,
+		StrategyRunID:   job.StrategyRunID.String,
+		FeedURLsFound:   job.ExecutionStats.FeedURLsFound,
+		FeedDuplicates:  job.ExecutionStats.FeedDuplicateURLs,
+		QueuedURLs:      job.ExecutionStats.QueuedURLs,
+		ScrapedURLs:     job.ExecutionStats.ScrapedURLs,
+		DuplicatePlaces: job.ExecutionStats.DuplicatePlaces,
+		ScrapeErrors:    job.ExecutionStats.ScrapeErrors,
+		WriteErrors:     job.ExecutionStats.WriteErrors,
+		RetryEvents:     job.ExecutionStats.RetryEvents,
 	}
 	view.ActionLabel, view.ActionPath, view.ActionDisabled, view.ActionClass, view.ActionHelp = jobLifecycleAction(job)
 	if job.LastError.Valid {
@@ -294,6 +341,21 @@ func newControlSummaryView(jobs []gmaps.Job) controlSummaryView {
 		}
 	}
 	return summary
+}
+
+func newAnalyticsView(jobs []gmaps.Job) analyticsView {
+	var view analyticsView
+	for _, job := range jobs {
+		view.FeedURLsFound += job.ExecutionStats.FeedURLsFound
+		view.FeedDuplicates += job.ExecutionStats.FeedDuplicateURLs
+		view.QueuedURLs += job.ExecutionStats.QueuedURLs
+		view.ScrapedURLs += job.ExecutionStats.ScrapedURLs
+		view.DuplicatePlaces += job.ExecutionStats.DuplicatePlaces
+		view.ScrapeErrors += job.ExecutionStats.ScrapeErrors
+		view.WriteErrors += job.ExecutionStats.WriteErrors
+		view.RetryEvents += job.ExecutionStats.RetryEvents
+	}
+	return view
 }
 
 func formatQueriesPreview(queries []string) string {

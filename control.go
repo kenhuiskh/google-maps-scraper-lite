@@ -23,6 +23,9 @@ type startLauncher func(ctx context.Context, params startParams) error
 
 type startParams struct {
 	JobID            string
+	TemplateID       string
+	StrategyID       string
+	StrategyRunID    string
 	JobTitle         string
 	Queries          []string
 	Geo              string
@@ -101,6 +104,7 @@ func parseStartParams(r *http.Request) (startParams, string) {
 
 	p := startParams{
 		JobTitle:         strings.TrimSpace(r.FormValue("job_title")),
+		TemplateID:       strings.TrimSpace(r.FormValue("template_id")),
 		Queries:          queries,
 		Geo:              strings.TrimSpace(r.FormValue("geo")),
 		Lang:             strings.TrimSpace(r.FormValue("lang")),
@@ -252,6 +256,9 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 	}
 	p := startParams{
 		JobID:            job.ID,
+		TemplateID:       job.TemplateID.String,
+		StrategyID:       job.StrategyID.String,
+		StrategyRunID:    job.StrategyRunID.String,
 		Queries:          job.Queries,
 		Geo:              cfg.Geo,
 		Radius:           cfg.Radius,
@@ -273,6 +280,9 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 	if p.OutputMode == "" {
 		p.OutputMode = "file"
 	}
+	if p.OutputMode == "file" && !p.JSONOut {
+		p.JSONOut = true
+	}
 	if p.ConcurrencyMode == "" {
 		switch {
 		case cfg.MaxConcurrency > 0:
@@ -292,6 +302,65 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 		}
 	} else if p.OutDir == "" {
 		p.OutDir = defaultControlOutDir(stateDB)
+	}
+	return p, nil
+}
+
+func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams, error) {
+	var t templateParams
+	if err := json.Unmarshal([]byte(tpl.ParamsJSON), &t); err != nil {
+		return startParams{}, err
+	}
+	p := startParams{
+		TemplateID:       tpl.ID,
+		JobTitle:         t.JobTitle,
+		Queries:          append([]string(nil), t.Queries...),
+		Geo:              t.Geo,
+		ConcurrencyMode:  t.ConcurrencyMode,
+		Lang:             t.Lang,
+		Email:            t.Email,
+		OutputMode:       t.OutputMode,
+		JSONOut:          t.JSONOut,
+		OutDir:           t.OutDir,
+		QueueWaitMinutes: 20,
+	}
+	if p.Lang == "" {
+		p.Lang = "en"
+	}
+	if p.OutputMode == "" {
+		p.OutputMode = "file"
+	}
+	if p.ConcurrencyMode != "c" && p.ConcurrencyMode != "max-c" {
+		p.ConcurrencyMode = "max-c"
+	}
+	if t.Radius != nil {
+		p.Radius = *t.Radius
+	}
+	if t.Depth != nil {
+		p.Depth = *t.Depth
+	}
+	if t.ConcurrencyValue != nil {
+		p.ConcurrencyValue = *t.ConcurrencyValue
+	}
+	if t.Reviews != nil {
+		p.Reviews = *t.Reviews
+	}
+	if t.Limit != nil {
+		p.Limit = *t.Limit
+	}
+	if t.QueueWaitMinutes != nil {
+		p.QueueWaitMinutes = *t.QueueWaitMinutes
+	}
+	if p.OutputMode == "database" {
+		p.DSN = os.Getenv("DSN")
+		if p.DSN == "" {
+			return startParams{}, errors.New("database output mode requires DSN environment variable to be set")
+		}
+	} else if p.OutDir == "" {
+		p.OutDir = defaultControlOutDir(stateDB)
+	}
+	if len(p.Queries) == 0 {
+		return startParams{}, errors.New("template has no queries")
 	}
 	return p, nil
 }

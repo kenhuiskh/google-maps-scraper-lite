@@ -3,6 +3,7 @@ package gmaps
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -333,6 +334,152 @@ func TestJobStoreSaveAndListJobTemplates(t *testing.T) {
 	if templates[0].ID != id || templates[0].Name != "coffee [file/en]" {
 		t.Fatalf("template = %#v, want id %q and saved name", templates[0], id)
 	}
+}
+
+func TestJobStoreMigratesExistingSQLiteSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE jobs (
+		id TEXT PRIMARY KEY,
+		queries_json TEXT NOT NULL,
+		config_json TEXT NOT NULL DEFAULT '{}',
+		status TEXT NOT NULL,
+		pause_requested INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL,
+		started_at DATETIME,
+		updated_at DATETIME NOT NULL,
+		finished_at DATETIME,
+		last_error TEXT
+	)`); err != nil {
+		t.Fatalf("create old jobs: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE job_templates (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		params_json TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		last_used_at DATETIME NOT NULL
+	)`); err != nil {
+		t.Fatalf("create old templates: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw sqlite: %v", err)
+	}
+
+	store, err := OpenJobStore(path)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+
+	for _, column := range []string{"template_id", "strategy_id", "strategy_run_id"} {
+		if !testColumnExists(t, store.db, "jobs", column) {
+			t.Fatalf("jobs.%s was not migrated", column)
+		}
+	}
+	for _, table := range []string{"strategies", "strategy_templates", "job_execution_stats"} {
+		if !testTableExists(t, store.db, table) {
+			t.Fatalf("%s table was not created", table)
+		}
+	}
+}
+
+func TestJobStoreStrategiesAndExecutionStats(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	params := templateParamsForTest{Queries: []string{"coffee"}, Lang: "en", OutputMode: "file", JSONOut: true}
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	tplID, err := store.SaveJobTemplateJSON(ctx, "", "coffee template", string(paramsJSON))
+	if err != nil {
+		t.Fatalf("save template json: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "daily scrape", "morning batch", []string{tplID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	strategy, err := store.GetStrategy(ctx, strategyID)
+	if err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	if len(strategy.Templates) != 1 || strategy.Templates[0].ID != tplID {
+		t.Fatalf("strategy templates = %#v, want %q", strategy.Templates, tplID)
+	}
+
+	jobID, err := store.CreateStartingJobWithSource(ctx, []string{"coffee"}, map[string]string{"lang": "en"}, tplID, strategyID, "run_1")
+	if err != nil {
+		t.Fatalf("create sourced job: %v", err)
+	}
+	if err := store.SetJobDiscoveryStats(ctx, jobID, 7, 2, 5); err != nil {
+		t.Fatalf("set discovery stats: %v", err)
+	}
+	if err := store.IncrementJobStat(ctx, jobID, "scraped_urls", 3); err != nil {
+		t.Fatalf("inc scraped: %v", err)
+	}
+	if err := store.IncrementJobStat(ctx, jobID, "duplicate_places", 1); err != nil {
+		t.Fatalf("inc duplicate places: %v", err)
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.TemplateID.String != tplID || job.StrategyID.String != strategyID || job.StrategyRunID.String != "run_1" {
+		t.Fatalf("job source = %q/%q/%q", job.TemplateID.String, job.StrategyID.String, job.StrategyRunID.String)
+	}
+	if job.ExecutionStats.FeedURLsFound != 7 || job.ExecutionStats.FeedDuplicateURLs != 2 || job.ExecutionStats.QueuedURLs != 5 {
+		t.Fatalf("discovery stats = %#v", job.ExecutionStats)
+	}
+	if job.ExecutionStats.ScrapedURLs != 3 || job.ExecutionStats.DuplicatePlaces != 1 {
+		t.Fatalf("execution stats = %#v", job.ExecutionStats)
+	}
+}
+
+type templateParamsForTest struct {
+	Queries    []string `json:"Queries"`
+	Lang       string   `json:"Lang,omitempty"`
+	OutputMode string   `json:"OutputMode,omitempty"`
+	JSONOut    bool     `json:"JSONOut,omitempty"`
+}
+
+func testColumnExists(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("table info %s: %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table info: %v", err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
+}
+
+func testTableExists(t *testing.T, db *sql.DB, table string) bool {
+	t.Helper()
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("table exists %s: %v", table, err)
+	}
+	return name == table
 }
 
 func TestJobStoreQueueStartingJobURLs(t *testing.T) {
