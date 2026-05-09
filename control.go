@@ -567,11 +567,12 @@ func buildResumeArgs(job *gmaps.Job, stateDB string) ([]string, error) {
 	}
 	switch cfg.OutputMode {
 	case "database":
-		dsn := os.Getenv("DSN")
-		if dsn == "" {
+		// The DSN is inherited from the DSN environment variable by the
+		// subprocess. We do not pass it as a command-line argument to
+		// avoid exposing credentials in process listings.
+		if os.Getenv("DSN") == "" {
 			return nil, errors.New("database output mode requires DSN environment variable to be set")
 		}
-		args = append(args, "-dsn", dsn)
 	case "file":
 		if cfg.JSONOut {
 			args = append(args, "-json")
@@ -580,9 +581,8 @@ func buildResumeArgs(job *gmaps.Job, stateDB string) ([]string, error) {
 			args = append(args, "-o", cfg.OutDir)
 		}
 	default:
-		if dsn := os.Getenv("DSN"); dsn != "" {
-			args = append(args, "-dsn", dsn)
-		}
+		// Legacy: fall back to database mode if DSN is available in env.
+		// The subprocess reads DSN from its environment.
 	}
 	return args, nil
 }
@@ -593,7 +593,8 @@ func buildStartArgs(p startParams, stateDB string) []string {
 		"-state-db", stateDB,
 	}
 	if p.OutputMode == "database" {
-		args = append(args, "-dsn", p.DSN)
+		// DSN is inherited from the DSN environment variable; do not pass
+		// it as a CLI argument to avoid credential exposure in process listings.
 	} else {
 		outDir := p.OutDir
 		if outDir == "" {

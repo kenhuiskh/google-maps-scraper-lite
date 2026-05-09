@@ -242,7 +242,28 @@ func (s *JobStore) migrate(ctx context.Context) error {
 	return nil
 }
 
+// validateSQLIdentifier rejects names containing anything outside letters,
+// digits, and underscores so they can be safely embedded in DDL statements
+// where parameterized placeholders are not supported.
+func validateSQLIdentifier(s string) error {
+	if s == "" {
+		return fmt.Errorf("SQL identifier must not be empty")
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return fmt.Errorf("invalid SQL identifier %q: only letters, digits, and underscores are allowed", s)
+		}
+	}
+	return nil
+}
+
 func (s *JobStore) ensureColumn(ctx context.Context, table, column, decl string) error {
+	if err := validateSQLIdentifier(table); err != nil {
+		return fmt.Errorf("ensureColumn table: %w", err)
+	}
+	if err := validateSQLIdentifier(column); err != nil {
+		return fmt.Errorf("ensureColumn column: %w", err)
+	}
 	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return err
