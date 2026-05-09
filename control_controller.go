@@ -296,6 +296,49 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			writeJSON(w, result)
 			return
 		}
+		if len(parts) == 2 && parts[1] == "bulk-update-lang" && r.Method == http.MethodPost {
+			var req struct {
+				Lang       string `json:"lang"`
+				Override   bool   `json:"override"`
+				NameSuffix string `json:"nameSuffix"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			req.Lang = strings.TrimSpace(req.Lang)
+			if req.Lang == "" {
+				http.Error(w, "lang is required", http.StatusBadRequest)
+				return
+			}
+			if !req.Override {
+				req.NameSuffix = strings.TrimSpace(req.NameSuffix)
+				if req.NameSuffix == "" {
+					http.Error(w, "nameSuffix is required when override is false", http.StatusBadRequest)
+					return
+				}
+			}
+			var count int
+			var err error
+			if req.Override {
+				count, err = store.BulkUpdateStrategyLang(r.Context(), strategyID, req.Lang)
+			} else {
+				count, err = store.BulkDuplicateStrategyTemplatesWithLang(r.Context(), strategyID, req.Lang, req.NameSuffix)
+			}
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, "strategy not found", http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]string{
+				"status":  "ok",
+				"message": strconv.Itoa(count) + " template(s) updated.",
+			})
+			return
+		}
 		http.NotFound(w, r)
 	})
 	mux.HandleFunc("/api/jobs/start", func(w http.ResponseWriter, r *http.Request) {
