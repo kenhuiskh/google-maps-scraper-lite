@@ -1,0 +1,1716 @@
+{{define "control"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} - Scraper Control</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --surface: #ffffff;
+      --surface-muted: #eef2f7;
+      --border: #d8e0ea;
+      --border-strong: #c4cfdd;
+      --text: #0f172a;
+      --muted: #475569;
+      --muted-2: #64748b;
+      --primary: #1e40af;
+      --primary-hover: #1d4ed8;
+      --primary-soft: #eaf1ff;
+      --info: #2563eb;
+      --danger: #b42318;
+      --danger-soft: #fef3f2;
+      --success: #027a48;
+      --success-soft: #ecfdf3;
+      --warning: #b45309;
+      --warning-soft: #fffbeb;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.42;
+      font-variant-numeric: tabular-nums;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      min-height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: #1e293b;
+      cursor: pointer;
+      padding: 6px 10px;
+      transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    button:hover:not([disabled]) { border-color: #b7c8e1; color: var(--primary); background: #f8fbff; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: 3px solid #bfdbfe;
+      outline-offset: 1px;
+    }
+    button[disabled] { color: #94a3b8; background: #f8fafc; cursor: not-allowed; }
+    a { color: inherit; text-decoration: none; }
+    .button-link {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: #1e293b;
+      cursor: pointer;
+      padding: 6px 10px;
+      transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    .button-link:hover { border-color: #b7c8e1; color: var(--primary); background: #f8fbff; }
+    code {
+      color: #334155;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      overflow-wrap: anywhere;
+    }
+    .app-shell { min-height: 100vh; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(255, 255, 255, 0.96);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(14px);
+    }
+    .topbar-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: grid;
+      grid-template-columns: minmax(220px, auto) minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 1.08rem; line-height: 1.2; font-weight: 800; letter-spacing: 0; }
+    .subtitle { margin-top: 2px; color: var(--muted); font-size: 0.82rem; }
+    .main-nav { display: flex; align-items: center; gap: 4px; justify-self: center; }
+    .nav-link {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 7px;
+      padding: 7px 12px;
+      color: var(--muted);
+      font-weight: 750;
+    }
+    .nav-link:hover { background: #f1f5f9; color: var(--text); }
+    .nav-link.active { background: var(--primary); color: #fff; }
+    .topbar-meta { color: var(--muted); font-size: 0.82rem; text-align: right; white-space: nowrap; }
+    .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px 28px; }
+    .page-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .page-title { font-size: 1.24rem; font-weight: 850; letter-spacing: 0; }
+    .page-meta { color: var(--muted); font-size: 0.84rem; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .metric-card, .panel, .stat-cell, .compact-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
+    }
+    .metric-card { padding: 9px 11px; min-height: 70px; }
+    .metric-label {
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .metric-value { margin-top: 3px; font-size: 1.32rem; font-weight: 850; color: var(--text); letter-spacing: 0; }
+    .metric-note { margin-top: 3px; color: var(--muted); font-size: 0.78rem; overflow-wrap: anywhere; }
+    .active-card { border-color: #b7c8e1; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
+    .dashboard-grid { display: grid; gap: 10px; }
+    .management-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 14px; align-items: start; }
+    .templates-workspace { display: grid; grid-template-columns: minmax(300px, 0.78fr) minmax(360px, 1fr); gap: 12px; align-items: start; }
+    .template-editor-workspace { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(380px, 1fr); gap: 12px; align-items: stretch; }
+    .template-editor-workspace > .panel {
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .template-forms-stack { display: grid; gap: 12px; min-width: 0; }
+    .panel-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 57px;
+    }
+    .panel-title { font-size: 0.98rem; color: var(--text); font-weight: 850; }
+    .panel-body { padding: 14px; }
+    .template-editor-workspace > .panel > .panel-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .muted { color: var(--muted); }
+    .tiny { font-size: 0.8rem; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 5px;
+      padding: 3px 8px;
+      font-size: 0.76rem;
+      font-weight: 800;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .status-starting, .status-pausing { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+    .status-running { background: var(--success-soft); color: var(--success); border-color: #abefc6; }
+    .status-paused, .status-pending { background: var(--primary-soft); color: var(--primary); border-color: #bfdbfe; }
+    .status-blocked { background: var(--warning-soft); color: #92400e; border-color: #fde68a; }
+    .status-done { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+    .status-failed { background: var(--danger-soft); color: var(--danger); border-color: #fecdca; }
+    .status-unknown { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
+    form { display: grid; gap: 14px; }
+    fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+    legend {
+      padding: 0 0 4px;
+      font-weight: 850;
+      color: #334155;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .field { display: grid; gap: 5px; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { color: #334155; font-size: 0.82rem; font-weight: 700; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 9px;
+    }
+    textarea { min-height: 98px; resize: vertical; }
+    textarea.code-field {
+      min-height: 300px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      background: #f8fafc;
+    }
+    .template-editor-workspace #template-form { width: 100%; flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
+    .template-editor-workspace #template-form .json-field {
+      min-height: 0;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .template-editor-workspace #template-edit-json {
+      height: 100%;
+      min-height: 0;
+      resize: none;
+    }
+    input[type="checkbox"] { width: auto; }
+    .check-field { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+    .primary-button {
+      width: 100%;
+      min-height: 38px;
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+      font-weight: 850;
+    }
+    .primary-button:hover:not([disabled]) { background: var(--primary-hover); color: #fff; border-color: var(--primary-hover); }
+    .secondary-button { font-weight: 750; }
+    .button-link.secondary-button { font-weight: 750; }
+    .danger-button { color: var(--danger); }
+    .result { min-height: 20px; font-size: 0.86rem; }
+    #start-result, #template-result, #strategy-result { min-height: 20px; font-size: 0.86rem; }
+    .table-wrap { overflow-x: auto; max-width: 100%; }
+    table { border-collapse: collapse; width: 100%; min-width: 920px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th {
+      color: var(--muted);
+      background: #f8fafc;
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      font-weight: 850;
+    }
+    tbody tr:hover { background: #f8fafc; }
+    tbody tr.active-row { background: #f8fbff; }
+    .job-title, .item-title { font-weight: 850; color: var(--text); overflow-wrap: anywhere; }
+    .job-title { max-width: 340px; }
+    .job-meta, .item-meta {
+      margin-top: 4px;
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .raw-status { display: block; margin-top: 5px; font-size: 0.76rem; }
+    .progress-line { display: flex; justify-content: space-between; gap: 12px; color: #334155; font-size: 0.84rem; }
+    .progress-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: inherit; background: var(--success); }
+    .progress-stats { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 0.76rem; }
+    .analytics-compact { display: grid; gap: 3px; color: var(--muted); font-size: 0.76rem; }
+    .analytics-compact strong { color: #334155; font-weight: 850; }
+    .log-panel { margin-top: 10px; }
+    .log-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .log-viewer {
+      min-height: 180px;
+      max-height: 320px;
+      overflow: auto;
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
+      background: #0f172a;
+      color: #dbeafe;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.8rem; overflow-wrap: anywhere; }
+    .actions, .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .actions button, .item-actions button { min-height: 30px; padding: 5px 9px; }
+    .actions .action-refresh { color: #334155; }
+    .actions .action-primary, .item-actions .action-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+      font-weight: 800;
+    }
+    .actions .action-warning { background: var(--warning-soft); border-color: #fcd34d; color: #92400e; font-weight: 800; }
+    .actions .action-muted { color: #94a3b8; background: #f8fafc; }
+    .empty-row td, .empty-state {
+      padding: 24px 14px;
+      color: var(--muted);
+      text-align: center;
+      background: #f8fafc;
+      border-radius: 7px;
+    }
+    .pager {
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: #fff;
+    }
+    .pager-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .pager select { width: auto; min-width: 76px; padding: 6px 26px 6px 8px; }
+    .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+    .filter-tabs { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: #f8fafc; }
+    .filter-tabs button { min-height: 28px; padding: 4px 9px; border-color: transparent; background: transparent; }
+    .filter-tabs button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 850; }
+    .compact-list { display: grid; gap: 9px; }
+    .compact-item { padding: 11px; min-width: 0; overflow: hidden; }
+    .compact-item.selected { border-color: #b7c8e1; background: #f8fbff; }
+    .item-actions { margin-top: 9px; }
+    .item-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(180px, 0.9fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .template-primary, .template-secondary { min-width: 0; }
+    .template-primary .item-title, .template-secondary code {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .template-secondary code { display: block; max-width: 100%; }
+    .template-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 5px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .template-actions button, .template-actions .button-link { min-height: 28px; padding: 4px 8px; }
+    .template-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.1fr) minmax(260px, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
+    .stat-cell { padding: 9px 11px; }
+    .stat-value { margin-top: 3px; font-size: 1.05rem; font-weight: 850; color: var(--text); }
+    .ordered-list { display: grid; gap: 7px; }
+    .strategy-template-list {
+      display: grid;
+      gap: 7px;
+      max-height: 250px;
+      overflow: auto;
+      padding: 7px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .strategy-template-choice {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 8px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+    .strategy-template-choice:hover,
+    .strategy-template-choice:has(input:focus-visible) {
+      background: #f8fafc;
+      border-color: var(--border);
+    }
+    .strategy-template-choice:has(input:checked) {
+      background: #f8fbff;
+      border-color: #b7c8e1;
+    }
+    .strategy-template-choice input { margin-top: 2px; }
+    .strategy-template-choice code {
+      display: block;
+      margin-top: 3px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .run-modal {
+      width: min(820px, calc(100vw - 32px));
+      max-height: calc(100vh - 48px);
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+    }
+    .run-modal::backdrop { background: rgba(15, 23, 42, 0.46); }
+    .run-modal-shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100vh - 48px); }
+    .run-modal-header,
+    .run-modal-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .run-modal-actions {
+      justify-content: flex-end;
+      border-top: 1px solid var(--border);
+      border-bottom: 0;
+    }
+    .run-modal-body {
+      display: grid;
+      grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.2fr);
+      gap: 12px;
+      min-height: 0;
+      padding: 14px;
+      overflow: hidden;
+    }
+    .modal-template-list {
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      max-height: 390px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .modal-template-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #f8fafc;
+    }
+    .modal-template-item .item-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .template-preview {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-height: 0;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+      background: #0f172a;
+    }
+    .template-preview-head {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e2e8f0;
+      background: #111827;
+    }
+    .template-preview pre {
+      margin: 0;
+      min-height: 220px;
+      overflow: auto;
+      padding: 10px;
+      color: #e2e8f0;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .ordered-item {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      background: #f8fafc;
+    }
+    .order-index {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--surface-muted);
+      color: #334155;
+      font-weight: 850;
+      font-size: 0.78rem;
+    }
+    .split-actions { display: flex; gap: 8px; align-items: center; }
+    @media (max-width: 1100px) {
+      .topbar-inner { grid-template-columns: 1fr; align-items: start; }
+      .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
+      .topbar-meta { text-align: left; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .active-card { grid-column: 1 / -1; }
+      .dashboard-grid, .management-grid, .templates-workspace, .template-editor-workspace { grid-template-columns: 1fr; }
+      .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+      .topbar-inner, .container { padding-left: 14px; padding-right: 14px; }
+      .page-head { align-items: flex-start; flex-direction: column; }
+      .page-meta { justify-content: flex-start; }
+      .summary-grid, .stat-strip { grid-template-columns: 1fr; }
+      .field-row, .item-grid, .template-row { grid-template-columns: 1fr; }
+      .template-actions { justify-content: flex-start; }
+      .panel-header { align-items: flex-start; flex-direction: column; }
+      .pager { align-items: flex-start; flex-direction: column; }
+      .run-modal-body { grid-template-columns: 1fr; overflow: auto; }
+      .modal-template-list { max-height: 220px; }
+      .template-preview pre { min-height: 180px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/">
+          <div class="brand-mark" aria-hidden="true">Go</div>
+          <div>
+            <h1>Scraper Control</h1>
+            <p class="subtitle">Google Maps scraper operations</p>
+          </div>
+        </a>
+        <nav class="main-nav" aria-label="Control navigation">
+          <a class="nav-link {{if eq .ActivePage "jobs"}}active{{end}}" href="/">Jobs</a>
+          <a class="nav-link {{if or (eq .ActivePage "templates") (eq .ActivePage "template-editor")}}active{{end}}" href="/templates">Templates</a>
+          <a class="nav-link {{if eq .ActivePage "strategies"}}active{{end}}" href="/strategies">Strategies</a>
+        </nav>
+        <div class="topbar-meta">
+          <div>{{.Summary.TotalJobs}} jobs tracked</div>
+          <div>Last refreshed <span id="last-refreshed">{{.LastRefreshed}}</span></div>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      {{if eq .ActivePage "templates"}}
+        {{template "templates-page" .}}
+      {{else if eq .ActivePage "template-editor"}}
+        {{template "template-editor-page" .}}
+      {{else if eq .ActivePage "strategies"}}
+        {{template "strategies-page" .}}
+      {{else}}
+        {{template "jobs-page" .}}
+      {{end}}
+    </main>
+	  </div>
+
+	  <dialog id="strategy-run-modal" class="run-modal">
+	    <div class="run-modal-shell">
+	      <div class="run-modal-header">
+	        <div>
+	          <h2 id="strategy-run-title" class="panel-title">Confirm Strategy</h2>
+	          <div id="strategy-run-subtitle" class="muted tiny"></div>
+	        </div>
+	        <button type="button" onclick="closeStrategyRunModal()" aria-label="Close strategy confirmation">Close</button>
+	      </div>
+	      <div class="run-modal-body">
+	        <div>
+	          <div class="muted tiny">Templates to execute</div>
+	          <div id="strategy-run-template-list" class="modal-template-list">
+	            <div class="empty-state">No templates selected.</div>
+	          </div>
+	        </div>
+	        <div class="template-preview">
+	          <div id="strategy-run-preview-title" class="template-preview-head">Template JSON</div>
+	          <pre id="strategy-run-template-preview">Select a template to preview its saved params.</pre>
+	        </div>
+	      </div>
+	      <div class="run-modal-actions">
+	        <div id="strategy-run-status" class="muted tiny" role="status" aria-live="polite"></div>
+	        <button type="button" onclick="closeStrategyRunModal()">Cancel</button>
+	        <button id="strategy-run-confirm" type="button" class="action-primary" onclick="confirmStrategyRun()">Run Strategy</button>
+	      </div>
+	    </div>
+	  </dialog>
+
+	  {{template "control-script" .}}
+	</body>
+</html>{{end}}
+
+{{define "jobs-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">Dashboard</h2>
+    <p class="subtitle">Queue health and lifecycle actions.</p>
+  </div>
+  <div class="page-meta">
+    <span>{{.Pagination.FilterLabel}} filter</span>
+    <span>{{.Pagination.TotalJobs}} listed jobs</span>
+  </div>
+</div>
+
+{{template "summary" .}}
+
+<div class="dashboard-grid">
+  <section class="panel" aria-labelledby="jobs-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="jobs-title" class="panel-title">Job Queue</h2>
+        <div class="muted tiny">Running, pending, paused, and completed scraper jobs.</div>
+      </div>
+      <div class="panel-actions">
+        <div class="filter-tabs" aria-label="Job status filter">
+          {{range .Pagination.FilterOptions}}
+            <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
+          {{end}}
+        </div>
+        <button type="button" onclick="refreshPartials()" title="Refresh dashboard and job table.">Refresh</button>
+      </div>
+    </div>
+    {{template "jobs-panel" .}}
+  </section>
+  <section id="active-log-panel" class="panel log-panel" aria-labelledby="active-log-title" hidden>
+    <div class="panel-header">
+      <div>
+        <h2 id="active-log-title" class="panel-title">Job Logs</h2>
+        <div id="active-log-meta" class="muted tiny">Waiting for an active job.</div>
+      </div>
+      <button type="button" onclick="refreshSelectedJobLog()">Refresh Logs</button>
+    </div>
+    <pre id="active-log-viewer" class="log-viewer">No log lines yet.</pre>
+  </section>
+  {{template "analytics-strip" .}}
+</div>
+{{end}}
+
+{{define "templates-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">Job Templates</h2>
+    <p class="subtitle">Create jobs, edit saved presets, and tune JSON parameters.</p>
+  </div>
+  <div class="page-meta">
+    <span>{{len .Templates}} templates</span>
+    <span>{{len .Strategies}} strategies can reference them</span>
+  </div>
+</div>
+
+<div class="dashboard-grid">
+  <section class="panel" aria-labelledby="templates-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="templates-title" class="panel-title">Saved Templates</h2>
+        <div class="muted tiny">Template library and dependency-safe actions.</div>
+      </div>
+      <a class="button-link secondary-button" href="/templates/editor">New Template</a>
+    </div>
+    <div class="panel-body">
+      <div class="compact-list" id="template-list">
+        {{range .Templates}}
+          <div class="compact-item" data-template-row="{{.ID}}">
+            <div class="template-row">
+              <div class="template-primary">
+                <div class="item-title">{{.Name}}</div>
+                <div class="item-meta">
+                  <span>Created {{time .CreatedAt}}</span>
+                  <span>Last used {{time .LastUsedAt}}</span>
+                </div>
+              </div>
+              <div class="template-secondary">
+                <div class="item-meta"><span>ID</span></div>
+                <code>{{.ID}}</code>
+              </div>
+              <div class="template-actions">
+                <a class="button-link" href="/templates/editor?template_id={{.ID}}">Edit</a>
+                <a class="button-link" href="/templates/editor?template_id={{.ID}}&mode=copy">Duplicate</a>
+                <button type="button" class="danger-button" onclick="deleteTemplate('{{.ID}}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        {{else}}
+          <div class="empty-state">No templates saved yet.</div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+</div>
+{{end}}
+
+{{define "template-editor-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">{{.TemplateEditor.Title}}</h2>
+    <p class="subtitle">{{.TemplateEditor.Subtitle}}</p>
+  </div>
+  <div class="page-meta">
+    <a class="button-link secondary-button" href="/templates">Back to Templates</a>
+  </div>
+</div>
+
+<div class="template-editor-workspace">
+  {{template "create-job-panel" .}}
+  {{template "template-editor-panel" .}}
+</div>
+{{end}}
+
+{{define "strategies-page"}}
+<div class="page-head">
+  <div>
+    <h2 class="page-title">Strategy Management</h2>
+    <p class="subtitle">Run ordered batches of saved scrape templates.</p>
+  </div>
+  <div class="page-meta">
+    <span>{{len .Strategies}} strategies</span>
+    <span>{{.Summary.PendingJobs}} queued jobs</span>
+    <span>{{.Summary.PendingURLs}} pending URLs</span>
+  </div>
+</div>
+
+<div class="management-grid">
+  <section class="panel" aria-labelledby="strategies-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="strategies-title" class="panel-title">Strategies</h2>
+        <div class="muted tiny">Saved template batches with run controls.</div>
+      </div>
+      <button type="button" class="secondary-button" onclick="newStrategy()">New Strategy</button>
+    </div>
+    <div class="panel-body">
+      <div class="compact-list" id="strategy-list">
+        {{range .Strategies}}
+          <div class="compact-item" data-strategy-row="{{.ID}}">
+            <div class="item-grid">
+              <div>
+                <div class="item-title">{{.Name}}</div>
+                <div class="item-meta"><code>{{.ID}}</code><span>{{len .Templates}} templates</span></div>
+              </div>
+              <div class="item-meta">
+                {{if .Notes}}<span>{{.Notes}}</span>{{else}}<span>No notes</span>{{end}}
+                {{if .LastUsedAt.Valid}}<span>Last used {{nullableTime .LastUsedAt}}</span>{{else}}<span>Never run</span>{{end}}
+              </div>
+              <div class="item-actions">
+                <button type="button" onclick="editStrategy('{{.ID}}')">Edit</button>
+                <button type="button" class="action-primary" onclick="runStrategy('{{.ID}}')">Run</button>
+                <button type="button" class="danger-button" onclick="deleteStrategy('{{.ID}}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        {{else}}
+          <div class="empty-state">No strategies saved yet.</div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  {{template "strategy-editor-panel" .}}
+</div>
+{{end}}
+
+{{define "create-job-panel"}}
+<section class="panel" aria-labelledby="create-title">
+  <div class="panel-header">
+    <div>
+      <h2 id="create-title" class="panel-title">{{.TemplateEditor.CreateTitle}}</h2>
+      <div class="muted tiny">{{.TemplateEditor.CreateSubtitle}}</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form id="start-form">
+      <input id="start-template-json" name="params_json" type="hidden">
+      <fieldset>
+        <legend>Template source</legend>
+        <div class="field">
+          <label for="template_select">Saved template</label>
+          <select id="template_select">
+            <option value="">Select a previous job...</option>
+            {{range .Templates}}
+              <option value="{{.ParamsJSON}}" data-template-id="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+          <input id="template_id" name="template_id" type="hidden">
+        </div>
+        <div class="field">
+          <label for="job_title">Job title</label>
+          <input id="job_title" name="job_title" type="text" placeholder="Optional template title">
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Search</legend>
+        <div class="field">
+          <label for="queries">Queries *</label>
+          <textarea id="queries" name="queries" required placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="depth">Depth</label>
+            <input id="depth" name="depth" type="number" min="1" placeholder="default 10">
+          </div>
+          <div class="field">
+            <label for="limit">Limit</label>
+            <input id="limit" name="limit" type="number" min="0" placeholder="0 = no limit">
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Location</legend>
+        <div class="field">
+          <label for="geo">Geo center</label>
+          <input id="geo" name="geo" type="text" placeholder="lat,lng,zoomz e.g. 43.65,-79.38,14z">
+        </div>
+        <div class="field">
+          <label for="radius">Radius (m)</label>
+          <input id="radius" name="radius" type="number" min="0" step="100" placeholder="0 = no filter">
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Execution</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="concurrency_mode">Concurrency flag</label>
+            <select id="concurrency_mode" name="concurrency_mode">
+              <option value="max-c">Max concurrency (-max-c)</option>
+              <option value="c">Concurrency (-c)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="concurrency_value">Concurrency value</label>
+            <input id="concurrency_value" name="concurrency_value" type="number" min="1" placeholder="default 1">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="reviews">Min reviews</label>
+            <input id="reviews" name="reviews" type="number" min="0" placeholder="0 = page default">
+          </div>
+          <div class="field">
+            <label for="queue_wait_minutes">Queue wait</label>
+            <input id="queue_wait_minutes" name="queue_wait_minutes" type="number" min="0" value="20">
+          </div>
+        </div>
+        <label class="check-field" for="email">
+          <input id="email" name="email" type="checkbox" value="on">
+          <span>Extract emails from business websites</span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Output</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="output_mode">Output</label>
+            <select id="output_mode" name="output_mode">
+              <option value="file">File (JSON)</option>
+              <option value="database">Database (DSN from env)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="lang">Language</label>
+            <input id="lang" name="lang" type="text" placeholder="en">
+          </div>
+        </div>
+      </fieldset>
+
+      <button id="start-submit" class="primary-button" type="submit">{{.TemplateEditor.CreateButton}}</button>
+      <div id="start-result" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "template-editor-panel"}}
+<section class="panel" aria-labelledby="template-editor-title">
+  <div class="panel-header">
+    <div>
+      <h2 id="template-editor-title" class="panel-title">Template Editor</h2>
+      <div class="muted tiny">Name and Params JSON.</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form id="template-form">
+      <input id="template-edit-id" name="id" type="hidden" value="{{.TemplateEditor.TemplateID}}">
+      <div class="field">
+        <label for="template-edit-name">Template name</label>
+        <input id="template-edit-name" name="name" type="text" required value="{{.TemplateEditor.TemplateName}}">
+      </div>
+      <div class="field json-field">
+        <label for="template-edit-json">Params JSON</label>
+        <textarea id="template-edit-json" class="code-field" name="params_json" required>{{.TemplateEditor.TemplateParamsJSON}}</textarea>
+      </div>
+      <div id="template-sync-result" role="status" aria-live="polite"></div>
+      <button class="primary-button" type="submit">Save Template</button>
+      <div id="template-result" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "strategy-editor-panel"}}
+<section class="panel" aria-labelledby="strategy-editor-title">
+  <div class="panel-header">
+    <div>
+      <h2 id="strategy-editor-title" class="panel-title">Strategy Editor</h2>
+      <div class="muted tiny">Select templates in run order.</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form id="strategy-form">
+      <input id="strategy-edit-id" name="id" type="hidden">
+      <div class="field">
+        <label for="strategy-name">Strategy name</label>
+        <input id="strategy-name" name="name" type="text" required>
+      </div>
+      <div class="field">
+        <label for="strategy-notes">Notes</label>
+        <textarea id="strategy-notes" name="notes"></textarea>
+      </div>
+      <div class="field">
+        <label>Templates</label>
+        <div id="strategy-template-ids" class="strategy-template-list">
+          {{range .Templates}}
+            <label class="strategy-template-choice" for="strategy-template-{{.ID}}">
+              <input id="strategy-template-{{.ID}}" type="checkbox" name="template_ids" value="{{.ID}}">
+              <span>
+                <span class="item-title">{{.Name}}</span>
+                <code>{{.ID}}</code>
+              </span>
+            </label>
+          {{end}}
+        </div>
+      </div>
+      <div class="field">
+        <label>Selected order</label>
+        <div id="strategy-selected-order" class="ordered-list">
+          <div class="empty-state">No templates selected.</div>
+        </div>
+      </div>
+      <button class="primary-button" type="submit">Save Strategy</button>
+      <div id="strategy-result" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "analytics-strip"}}
+<section class="stat-strip" aria-label="Execution analytics">
+  <div class="stat-cell">
+    <div class="metric-label">Feed URLs</div>
+    <div class="stat-value">{{.Analytics.FeedURLsFound}}</div>
+    <div class="muted tiny">{{.Analytics.FeedDuplicates}} duplicate URLs</div>
+  </div>
+  <div class="stat-cell">
+    <div class="metric-label">Queued</div>
+    <div class="stat-value">{{.Analytics.QueuedURLs}}</div>
+    <div class="muted tiny">Links saved to jobs</div>
+  </div>
+  <div class="stat-cell">
+    <div class="metric-label">Scraped</div>
+    <div class="stat-value">{{.Analytics.ScrapedURLs}}</div>
+    <div class="muted tiny">{{.Analytics.DuplicatePlaces}} duplicate places</div>
+  </div>
+  <div class="stat-cell">
+    <div class="metric-label">Errors</div>
+    <div class="stat-value">{{add .Analytics.ScrapeErrors .Analytics.WriteErrors}}</div>
+    <div class="muted tiny">{{.Analytics.RetryEvents}} retries</div>
+  </div>
+</section>
+{{end}}
+
+{{define "summary"}}
+<section id="summary" class="summary-grid" aria-label="Job summary">
+  <article class="metric-card active-card">
+    <div class="metric-label">Active job</div>
+    {{if .Summary.HasActiveJob}}
+      <div class="metric-note"><strong>{{.Summary.ActiveJobTitle}}</strong></div>
+      <div class="metric-note"><span class="status {{.Summary.ActiveStatusClass}}">{{.Summary.ActiveStatus}}</span> {{.Summary.ActiveProgress}}</div>
+    {{else}}
+      <div class="metric-value">Idle</div>
+      <div class="metric-note">No scraper job is active.</div>
+    {{end}}
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Pending jobs</div>
+    <div class="metric-value">{{.Summary.PendingJobs}}</div>
+    <div class="metric-note">Queued</div>
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Running</div>
+    <div class="metric-value">{{.Summary.RunningJobs}}</div>
+    <div class="metric-note">{{.Summary.ActiveURLs}} URLs active</div>
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Pending URLs</div>
+    <div class="metric-value">{{.Summary.PendingURLs}}</div>
+    <div class="metric-note">Across jobs</div>
+  </article>
+  <article class="metric-card">
+    <div class="metric-label">Needs attention</div>
+    <div class="metric-value">{{.Summary.NeedsAttention}}</div>
+    <div class="metric-note">{{.Summary.FailedJobs}} failed</div>
+  </article>
+</section>
+{{end}}
+
+{{define "jobs-panel"}}
+<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Status</th>
+          <th>Progress</th>
+          <th>Analytics</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="jobs-tbody">
+        {{template "jobs-body" .}}
+      </tbody>
+    </table>
+  </div>
+  <div class="pager" aria-label="Job queue pagination">
+    <div class="muted tiny">
+      {{if .Pagination.TotalJobs}}
+        Showing {{.Pagination.StartItem}}-{{.Pagination.EndItem}} of {{.Pagination.TotalJobs}}
+      {{else}}
+        No jobs to show
+      {{end}}
+    </div>
+    <div class="pager-controls">
+      <label class="muted tiny" for="jobs-page-size">Rows</label>
+      <select id="jobs-page-size" onchange="setJobsPageSize(this.value)">
+        {{range .Pagination.PageSizeOptions}}
+          <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
+        {{end}}
+      </select>
+      <button type="button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}}>Previous</button>
+      <span class="muted tiny">Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
+      <button type="button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}}>Next</button>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "jobs-body"}}
+{{range .Jobs}}
+  <tr data-job-id="{{.ID}}" class="{{if .Active}}active-row{{end}}">
+    <td>
+      <div class="job-title">{{.QueriesPreview}}</div>
+      <div class="job-meta">
+        <code>{{.ID}}</code>
+        <span>{{.OutputMode}}</span>
+        <span>{{.Lang}}</span>
+        {{if .TemplateID}}<span>tpl {{.TemplateID}}</span>{{end}}
+        {{if .StrategyID}}<span>strategy {{.StrategyID}}</span>{{end}}
+      </div>
+    </td>
+    <td>
+      <span class="status {{.StatusClass}}" title="{{.StatusHelp}}">{{.StatusLabel}}</span>
+      <span class="raw-status muted" title="Raw DB state">raw: {{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span>
+      <span class="error-text" title="{{.LastError}}"{{if not .LastError}} hidden{{end}}>{{.LastError}}</span>
+    </td>
+    <td>
+      <div class="progress-line">
+        <span>{{.Progress}}</span>
+        <span>{{.ProgressPercent}}%</span>
+      </div>
+      <div class="progress-track" aria-hidden="true">
+        <div class="progress-fill" style="width: {{.ProgressPercent}}%"></div>
+      </div>
+      <div class="progress-stats">
+        <span>{{.Done}} done</span>
+        <span>{{.Pending}} pending</span>
+        <span>{{.InProgress}} active</span>
+        <span>{{.Failed}} failed</span>
+      </div>
+    </td>
+    <td>
+      <div class="analytics-compact">
+        <span><strong>{{.FeedURLsFound}}</strong> feed / <strong>{{.ScrapedURLs}}</strong> scraped</span>
+        <span><strong>{{.ScrapeErrors}}</strong> scrape errors / <strong>{{.RetryEvents}}</strong> retries</span>
+        <span>{{.FeedDuplicates}} URL dupes / {{.DuplicatePlaces}} place dupes</span>
+      </div>
+    </td>
+    <td>
+      <div>{{.UpdatedAt}}</div>
+      <div class="muted tiny">Created {{.CreatedAt}}</div>
+    </td>
+    <td>
+      <div class="actions">
+        <button class="action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
+        <button class="action-refresh" onclick="viewJobLog('{{.ID}}')" title="View the saved log file for this job.">View Log</button>
+        {{if .ActionDisabled}}
+          <button class="{{.ActionClass}}" disabled title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+        {{else}}
+          <button class="{{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+        {{end}}
+        {{if not .RecoverDisabled}}
+          <button class="action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}">Recover</button>
+        {{end}}
+      </div>
+    </td>
+  </tr>
+{{else}}
+  <tr class="empty-row"><td colspan="6">No jobs yet.</td></tr>
+{{end}}
+{{end}}
+
+{{define "control-script"}}
+<script>
+  async function post(path) {
+    const res = await fetch(path, { method: 'POST' });
+    if (!res.ok) {
+      const msg = await res.text();
+      alert('Error: ' + msg);
+    }
+    await refreshPartials();
+  }
+
+  async function refreshJob(jobID) {
+    try {
+      const res = await fetch('/api/jobs/' + encodeURIComponent(jobID));
+      if (!res.ok) {
+        const msg = await res.text();
+        alert('Error: ' + msg);
+        return;
+      }
+      await refreshPartials();
+    } catch (err) {
+      alert('Error: ' + err);
+    }
+  }
+
+  let jobsPage = {{.Pagination.Page}};
+  let jobsPageSize = {{.Pagination.PageSize}};
+  let jobsFilter = '{{.Pagination.Filter}}';
+  let selectedLogJobID = '';
+
+  async function refreshPartials() {
+    const jobsPanel = document.getElementById('jobs-panel');
+    const summary = document.getElementById('summary');
+    const requests = [];
+    if (summary) requests.push(fetch('/ui/summary').then(async function(res) {
+      if (res.ok && document.getElementById('summary')) document.getElementById('summary').outerHTML = await res.text();
+    }));
+    if (jobsPanel) {
+      const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
+      requests.push(fetch(jobsPath).then(async function(res) {
+        if (!res.ok || !document.getElementById('jobs-panel')) return;
+        document.getElementById('jobs-panel').outerHTML = await res.text();
+        const panel = document.getElementById('jobs-panel');
+        if (panel) {
+          jobsPage = Number(panel.dataset.page) || jobsPage;
+          jobsPageSize = Number(panel.dataset.pageSize) || jobsPageSize;
+          jobsFilter = panel.dataset.filter || jobsFilter;
+          syncJobsFilterButtons();
+        }
+      }));
+    }
+    await Promise.all(requests);
+    await refreshSelectedJobLog();
+    const refreshed = document.getElementById('last-refreshed');
+    if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  async function viewJobLog(jobID) {
+    selectedLogJobID = jobID || '';
+    await refreshSelectedJobLog();
+  }
+
+  async function refreshSelectedJobLog() {
+    const panel = document.getElementById('active-log-panel');
+    const viewer = document.getElementById('active-log-viewer');
+    const meta = document.getElementById('active-log-meta');
+    if (!panel || !viewer || !meta) return;
+    let jobID = selectedLogJobID;
+    if (!jobID) {
+      const activeRow = document.querySelector('#jobs-panel tr.active-row[data-job-id]');
+      if (activeRow) jobID = activeRow.dataset.jobId || '';
+    }
+    if (!jobID) {
+      panel.hidden = true;
+      viewer.textContent = 'No active job.';
+      meta.textContent = 'Waiting for an active job.';
+      return;
+    }
+    panel.hidden = false;
+    try {
+      const res = await fetch('/api/jobs/' + encodeURIComponent(jobID) + '/logs?tail=200');
+      if (!res.ok) {
+        meta.textContent = 'Unable to load logs for ' + jobID;
+        viewer.textContent = await res.text();
+        return;
+      }
+      const payload = await res.json();
+      meta.textContent = jobID + (payload.message ? ' - ' + payload.message : '');
+      viewer.textContent = (payload.lines || []).length ? payload.lines.join('\n') : 'No log lines yet.';
+      viewer.scrollTop = viewer.scrollHeight;
+    } catch (err) {
+      meta.textContent = 'Unable to load logs for ' + jobID;
+      viewer.textContent = String(err);
+    }
+  }
+
+  async function refreshActiveLog() {
+    await refreshSelectedJobLog();
+  }
+
+  async function goJobsPage(page) {
+    jobsPage = page;
+    await refreshPartials();
+  }
+
+  async function setJobsPageSize(value) {
+    jobsPageSize = Number(value) || 10;
+    jobsPage = 1;
+    await refreshPartials();
+  }
+
+  async function setJobsFilter(value) {
+    jobsFilter = value || 'all';
+    jobsPage = 1;
+    syncJobsFilterButtons();
+    await refreshPartials();
+  }
+
+  function syncJobsFilterButtons() {
+    document.querySelectorAll('[data-filter-option]').forEach(function(button) {
+      button.setAttribute('aria-pressed', button.dataset.filterOption === jobsFilter ? 'true' : 'false');
+    });
+  }
+
+  async function loadTemplates() {
+    const select = document.getElementById('template_select');
+    if (!select || select.options.length > 1) return;
+    try {
+      const res = await fetch('/api/job-templates');
+      if (!res.ok) return;
+      const templates = await res.json();
+      for (const tpl of templates || []) {
+        const opt = document.createElement('option');
+        opt.value = tpl.ParamsJSON || '';
+        opt.dataset.templateId = tpl.ID || '';
+        opt.textContent = tpl.Name || tpl.ID;
+        select.appendChild(opt);
+      }
+    } catch (_) {}
+  }
+
+  function setValue(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = value === 0 ? '0' : (value || '');
+  }
+
+  function setChecked(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.checked = !!value;
+  }
+
+  function readTemplateJSON() {
+    const textarea = document.getElementById('template-edit-json');
+    if (!textarea) return {};
+    const raw = textarea.value.trim();
+    if (!raw) return {};
+    return JSON.parse(raw);
+  }
+
+  function writeTemplateJSON(data) {
+    const textarea = document.getElementById('template-edit-json');
+    if (!textarea) return;
+    textarea.value = JSON.stringify(data, null, 2);
+    syncStartTemplateJSON();
+  }
+
+  function formatTemplateJSONText(raw) {
+    try {
+      return JSON.stringify(JSON.parse(raw || '{}'), null, 2);
+    } catch (_) {
+      return raw || '{}';
+    }
+  }
+
+  function syncStartTemplateJSON() {
+    const textarea = document.getElementById('template-edit-json');
+    const hidden = document.getElementById('start-template-json');
+    if (!textarea || !hidden) return;
+    hidden.value = textarea.value;
+  }
+
+  function setTemplateSyncMessage(message, isError) {
+    const result = document.getElementById('template-sync-result');
+    if (!result) return;
+    result.style.color = isError ? '#b42318' : '#475569';
+    result.textContent = message || '';
+  }
+
+  function formValue(id) {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    return String(el.value || '').trim();
+  }
+
+  function numberOrNull(id) {
+    const value = formValue(id);
+    if (value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function setOptional(data, key, value) {
+    if (value === null || value === undefined || value === '') {
+      delete data[key];
+      return;
+    }
+    data[key] = value;
+  }
+
+  let syncingTemplate = false;
+
+  function applyTemplateJSONToForm() {
+    if (syncingTemplate) return;
+    const textarea = document.getElementById('template-edit-json');
+    if (!textarea) return;
+    let p;
+    try {
+      p = readTemplateJSON();
+    } catch (err) {
+      syncStartTemplateJSON();
+      setTemplateSyncMessage('Template JSON is invalid. Form values were not changed.', true);
+      return;
+    }
+    syncStartTemplateJSON();
+    syncingTemplate = true;
+    setValue('job_title', p.JobTitle);
+    setValue('queries', Array.isArray(p.Queries) ? p.Queries.join('\n') : '');
+    setValue('output_mode', p.OutputMode || 'file');
+    setValue('geo', p.Geo);
+    setValue('radius', p.Radius);
+    setValue('depth', p.Depth);
+    setValue('concurrency_mode', p.ConcurrencyMode || 'max-c');
+    setValue('concurrency_value', p.ConcurrencyValue);
+    setValue('reviews', p.Reviews);
+    setValue('limit', p.Limit);
+    setValue('lang', p.Lang);
+    setValue('queue_wait_minutes', p.QueueWaitMinutes === undefined || p.QueueWaitMinutes === null ? 20 : p.QueueWaitMinutes);
+    setChecked('email', p.Email);
+    const templateID = document.getElementById('template_id');
+    const editID = document.getElementById('template-edit-id');
+    if (templateID && editID) templateID.value = editID.value || '';
+    setTemplateSyncMessage('', false);
+    syncingTemplate = false;
+  }
+
+  function applyFormToTemplateJSON() {
+    if (syncingTemplate) return;
+    const textarea = document.getElementById('template-edit-json');
+    if (!textarea) return;
+    let data;
+    try {
+      data = readTemplateJSON();
+    } catch (err) {
+      setTemplateSyncMessage('Template JSON is invalid. Fix it before form edits can sync back.', true);
+      return;
+    }
+    syncingTemplate = true;
+    setOptional(data, 'JobTitle', formValue('job_title'));
+    data.Queries = formValue('queries').split('\n').map(function(q) { return q.trim(); }).filter(Boolean);
+    setOptional(data, 'OutputMode', formValue('output_mode'));
+    setOptional(data, 'Geo', formValue('geo'));
+    setOptional(data, 'Radius', numberOrNull('radius'));
+    setOptional(data, 'Depth', numberOrNull('depth'));
+    setOptional(data, 'ConcurrencyMode', formValue('concurrency_mode'));
+    setOptional(data, 'ConcurrencyValue', numberOrNull('concurrency_value'));
+    setOptional(data, 'Reviews', numberOrNull('reviews'));
+    setOptional(data, 'Limit', numberOrNull('limit'));
+    setOptional(data, 'Lang', formValue('lang'));
+    setOptional(data, 'QueueWaitMinutes', numberOrNull('queue_wait_minutes'));
+    const email = document.getElementById('email');
+    if (email && email.checked) {
+      data.Email = true;
+    } else {
+      delete data.Email;
+    }
+    writeTemplateJSON(data);
+    setTemplateSyncMessage('', false);
+    syncingTemplate = false;
+  }
+
+  function newTemplate() {
+    setValue('template-edit-id', '');
+    setValue('template-edit-name', '');
+    setValue('template-edit-json', '{\n  "Queries": []\n}');
+    const result = document.getElementById('template-result');
+    if (result) result.textContent = '';
+  }
+
+  function newStrategy() {
+    setValue('strategy-edit-id', '');
+    setValue('strategy-name', '');
+    setValue('strategy-notes', '');
+    document.querySelectorAll('#strategy-template-ids input[name="template_ids"]').forEach(function(input) { input.checked = false; });
+    updateStrategyOrder();
+    const result = document.getElementById('strategy-result');
+    if (result) result.textContent = '';
+  }
+
+  const templateSelect = document.getElementById('template_select');
+  if (templateSelect) {
+    templateSelect.addEventListener('change', function() {
+      if (!this.value) return;
+      const templateID = document.getElementById('template_id');
+      if (templateID) templateID.value = this.selectedOptions[0]?.dataset.templateId || '';
+      setValue('template-edit-id', this.selectedOptions[0]?.dataset.templateId || '');
+      setValue('template-edit-name', this.selectedOptions[0]?.textContent || '');
+      setValue('template-edit-json', formatTemplateJSONText(this.value));
+      applyTemplateJSONToForm();
+    });
+  }
+
+  const templateJSON = document.getElementById('template-edit-json');
+  if (templateJSON) {
+    templateJSON.addEventListener('input', applyTemplateJSONToForm);
+    syncStartTemplateJSON();
+    applyTemplateJSONToForm();
+  }
+
+  document.querySelectorAll('#start-form input, #start-form select, #start-form textarea').forEach(function(el) {
+    if (el.id === 'template_select' || el.id === 'template_id') return;
+    el.addEventListener('input', applyFormToTemplateJSON);
+    el.addEventListener('change', applyFormToTemplateJSON);
+  });
+
+  const startForm = document.getElementById('start-form');
+  if (startForm) {
+    startForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('start-result');
+      result.textContent = '';
+      const data = new URLSearchParams(new FormData(this));
+      const res = await fetch('/api/jobs/start', { method: 'POST', body: data });
+      const msg = await res.text();
+      if (!res.ok) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + msg;
+      } else {
+        result.style.color = '#027a48';
+        try {
+          const payload = JSON.parse(msg);
+          result.textContent = payload.status === 'queued' ? 'Job queued.' : 'Job started.';
+        } catch (_) {
+          result.textContent = 'Job created.';
+        }
+        await refreshPartials();
+      }
+    });
+  }
+
+  async function fetchJSON(path, options) {
+    const res = await fetch(path, options || {});
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || res.statusText);
+    return text ? JSON.parse(text) : {};
+  }
+
+  async function editTemplate(id) {
+    try {
+      const tpl = await fetchJSON('/api/job-templates/' + encodeURIComponent(id));
+      setValue('template-edit-id', tpl.ID || '');
+      setValue('template-edit-name', tpl.Name || '');
+      setValue('template-edit-json', formatTemplateJSONText(tpl.ParamsJSON || '{}'));
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function copyTemplate(id) {
+    await editTemplate(id);
+    setValue('template-edit-id', '');
+    const name = document.getElementById('template-edit-name');
+    if (name) name.value = name.value + ' copy';
+  }
+
+  async function deleteTemplate(id) {
+    if (!confirm('Delete this template?')) return;
+    try {
+      await fetchJSON('/api/job-templates/' + encodeURIComponent(id), { method: 'DELETE' });
+      location.reload();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  const templateForm = document.getElementById('template-form');
+  if (templateForm) {
+    templateForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('template-result');
+      result.textContent = '';
+      try {
+        const data = new URLSearchParams(new FormData(this));
+        await fetchJSON('/api/job-templates', { method: 'POST', body: data });
+        result.style.color = '#027a48';
+        result.textContent = 'Template saved.';
+        location.reload();
+      } catch (err) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + err.message;
+      }
+    });
+  }
+
+  let pendingStrategyRun = null;
+
+  async function editStrategy(id) {
+    try {
+      const strategy = await fetchJSON('/api/strategies/' + encodeURIComponent(id));
+      setValue('strategy-edit-id', strategy.ID || '');
+      setValue('strategy-name', strategy.Name || '');
+      setValue('strategy-notes', strategy.Notes || '');
+      const selected = new Set((strategy.Templates || []).map(function(t) { return t.ID; }));
+      document.querySelectorAll('#strategy-template-ids input[name="template_ids"]').forEach(function(input) {
+        input.checked = selected.has(input.value);
+      });
+      updateStrategyOrder();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function runStrategy(id) {
+    try {
+      const strategy = await fetchJSON('/api/strategies/' + encodeURIComponent(id));
+      openStrategyRunModal(strategy);
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  function openStrategyRunModal(strategy) {
+    const modal = document.getElementById('strategy-run-modal');
+    if (!modal) return;
+    pendingStrategyRun = strategy;
+    const templates = strategy.Templates || [];
+    const title = document.getElementById('strategy-run-title');
+    const subtitle = document.getElementById('strategy-run-subtitle');
+    const list = document.getElementById('strategy-run-template-list');
+    const status = document.getElementById('strategy-run-status');
+    const confirm = document.getElementById('strategy-run-confirm');
+    if (title) title.textContent = strategy.Name || 'Confirm Strategy';
+    if (subtitle) subtitle.textContent = (strategy.ID || '') + ' - ' + templates.length + ' templates';
+    if (status) status.textContent = '';
+    if (confirm) confirm.disabled = templates.length === 0;
+    if (list) {
+      list.innerHTML = '';
+      if (!templates.length) {
+        list.innerHTML = '<div class="empty-state">No templates selected.</div>';
+      }
+      templates.forEach(function(tpl, index) {
+        const row = document.createElement('div');
+        row.className = 'modal-template-item';
+        const meta = document.createElement('div');
+        meta.innerHTML = '<div class="item-title"></div><div class="item-meta"><code></code></div>';
+        meta.querySelector('.item-title').textContent = String(index + 1) + '. ' + (tpl.Name || tpl.ID || 'Template');
+        meta.querySelector('code').textContent = tpl.ID || '';
+        const view = document.createElement('button');
+        view.type = 'button';
+        view.textContent = 'View';
+        view.addEventListener('click', function() { viewStrategyTemplate(index); });
+        row.appendChild(meta);
+        row.appendChild(view);
+        list.appendChild(row);
+      });
+    }
+    viewStrategyTemplate(0);
+    if (typeof modal.showModal === 'function') {
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', 'open');
+    }
+  }
+
+  function closeStrategyRunModal() {
+    const modal = document.getElementById('strategy-run-modal');
+    if (!modal) return;
+    if (typeof modal.close === 'function') {
+      modal.close();
+    } else {
+      modal.removeAttribute('open');
+    }
+  }
+
+  function viewStrategyTemplate(index) {
+    const templates = pendingStrategyRun?.Templates || [];
+    const tpl = templates[index];
+    const title = document.getElementById('strategy-run-preview-title');
+    const preview = document.getElementById('strategy-run-template-preview');
+    if (!title || !preview) return;
+    if (!tpl) {
+      title.textContent = 'Template JSON';
+      preview.textContent = 'Select a template to preview its saved params.';
+      return;
+    }
+    title.textContent = tpl.Name || tpl.ID || 'Template JSON';
+    preview.textContent = formatTemplateJSONText(tpl.ParamsJSON || '{}');
+  }
+
+  async function confirmStrategyRun() {
+    if (!pendingStrategyRun?.ID) return;
+    const status = document.getElementById('strategy-run-status');
+    const confirm = document.getElementById('strategy-run-confirm');
+    if (status) status.textContent = 'Starting strategy...';
+    if (confirm) confirm.disabled = true;
+    try {
+      const payload = await fetchJSON('/api/strategies/' + encodeURIComponent(pendingStrategyRun.ID) + '/run', { method: 'POST' });
+      if (status) status.textContent = (payload.status === 'started' ? 'Started ' : 'Queued ') + payload.job_ids.length + ' jobs.';
+      await refreshPartials();
+    } catch (err) {
+      if (status) status.textContent = 'Error: ' + err.message;
+      if (confirm) confirm.disabled = false;
+    }
+  }
+
+  async function deleteStrategy(id) {
+    if (!confirm('Delete this strategy?')) return;
+    try {
+      await fetchJSON('/api/strategies/' + encodeURIComponent(id), { method: 'DELETE' });
+      location.reload();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  function updateStrategyOrder() {
+    const output = document.getElementById('strategy-selected-order');
+    const list = document.getElementById('strategy-template-ids');
+    if (!output || !list) return;
+    const selected = Array.from(list.querySelectorAll('input[name="template_ids"]:checked'));
+    if (!selected.length) {
+      output.innerHTML = '<div class="empty-state">No templates selected.</div>';
+      return;
+    }
+    output.innerHTML = '';
+    selected.forEach(function(input, index) {
+      const row = document.createElement('div');
+      row.className = 'ordered-item';
+      const num = document.createElement('div');
+      num.className = 'order-index';
+      num.textContent = String(index + 1);
+      const text = document.createElement('div');
+      text.innerHTML = '<div class="item-title"></div><div class="item-meta"><code></code></div>';
+      text.querySelector('.item-title').textContent = input.closest('.strategy-template-choice')?.querySelector('.item-title')?.textContent || input.value;
+      text.querySelector('code').textContent = input.value;
+      row.appendChild(num);
+      row.appendChild(text);
+      output.appendChild(row);
+    });
+  }
+
+  const strategyTemplateList = document.getElementById('strategy-template-ids');
+  if (strategyTemplateList) strategyTemplateList.addEventListener('change', updateStrategyOrder);
+
+  const strategyForm = document.getElementById('strategy-form');
+  if (strategyForm) {
+    strategyForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('strategy-result');
+      result.textContent = '';
+      try {
+        const data = new URLSearchParams(new FormData(this));
+        await fetchJSON('/api/strategies', { method: 'POST', body: data });
+        result.style.color = '#027a48';
+        result.textContent = 'Strategy saved.';
+        location.reload();
+      } catch (err) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + err.message;
+      }
+    });
+  }
+
+  loadTemplates();
+  updateStrategyOrder();
+  refreshActiveLog();
+  setInterval(refreshPartials, 5000);
+</script>
+{{end}}

@@ -163,6 +163,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 						}
 						continue
 					}
+					_ = s.Store.IncrementJobStat(context.Background(), jobID, "scrape_errors", 1)
 					_ = s.Store.MarkURLFailed(context.Background(), claimed.ID, err)
 					log.Printf("place scrape error %s: %v", claimed.URL, err)
 					if atomic.AddInt64(&consecFails, 1) >= blockThreshold {
@@ -377,14 +378,15 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 			return "", err
 		}
 		if job.Status == JobStatusStarting {
-			placeURLs := s.collectPlaceURLs(ctx, queries, feedOpts)
-			if err := s.Store.QueueStartingJobURLs(ctx, s.Config.JobID, placeURLs); err != nil {
+			collected := s.collectPlaceURLs(ctx, queries, feedOpts)
+			if err := s.Store.QueueStartingJobURLs(ctx, s.Config.JobID, collected.URLs); err != nil {
 				return "", err
 			}
+			_ = s.Store.SetJobDiscoveryStats(ctx, s.Config.JobID, collected.FeedURLsFound, collected.FeedDuplicateURLs, len(collected.URLs))
 			if err := s.Store.StartJob(ctx, s.Config.JobID); err != nil {
 				return "", err
 			}
-			log.Printf("Started job %s: %d URLs queued", s.Config.JobID, len(placeURLs))
+			log.Printf("Started job %s: %d URLs queued", s.Config.JobID, len(collected.URLs))
 			if s.OnJobReady != nil {
 				s.OnJobReady(s.Config.JobID)
 			}
@@ -404,11 +406,12 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 		return s.Config.JobID, nil
 	}
 
-	placeURLs := s.collectPlaceURLs(ctx, queries, feedOpts)
-	jobID, err := s.Store.CreateJob(ctx, queries, s.Config, placeURLs)
+	collected := s.collectPlaceURLs(ctx, queries, feedOpts)
+	jobID, err := s.Store.CreateJob(ctx, queries, s.Config, collected.URLs)
 	if err != nil {
 		return "", err
 	}
+	_ = s.Store.SetJobDiscoveryStats(ctx, jobID, collected.FeedURLsFound, collected.FeedDuplicateURLs, len(collected.URLs))
 	log.Printf("Created job %s", jobID)
 	if err := s.Store.StartJob(ctx, jobID); err != nil {
 		return "", err
@@ -420,7 +423,13 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 	return jobID, nil
 }
 
-func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions) []string {
+type feedCollection struct {
+	URLs              []string
+	FeedURLsFound     int
+	FeedDuplicateURLs int
+}
+
+func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions) feedCollection {
 	var placeURLs []string
 	total := len(queries)
 	for i, q := range queries {
@@ -448,16 +457,16 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 		dedupedURLs = append(dedupedURLs, u)
 	}
 	placeURLs = dedupedURLs
+	duplicatesRemoved := originalCount - len(placeURLs)
 	if s.Config.Limit > 0 && len(placeURLs) > s.Config.Limit {
 		placeURLs = placeURLs[:s.Config.Limit]
 	}
-	duplicatesRemoved := originalCount - len(placeURLs)
 	if duplicatesRemoved > 0 {
 		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(placeURLs), total, duplicatesRemoved)
 	} else {
 		log.Printf("Feed collection done: %d URLs queued across %d queries", len(placeURLs), total)
 	}
-	return placeURLs
+	return feedCollection{URLs: placeURLs, FeedURLsFound: originalCount, FeedDuplicateURLs: duplicatesRemoved}
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {

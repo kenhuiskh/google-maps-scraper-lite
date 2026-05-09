@@ -283,9 +283,18 @@ func main() {
 	var written, failed, dupes int
 	dedupe := newPlaceDeduper()
 	for result := range out {
+		currentJobMu.Lock()
+		statsJobID := currentJobID
+		currentJobMu.Unlock()
+		if statsJobID != "" {
+			_ = store.IncrementJobStat(context.Background(), statsJobID, "scraped_urls", 1)
+		}
 		entry := result.Entry
 		if dedupe.Seen(entry) {
 			dupes++
+			if statsJobID != "" {
+				_ = store.IncrementJobStat(context.Background(), statsJobID, "duplicate_places", 1)
+			}
 			if result.URLID != 0 {
 				_ = store.MarkURLDone(context.Background(), result.URLID)
 			}
@@ -295,6 +304,9 @@ func main() {
 			log.Printf("write error: %v", err)
 			if result.URLID != 0 {
 				_ = store.MarkURLFailed(context.Background(), result.URLID, err)
+			}
+			if statsJobID != "" {
+				_ = store.IncrementJobStat(context.Background(), statsJobID, "write_errors", 1)
 			}
 			failed++
 		} else {

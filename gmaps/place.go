@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -40,14 +41,7 @@ type PlaceOptions struct {
 // ScrapePlace navigates to placeURL, extracts the place's JSON data, parses it
 // into an Entry, and optionally extracts email addresses from the place's website.
 func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
-	fullURL := mapsTabRE.ReplaceAllString(placeURL, "")
-	if opts.LangCode != "" {
-		sep := "?"
-		if strings.Contains(fullURL, "?") {
-			sep = "&"
-		}
-		fullURL = fullURL + sep + "hl=" + opts.LangCode
-	}
+	fullURL := placeURLWithLang(placeURL, opts.LangCode)
 
 	if _, err := page.Goto(fullURL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
@@ -90,6 +84,27 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 	}
 
 	return &entry, nil
+}
+
+func placeURLWithLang(placeURL, lang string) string {
+	fullURL := mapsTabRE.ReplaceAllString(placeURL, "")
+	if lang == "" {
+		return fullURL
+	}
+
+	parsed, err := url.Parse(fullURL)
+	if err != nil {
+		sep := "?"
+		if strings.Contains(fullURL, "?") {
+			sep = "&"
+		}
+		return fullURL + sep + "hl=" + url.QueryEscape(lang)
+	}
+
+	q := parsed.Query()
+	q.Set("hl", lang)
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
 }
 
 // scrapeExtraReviews opens the reviews dialog, sorts by newest, scrolls the DOM

@@ -1,12 +1,24 @@
 package browser
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"os"
 	"sync"
 
 	"github.com/playwright-community/playwright-go"
 )
+
+const fallbackUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+var defaultUserAgents = []string{
+	fallbackUserAgent,
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+}
 
 // Browser manages the playwright browser instance and a pool of pages.
 type Browser struct {
@@ -66,7 +78,7 @@ func New(opts Options) (*Browser, error) {
 	}
 	ctx, err := br.NewContext(playwright.BrowserNewContextOptions{
 		Locale:    playwright.String(locale),
-		UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+		UserAgent: playwright.String(randomUserAgent()),
 		Viewport:  &playwright.Size{Width: 1280, Height: 800},
 	})
 	if err != nil {
@@ -150,4 +162,20 @@ func (b *Browser) Close() error {
 	_ = b.context.Close()
 	_ = b.browser.Close()
 	return b.pw.Stop()
+}
+
+func randomUserAgent() string {
+	return randomUserAgentFrom(defaultUserAgents)
+}
+
+func randomUserAgentFrom(pool []string) string {
+	if len(pool) == 0 {
+		return fallbackUserAgent
+	}
+
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(pool))))
+	if err != nil {
+		return pool[0]
+	}
+	return pool[n.Int64()]
 }

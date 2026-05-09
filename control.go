@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -26,6 +24,9 @@ type startLauncher func(ctx context.Context, params startParams) error
 
 type startParams struct {
 	JobID            string
+	TemplateID       string
+	StrategyID       string
+	StrategyRunID    string
 	JobTitle         string
 	Queries          []string
 	Geo              string
@@ -70,286 +71,6 @@ func defaultControlOutDir(stateDB string) string {
 	return filepath.Join(dir, "output")
 }
 
-type controlPageData struct {
-	Jobs      []jobView
-	Templates []gmaps.JobTemplate
-}
-
-type jobView struct {
-	ID             string
-	StatusLabel    string
-	StatusClass    string
-	StatusHelp     string
-	Progress       string
-	LastError      string
-	ShowPause      bool
-	ShowResume     bool
-	RawStatus      string
-	PauseRequested bool
-}
-
-func startControlServer(ctx context.Context, addr string, store *gmaps.JobStore, stateDB string, launchResume resumeLauncher, launchStart startLauncher) (*http.Server, error) {
-	username := os.Getenv("CONTROL_USERNAME")
-	password := os.Getenv("CONTROL_PASSWORD")
-
-	mux := http.NewServeMux()
-	registerControlHandlers(mux, store, stateDB, launchResume, launchStart)
-	if launchStart != nil {
-		go runJobQueue(ctx, store, stateDB, launchStart, 30*time.Second)
-	}
-
-	var handler http.Handler = mux
-	if username == "" || password == "" {
-		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "control UI is not configured: CONTROL_USERNAME and CONTROL_PASSWORD must both be set", http.StatusServiceUnavailable)
-		})
-	} else {
-		handler = basicAuthMiddleware(username, password, mux)
-	}
-
-	srv := &http.Server{Addr: addr, Handler: handler}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	go func() {
-		log.Printf("control UI listening on http://%s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("control server error: %v", err)
-		}
-	}()
-	return srv, nil
-}
-
-func basicAuthMiddleware(username, password string, next http.Handler) http.Handler {
-	usernameHash := sha256.Sum256([]byte(username))
-	passwordHash := sha256.Sum256([]byte(password))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		uHash := sha256.Sum256([]byte(u))
-		pHash := sha256.Sum256([]byte(p))
-		uMatch := subtle.ConstantTimeCompare(uHash[:], usernameHash[:]) == 1
-		pMatch := subtle.ConstantTimeCompare(pHash[:], passwordHash[:]) == 1
-		if !ok || !uMatch || !pMatch {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Scraper Control"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB string, launchResume resumeLauncher, launchStart startLauncher) {
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		jobs, err := store.ListJobs(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		templates, err := store.ListJobTemplates(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = controlTemplate.Execute(w, newControlPageData(jobs, templates))
-	})
-	mux.HandleFunc("/api/jobs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			jobs, err := store.ListJobs(r.Context())
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, jobs)
-			return
-		}
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	})
-	mux.HandleFunc("/api/job-templates", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		templates, err := store.ListJobTemplates(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, templates)
-	})
-	mux.HandleFunc("/api/jobs/start", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if launchStart == nil {
-			http.Error(w, "start launcher is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		params, errMsg := parseStartParams(r)
-		if errMsg != "" {
-			http.Error(w, errMsg, http.StatusBadRequest)
-			return
-		}
-		if params.OutputMode == "file" && params.OutDir == "" {
-			params.OutDir = defaultControlOutDir(stateDB)
-		}
-		jobID, err := store.CreateStartingJob(r.Context(), params.Queries, scraperConfigFromStartParams(params))
-		if errors.Is(err, gmaps.ErrActiveJobExists) {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		params.JobID = jobID
-		templateParams := templateParamsFromForm(r, params)
-		if _, err := store.SaveJobTemplate(r.Context(), jobTemplateName(params), templateParams); err != nil {
-			log.Printf("save job template: %v", err)
-		}
-		job, err := store.GetJob(r.Context(), jobID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		status := "queued"
-		if job.Status == gmaps.JobStatusStarting {
-			if err := launchStart(r.Context(), params); err != nil {
-				_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			status = "started"
-		}
-		writeJSON(w, map[string]string{"status": status, "job_id": jobID})
-	})
-	mux.HandleFunc("/api/jobs/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
-		parts := strings.Split(strings.Trim(path, "/"), "/")
-		if len(parts) == 0 || parts[0] == "" {
-			http.NotFound(w, r)
-			return
-		}
-		jobID := parts[0]
-		if len(parts) == 1 && r.Method == http.MethodGet {
-			job, err := store.GetJob(r.Context(), jobID)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			}
-			writeJSON(w, job)
-			return
-		}
-		if len(parts) != 2 || r.Method != http.MethodPost {
-			http.NotFound(w, r)
-			return
-		}
-		switch parts[1] {
-		case "pause":
-			if err := store.RequestPause(r.Context(), jobID); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, map[string]string{"status": "pause_requested"})
-		case "resume":
-			if launchResume == nil {
-				http.Error(w, "resume launcher is not configured", http.StatusServiceUnavailable)
-				return
-			}
-			if err := launchResume(r.Context(), jobID); err != nil {
-				if _, ok := err.(errHTTP); ok {
-					http.Error(w, err.Error(), http.StatusConflict)
-					return
-				}
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, map[string]string{"status": "resume_started"})
-		default:
-			http.NotFound(w, r)
-		}
-	})
-}
-
-func newControlPageData(jobs []gmaps.Job, templates []gmaps.JobTemplate) controlPageData {
-	views := make([]jobView, 0, len(jobs))
-	for _, job := range jobs {
-		views = append(views, newJobView(job))
-	}
-	return controlPageData{Jobs: views, Templates: templates}
-}
-
-func newJobView(job gmaps.Job) jobView {
-	label, class, help := jobStatusDisplay(job)
-	view := jobView{
-		ID:             job.ID,
-		StatusLabel:    label,
-		StatusClass:    class,
-		StatusHelp:     help,
-		Progress:       formatJobProgress(job.Stats),
-		RawStatus:      job.Status,
-		PauseRequested: job.PauseRequested,
-		ShowPause:      job.Status == gmaps.JobStatusRunning && !job.PauseRequested,
-		ShowResume:     job.Status == gmaps.JobStatusPaused || job.Status == gmaps.JobStatusBlocked || job.Status == gmaps.JobStatusFailed,
-	}
-	if job.LastError.Valid {
-		view.LastError = job.LastError.String
-	}
-	return view
-}
-
-func jobStatusDisplay(job gmaps.Job) (label, class, help string) {
-	if job.Status == gmaps.JobStatusRunning && job.PauseRequested {
-		return "Pausing", "status-pausing", "Pause requested; active scrapes are finishing before the process exits."
-	}
-	switch job.Status {
-	case gmaps.JobStatusStarting:
-		return "Starting", "status-starting", "Collecting Google Maps result URLs before place scraping begins."
-	case gmaps.JobStatusRunning:
-		return "Running", "status-running", "Scraping is active."
-	case gmaps.JobStatusPaused:
-		return "Paused", "status-paused", "Stopped safely; resume continues from saved pending URLs."
-	case gmaps.JobStatusBlocked:
-		return "Blocked", "status-blocked", "Google likely rate-limited or blocked the browser session; resume later."
-	case gmaps.JobStatusDone:
-		return "Done", "status-done", "All queued URLs were processed."
-	case gmaps.JobStatusFailed:
-		return "Failed", "status-failed", "The job stopped with an error."
-	case gmaps.JobStatusPending:
-		return "Pending", "status-pending", "Job is created but has not started yet."
-	default:
-		if job.Status == "" {
-			return "Unknown", "status-unknown", "Job status is missing."
-		}
-		return job.Status, "status-unknown", "Unrecognized job status."
-	}
-}
-
-func formatJobProgress(stats gmaps.JobStats) string {
-	if stats.Total == 0 {
-		return "No URLs queued yet"
-	}
-	parts := []string{strconv.Itoa(stats.Done) + " / " + strconv.Itoa(stats.Total) + " done"}
-	if stats.Pending > 0 {
-		parts = append(parts, strconv.Itoa(stats.Pending)+" pending")
-	}
-	if stats.InProgress > 0 {
-		parts = append(parts, strconv.Itoa(stats.InProgress)+" active")
-	}
-	if stats.Failed > 0 {
-		parts = append(parts, strconv.Itoa(stats.Failed)+" failed")
-	}
-	return strings.Join(parts, ", ")
-}
-
 func parseStartParams(r *http.Request) (startParams, string) {
 	if err := r.ParseForm(); err != nil {
 		return startParams{}, "invalid form data"
@@ -384,6 +105,7 @@ func parseStartParams(r *http.Request) (startParams, string) {
 
 	p := startParams{
 		JobTitle:         strings.TrimSpace(r.FormValue("job_title")),
+		TemplateID:       strings.TrimSpace(r.FormValue("template_id")),
 		Queries:          queries,
 		Geo:              strings.TrimSpace(r.FormValue("geo")),
 		Lang:             strings.TrimSpace(r.FormValue("lang")),
@@ -535,6 +257,9 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 	}
 	p := startParams{
 		JobID:            job.ID,
+		TemplateID:       job.TemplateID.String,
+		StrategyID:       job.StrategyID.String,
+		StrategyRunID:    job.StrategyRunID.String,
 		Queries:          job.Queries,
 		Geo:              cfg.Geo,
 		Radius:           cfg.Radius,
@@ -556,6 +281,9 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 	if p.OutputMode == "" {
 		p.OutputMode = "file"
 	}
+	if p.OutputMode == "file" && !p.JSONOut {
+		p.JSONOut = true
+	}
 	if p.ConcurrencyMode == "" {
 		switch {
 		case cfg.MaxConcurrency > 0:
@@ -575,6 +303,65 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 		}
 	} else if p.OutDir == "" {
 		p.OutDir = defaultControlOutDir(stateDB)
+	}
+	return p, nil
+}
+
+func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams, error) {
+	var t templateParams
+	if err := json.Unmarshal([]byte(tpl.ParamsJSON), &t); err != nil {
+		return startParams{}, err
+	}
+	p := startParams{
+		TemplateID:       tpl.ID,
+		JobTitle:         t.JobTitle,
+		Queries:          append([]string(nil), t.Queries...),
+		Geo:              t.Geo,
+		ConcurrencyMode:  t.ConcurrencyMode,
+		Lang:             t.Lang,
+		Email:            t.Email,
+		OutputMode:       t.OutputMode,
+		JSONOut:          t.JSONOut,
+		OutDir:           t.OutDir,
+		QueueWaitMinutes: 20,
+	}
+	if p.Lang == "" {
+		p.Lang = "en"
+	}
+	if p.OutputMode == "" {
+		p.OutputMode = "file"
+	}
+	if p.ConcurrencyMode != "c" && p.ConcurrencyMode != "max-c" {
+		p.ConcurrencyMode = "max-c"
+	}
+	if t.Radius != nil {
+		p.Radius = *t.Radius
+	}
+	if t.Depth != nil {
+		p.Depth = *t.Depth
+	}
+	if t.ConcurrencyValue != nil {
+		p.ConcurrencyValue = *t.ConcurrencyValue
+	}
+	if t.Reviews != nil {
+		p.Reviews = *t.Reviews
+	}
+	if t.Limit != nil {
+		p.Limit = *t.Limit
+	}
+	if t.QueueWaitMinutes != nil {
+		p.QueueWaitMinutes = *t.QueueWaitMinutes
+	}
+	if p.OutputMode == "database" {
+		p.DSN = os.Getenv("DSN")
+		if p.DSN == "" {
+			return startParams{}, errors.New("database output mode requires DSN environment variable to be set")
+		}
+	} else if p.OutDir == "" {
+		p.OutDir = defaultControlOutDir(stateDB)
+	}
+	if len(p.Queries) == 0 {
+		return startParams{}, errors.New("template has no queries")
 	}
 	return p, nil
 }
@@ -655,294 +442,6 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
-var controlTemplate = template.Must(template.New("control").Parse(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Scraper Jobs</title>
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 32px; color: #17202a; }
-    h2 { margin-top: 40px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border-bottom: 1px solid #d8dee4; padding: 8px; text-align: left; }
-    button { padding: 6px 10px; }
-    button[disabled] { color: #98a2b3; cursor: not-allowed; }
-    .muted { color: #667085; }
-    .status { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 0.9rem; font-weight: 600; border: 1px solid transparent; }
-    .status-starting, .status-pausing { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
-    .status-running { background: #ecfdf3; color: #027a48; border-color: #abefc6; }
-    .status-paused, .status-pending { background: #eff8ff; color: #175cd3; border-color: #b2ddff; }
-    .status-blocked { background: #fffbeb; color: #92400e; border-color: #fde68a; }
-    .status-done { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
-    .status-failed { background: #fef3f2; color: #b42318; border-color: #fecdca; }
-    .status-unknown { background: #f2f4f7; color: #344054; border-color: #d0d5dd; }
-    .error-text { display: block; max-width: 420px; margin-top: 4px; color: #b42318; font-size: 0.88rem; overflow-wrap: anywhere; }
-    .raw-status { display: block; margin-top: 4px; font-size: 0.82rem; }
-    form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; max-width: 600px; align-items: start; }
-    form label { padding-top: 6px; font-weight: 500; }
-    form input, form select, form textarea { padding: 6px 8px; border: 1px solid #d8dee4; border-radius: 4px; width: 100%; box-sizing: border-box; }
-    form textarea { height: 80px; resize: vertical; }
-    .form-submit { grid-column: 2; margin-top: 8px; }
-    .form-submit button { padding: 8px 20px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-    #start-result { margin-top: 12px; }
-  </style>
-</head>
-<body>
-  <h1>Scraper Jobs</h1>
-
-  <h2>Create Job</h2>
-  <form id="start-form">
-    <label for="template_select">Template</label>
-    <select id="template_select">
-      <option value="">Select a previous job...</option>
-    </select>
-
-    <label for="job_title">Job title</label>
-    <input id="job_title" name="job_title" type="text" placeholder="Optional template title">
-
-    <label for="queries">Queries *</label>
-    <textarea id="queries" name="queries" placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
-
-    <label for="output_mode">Output</label>
-    <select id="output_mode" name="output_mode">
-      <option value="file">File (JSON)</option>
-      <option value="database">Database (DSN from env)</option>
-    </select>
-
-    <label for="geo">Geo center</label>
-    <input id="geo" name="geo" type="text" placeholder="lat,lng,zoomz e.g. 43.65,-79.38,14z">
-
-    <label for="radius">Radius (m)</label>
-    <input id="radius" name="radius" type="number" min="0" step="100" placeholder="0 = no filter">
-
-    <label for="depth">Depth</label>
-    <input id="depth" name="depth" type="number" min="1" placeholder="default 10">
-
-    <label for="concurrency_mode">Concurrency flag</label>
-    <select id="concurrency_mode" name="concurrency_mode">
-      <option value="max-c">Max concurrency (-max-c)</option>
-      <option value="c">Concurrency (-c)</option>
-    </select>
-
-    <label for="concurrency_value">Concurrency value</label>
-    <input id="concurrency_value" name="concurrency_value" type="number" min="1" placeholder="default 1">
-
-    <label for="reviews">Min reviews</label>
-    <input id="reviews" name="reviews" type="number" min="0" placeholder="0 = page default">
-
-    <label for="limit">Limit</label>
-    <input id="limit" name="limit" type="number" min="0" placeholder="0 = no limit">
-
-    <label for="lang">Language</label>
-    <input id="lang" name="lang" type="text" placeholder="en">
-
-    <label for="email">Extract emails</label>
-    <input id="email" name="email" type="checkbox" value="on" style="width:auto">
-
-    <label for="queue_wait_minutes">Queue wait (minutes)</label>
-    <input id="queue_wait_minutes" name="queue_wait_minutes" type="number" min="0" value="20">
-
-    <div class="form-submit">
-      <button type="submit">Create Job</button>
-    </div>
-  </form>
-  <div id="start-result"></div>
-
-  <h2>Jobs</h2>
-  <table>
-    <thead><tr><th>Job</th><th>Status</th><th>Progress</th><th>Actions</th></tr></thead>
-    <tbody id="jobs-tbody">
-    {{range .Jobs}}
-      <tr data-job-id="{{.ID}}">
-        <td><code>{{.ID}}</code></td>
-        <td>
-          <span class="status {{.StatusClass}}" title="{{.StatusHelp}}">{{.StatusLabel}}</span>
-          <span class="raw-status muted" title="Raw DB state">raw: {{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span>
-          <span class="error-text" title="{{.LastError}}"{{if not .LastError}} hidden{{end}}>{{.LastError}}</span>
-        </td>
-        <td class="progress">{{.Progress}}</td>
-        <td class="actions">
-          <button onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
-          {{if .ShowPause}}
-            <button class="pause-action" onclick="post('/api/jobs/{{.ID}}/pause')" title="Request a graceful pause. Active scrapes finish before the job becomes paused.">Pause</button>
-          {{else}}
-            <button class="pause-action" disabled title="Pause is available only while a job is running.">Pause</button>
-          {{end}}
-          {{if .ShowResume}}
-            <button class="resume-action" onclick="post('/api/jobs/{{.ID}}/resume')" title="Start a new scraper process and continue from saved pending URLs.">Resume</button>
-          {{else}}
-            <button class="resume-action" disabled title="Resume is available for paused, blocked, or failed jobs.">Resume</button>
-          {{end}}
-        </td>
-      </tr>
-    {{else}}
-      <tr><td colspan="4" class="muted">No jobs yet.</td></tr>
-    {{end}}
-    </tbody>
-  </table>
-
-  <script>
-    const statusDisplay = {
-      starting: ['Starting', 'status-starting', 'Collecting Google Maps result URLs before place scraping begins.'],
-      running: ['Running', 'status-running', 'Scraping is active.'],
-      paused: ['Paused', 'status-paused', 'Stopped safely; resume continues from saved pending URLs.'],
-      blocked: ['Blocked', 'status-blocked', 'Google likely rate-limited or blocked the browser session; resume later.'],
-      done: ['Done', 'status-done', 'All queued URLs were processed.'],
-      failed: ['Failed', 'status-failed', 'The job stopped with an error.'],
-      pending: ['Pending', 'status-pending', 'Job is created but has not started yet.']
-    };
-
-    async function post(path) {
-      const res = await fetch(path, { method: 'POST' });
-      if (!res.ok) {
-        const msg = await res.text();
-        alert('Error: ' + msg);
-      }
-      location.reload();
-    }
-
-    async function refreshJob(jobID) {
-      const row = document.querySelector('tr[data-job-id="' + CSS.escape(jobID) + '"]');
-      if (!row) return;
-      const refreshButton = row.querySelector('button');
-      refreshButton.disabled = true;
-      try {
-        const res = await fetch('/api/jobs/' + encodeURIComponent(jobID));
-        if (!res.ok) {
-          const msg = await res.text();
-          alert('Error: ' + msg);
-          return;
-        }
-        renderJobRow(row, await res.json());
-      } finally {
-        refreshButton.disabled = false;
-      }
-    }
-
-    function renderJobRow(row, job) {
-      const status = row.querySelector('.status');
-      const raw = row.querySelector('.raw-status');
-      const error = row.querySelector('.error-text');
-      const progress = row.querySelector('.progress');
-      const pause = row.querySelector('.pause-action');
-      const resume = row.querySelector('.resume-action');
-      const display = job.Status === 'running' && job.PauseRequested
-        ? ['Pausing', 'status-pausing', 'Pause requested; active scrapes are finishing before the process exits.']
-        : (statusDisplay[job.Status] || [job.Status || 'Unknown', 'status-unknown', job.Status ? 'Unrecognized job status.' : 'Job status is missing.']);
-
-      status.className = 'status ' + display[1];
-      status.title = display[2];
-      status.textContent = display[0];
-      raw.textContent = 'raw: ' + (job.Status || '') + (job.PauseRequested ? ', pause requested' : '');
-      progress.textContent = formatProgress(job.Stats || {});
-
-      const lastError = job.LastError && job.LastError.Valid ? job.LastError.String : '';
-      error.textContent = lastError;
-      error.title = lastError;
-      error.hidden = !lastError;
-
-      const canPause = job.Status === 'running' && !job.PauseRequested;
-      pause.disabled = !canPause;
-      if (canPause) {
-        pause.setAttribute('onclick', "post('/api/jobs/" + escapeJSAttr(job.ID) + "/pause')");
-      } else {
-        pause.removeAttribute('onclick');
-      }
-
-      const canResume = ['paused', 'blocked', 'failed'].includes(job.Status);
-      resume.disabled = !canResume;
-      if (canResume) {
-        resume.setAttribute('onclick', "post('/api/jobs/" + escapeJSAttr(job.ID) + "/resume')");
-      } else {
-        resume.removeAttribute('onclick');
-      }
-    }
-
-    function formatProgress(stats) {
-      if (!stats.Total) return 'No URLs queued yet';
-      const parts = [stats.Done + ' / ' + stats.Total + ' done'];
-      if (stats.Pending > 0) parts.push(stats.Pending + ' pending');
-      if (stats.InProgress > 0) parts.push(stats.InProgress + ' active');
-      if (stats.Failed > 0) parts.push(stats.Failed + ' failed');
-      return parts.join(', ');
-    }
-
-    function escapeJSAttr(value) {
-      return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    }
-
-    async function loadTemplates() {
-      const select = document.getElementById('template_select');
-      try {
-        const res = await fetch('/api/job-templates');
-        if (!res.ok) return;
-        const templates = await res.json();
-        for (const tpl of templates || []) {
-          const opt = document.createElement('option');
-          opt.value = tpl.ParamsJSON || '';
-          opt.textContent = tpl.Name || tpl.ID;
-          select.appendChild(opt);
-        }
-      } catch (_) {}
-    }
-
-    function setValue(id, value) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      if (value === null || value === undefined) return;
-      el.value = value === 0 ? '0' : (value || '');
-    }
-
-    document.getElementById('template_select').addEventListener('change', function() {
-      if (!this.value) return;
-      let p;
-      try {
-        p = JSON.parse(this.value);
-      } catch (_) {
-        return;
-      }
-      setValue('job_title', p.JobTitle);
-      setValue('queries', (p.Queries || []).join('\n'));
-      setValue('output_mode', p.OutputMode);
-      setValue('geo', p.Geo);
-      setValue('radius', p.Radius);
-      setValue('depth', p.Depth);
-      setValue('concurrency_mode', p.ConcurrencyMode);
-      setValue('concurrency_value', p.ConcurrencyValue);
-      setValue('reviews', p.Reviews);
-      setValue('limit', p.Limit);
-      setValue('lang', p.Lang);
-      setValue('queue_wait_minutes', p.QueueWaitMinutes);
-      document.getElementById('email').checked = !!p.Email;
-    });
-
-    document.getElementById('start-form').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const result = document.getElementById('start-result');
-      result.textContent = '';
-      const data = new URLSearchParams(new FormData(this));
-      const res = await fetch('/api/jobs/start', { method: 'POST', body: data });
-      const msg = await res.text();
-      if (!res.ok) {
-        result.style.color = '#c0392b';
-        result.textContent = 'Error: ' + msg;
-      } else {
-        result.style.color = '#27ae60';
-        try {
-          const payload = JSON.parse(msg);
-          result.textContent = payload.status === 'queued' ? 'Job queued. Refreshing...' : 'Job started. Refreshing...';
-        } catch (_) {
-          result.textContent = 'Job created. Refreshing...';
-        }
-        setTimeout(() => location.reload(), 1500);
-      }
-    });
-    loadTemplates();
-  </script>
-</body>
-</html>`))
-
 func newProcessResumeLauncher(store *gmaps.JobStore, stateDB string) resumeLauncher {
 	return func(ctx context.Context, jobID string) error {
 		job, err := store.ClaimResume(ctx, jobID)
@@ -961,7 +460,7 @@ func newProcessResumeLauncher(store *gmaps.JobStore, stateDB string) resumeLaunc
 			_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
 			return err
 		}
-		return spawnProcess(exe, args)
+		return spawnProcess(exe, args, jobLogPath(stateDB, job.ID))
 	}
 }
 
@@ -972,26 +471,64 @@ func newProcessStartLauncher(stateDB string) startLauncher {
 			return err
 		}
 		args := buildStartArgs(p, stateDB)
-		return spawnProcess(exe, args)
+		return spawnProcess(exe, args, jobLogPath(stateDB, p.JobID))
 	}
 }
 
-func spawnProcess(exe string, args []string) error {
+func spawnProcess(exe string, args []string, logPath string) error {
 	cmd := exec.Command(exe, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var logFile *os.File
+	if logPath != "" {
+		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		logFile = f
+		cmd.Stdout = io.MultiWriter(os.Stdout, f)
+		cmd.Stderr = io.MultiWriter(os.Stderr, f)
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Stdin = nil
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		return err
 	}
 	log.Printf("started process: %s %s (pid %d)", exe, strings.Join(args, " "), cmd.Process.Pid)
 	go func() {
+		defer func() {
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+		}()
 		if err := cmd.Wait(); err != nil {
 			log.Printf("process pid %d exited: %v", cmd.Process.Pid, err)
 		}
 	}()
 	return nil
+}
+
+func controlLogDir(stateDB string) string {
+	dir := filepath.Dir(stateDB)
+	if dir == "." || dir == "" {
+		return filepath.Join("gmdata", "logs")
+	}
+	return filepath.Join(dir, "logs")
+}
+
+func jobLogPath(stateDB, jobID string) string {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return ""
+	}
+	return filepath.Join(controlLogDir(stateDB), filepath.Base(jobID)+".log")
 }
 
 func buildResumeArgs(job *gmaps.Job, stateDB string) ([]string, error) {
