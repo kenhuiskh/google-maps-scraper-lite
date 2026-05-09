@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -459,7 +460,7 @@ func newProcessResumeLauncher(store *gmaps.JobStore, stateDB string) resumeLaunc
 			_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
 			return err
 		}
-		return spawnProcess(exe, args)
+		return spawnProcess(exe, args, jobLogPath(stateDB, job.ID))
 	}
 }
 
@@ -470,26 +471,64 @@ func newProcessStartLauncher(stateDB string) startLauncher {
 			return err
 		}
 		args := buildStartArgs(p, stateDB)
-		return spawnProcess(exe, args)
+		return spawnProcess(exe, args, jobLogPath(stateDB, p.JobID))
 	}
 }
 
-func spawnProcess(exe string, args []string) error {
+func spawnProcess(exe string, args []string, logPath string) error {
 	cmd := exec.Command(exe, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var logFile *os.File
+	if logPath != "" {
+		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		logFile = f
+		cmd.Stdout = io.MultiWriter(os.Stdout, f)
+		cmd.Stderr = io.MultiWriter(os.Stderr, f)
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Stdin = nil
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		return err
 	}
 	log.Printf("started process: %s %s (pid %d)", exe, strings.Join(args, " "), cmd.Process.Pid)
 	go func() {
+		defer func() {
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+		}()
 		if err := cmd.Wait(); err != nil {
 			log.Printf("process pid %d exited: %v", cmd.Process.Pid, err)
 		}
 	}()
 	return nil
+}
+
+func controlLogDir(stateDB string) string {
+	dir := filepath.Dir(stateDB)
+	if dir == "." || dir == "" {
+		return filepath.Join("gmdata", "logs")
+	}
+	return filepath.Join(dir, "logs")
+}
+
+func jobLogPath(stateDB, jobID string) string {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return ""
+	}
+	return filepath.Join(controlLogDir(stateDB), filepath.Base(jobID)+".log")
 }
 
 func buildResumeArgs(job *gmaps.Job, stateDB string) ([]string, error) {

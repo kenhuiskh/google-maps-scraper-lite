@@ -175,17 +175,21 @@ You can choose a different state DB path:
   -state-db gmdata/scraper-state.sqlite
 ```
 
-To enable the local control UI:
+To enable the local control UI, set the required basic-auth credentials and bind the UI to a local address:
 
 ```bash
+CONTROL_USERNAME=admin CONTROL_PASSWORD=changeme \
 ./google-maps-scraper-lite \
   -queries "restaurants in Toronto" \
   -control-addr 127.0.0.1:8080
 ```
 
+Then open `http://127.0.0.1:8080` and sign in with those credentials.
+
 To run only the control UI against the saved SQLite jobs:
 
 ```bash
+CONTROL_USERNAME=admin CONTROL_PASSWORD=changeme \
 ./google-maps-scraper-lite \
   -state-db gmdata/scraper-state.sqlite \
   -control-addr 127.0.0.1:8080

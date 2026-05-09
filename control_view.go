@@ -10,15 +10,28 @@ import (
 )
 
 type controlPageData struct {
-	Summary       controlSummaryView
-	Jobs          []jobView
-	Pagination    jobsPaginationView
-	Templates     []gmaps.JobTemplate
-	Strategies    []gmaps.Strategy
-	Analytics     analyticsView
-	LastRefreshed string
-	ActivePage    string
-	PageTitle     string
+	Summary        controlSummaryView
+	Jobs           []jobView
+	Pagination     jobsPaginationView
+	Templates      []gmaps.JobTemplate
+	Strategies     []gmaps.Strategy
+	TemplateEditor templateEditorView
+	Analytics      analyticsView
+	LastRefreshed  string
+	ActivePage     string
+	PageTitle      string
+}
+
+type templateEditorView struct {
+	Mode               string
+	Title              string
+	Subtitle           string
+	CreateTitle        string
+	CreateSubtitle     string
+	CreateButton       string
+	TemplateID         string
+	TemplateName       string
+	TemplateParamsJSON string
 }
 
 type jobsPaginationView struct {
@@ -71,6 +84,9 @@ type jobView struct {
 	ActionDisabled  bool
 	ActionClass     string
 	ActionHelp      string
+	RecoverPath     string
+	RecoverDisabled bool
+	RecoverHelp     string
 	RawStatus       string
 	PauseRequested  bool
 	OutputMode      string
@@ -126,8 +142,9 @@ func newControlPageData(jobs []gmaps.Job, templates []gmaps.JobTemplate, strateg
 
 func newControlPageDataWithPagination(summaryJobs, pageJobs []gmaps.Job, templates []gmaps.JobTemplate, strategies []gmaps.Strategy, pagination jobsPaginationView) controlPageData {
 	views := make([]jobView, 0, len(pageJobs))
+	hasActiveJob := hasActiveJob(summaryJobs)
 	for _, job := range pageJobs {
-		views = append(views, newJobView(job))
+		views = append(views, newJobViewWithQueueState(job, hasActiveJob))
 	}
 	return controlPageData{
 		Summary:       newControlSummaryView(summaryJobs),
@@ -142,9 +159,23 @@ func newControlPageDataWithPagination(summaryJobs, pageJobs []gmaps.Job, templat
 	}
 }
 
+func hasActiveJob(jobs []gmaps.Job) bool {
+	for _, job := range jobs {
+		if isActiveJobStatus(job.Status) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d controlPageData) WithPage(activePage, title string) controlPageData {
 	d.ActivePage = activePage
 	d.PageTitle = title
+	return d
+}
+
+func (d controlPageData) WithTemplateEditor(editor templateEditorView) controlPageData {
+	d.TemplateEditor = editor
 	return d
 }
 
@@ -244,6 +275,10 @@ func jobsFilterLabel(filter string) string {
 }
 
 func newJobView(job gmaps.Job) jobView {
+	return newJobViewWithQueueState(job, isActiveJobStatus(job.Status))
+}
+
+func newJobViewWithQueueState(job gmaps.Job, hasActiveJob bool) jobView {
 	label, class, help := jobStatusDisplay(job)
 	cfg := jobConfigView(job.ConfigJSON)
 	percent := 0
@@ -283,14 +318,15 @@ func newJobView(job gmaps.Job) jobView {
 		WriteErrors:     job.ExecutionStats.WriteErrors,
 		RetryEvents:     job.ExecutionStats.RetryEvents,
 	}
-	view.ActionLabel, view.ActionPath, view.ActionDisabled, view.ActionClass, view.ActionHelp = jobLifecycleAction(job)
+	view.ActionLabel, view.ActionPath, view.ActionDisabled, view.ActionClass, view.ActionHelp = jobLifecycleAction(job, hasActiveJob)
 	if job.LastError.Valid {
 		view.LastError = job.LastError.String
 	}
+	view.RecoverPath, view.RecoverDisabled, view.RecoverHelp = jobRecoverAction(job)
 	return view
 }
 
-func jobLifecycleAction(job gmaps.Job) (label, path string, disabled bool, class, help string) {
+func jobLifecycleAction(job gmaps.Job, hasActiveJob bool) (label, path string, disabled bool, class, help string) {
 	switch {
 	case job.Status == gmaps.JobStatusRunning && job.PauseRequested:
 		return "Pausing", "", true, "action-muted", "Pause has already been requested; active scrapes are finishing."
@@ -300,13 +336,22 @@ func jobLifecycleAction(job gmaps.Job) (label, path string, disabled bool, class
 		return "Resume", "/api/jobs/" + job.ID + "/resume", false, "action-primary", "Start a new scraper process and continue from saved pending URLs."
 	case job.Status == gmaps.JobStatusStarting:
 		return "Starting", "", true, "action-muted", "The job is collecting Google Maps result URLs."
-	case job.Status == gmaps.JobStatusPending:
+	case job.Status == gmaps.JobStatusPending && hasActiveJob:
 		return "Queued", "", true, "action-muted", "This job is waiting behind the active job."
+	case job.Status == gmaps.JobStatusPending:
+		return "Start", "/api/jobs/" + job.ID + "/start-pending", false, "action-primary", "Start this queued job now."
 	case job.Status == gmaps.JobStatusDone:
 		return "Done", "", true, "action-muted", "This job has finished."
 	default:
 		return "Unavailable", "", true, "action-muted", "No lifecycle action is available for this job state."
 	}
+}
+
+func jobRecoverAction(job gmaps.Job) (path string, disabled bool, help string) {
+	if !isActiveJobStatus(job.Status) {
+		return "", true, ""
+	}
+	return "/api/jobs/" + job.ID + "/recover-stale", false, "Mark this active job as stopped so queued jobs can move forward."
 }
 
 func newControlSummaryView(jobs []gmaps.Job) controlSummaryView {

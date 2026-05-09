@@ -85,6 +85,13 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 		}
 		renderControlPage(w, r, store, "templates")
 	})
+	mux.HandleFunc("/templates/editor", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/templates/editor" {
+			http.NotFound(w, r)
+			return
+		}
+		renderControlPage(w, r, store, "template-editor")
+	})
 	mux.HandleFunc("/strategies", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/strategies" {
 			http.NotFound(w, r)
@@ -308,6 +315,18 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 		if params.OutputMode == "file" && params.OutDir == "" {
 			params.OutDir = defaultControlOutDir(stateDB)
 		}
+		if paramsJSON := strings.TrimSpace(r.FormValue("params_json")); paramsJSON != "" {
+			if !json.Valid([]byte(paramsJSON)) {
+				http.Error(w, "template params must be valid JSON", http.StatusBadRequest)
+				return
+			}
+			templateID, err := store.SaveJobTemplateJSON(r.Context(), params.TemplateID, jobTemplateName(params), paramsJSON)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			params.TemplateID = templateID
+		}
 		jobID, err := store.CreateStartingJobWithSource(r.Context(), params.Queries, scraperConfigFromStartParams(params), params.TemplateID, "", "")
 		if errors.Is(err, gmaps.ErrActiveJobExists) {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -318,9 +337,11 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			return
 		}
 		params.JobID = jobID
-		templateParams := templateParamsFromForm(r, params)
-		if _, err := store.SaveJobTemplate(r.Context(), jobTemplateName(params), templateParams); err != nil {
-			log.Printf("save job template: %v", err)
+		if params.TemplateID == "" {
+			templateParams := templateParamsFromForm(r, params)
+			if _, err := store.SaveJobTemplate(r.Context(), jobTemplateName(params), templateParams); err != nil {
+				log.Printf("save job template: %v", err)
+			}
 		}
 		job, err := store.GetJob(r.Context(), jobID)
 		if err != nil {
@@ -355,6 +376,23 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			writeJSON(w, job)
 			return
 		}
+		if len(parts) == 2 && parts[1] == "logs" && r.Method == http.MethodGet {
+			logs, err := jobLogsResponseFromRequest(r, store, stateDB, jobID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				if errors.Is(err, os.ErrNotExist) {
+					http.Error(w, "log file is not available", http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, logs)
+			return
+		}
 		if len(parts) != 2 || r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
@@ -366,6 +404,36 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 				return
 			}
 			writeJSON(w, map[string]string{"status": "pause_requested"})
+		case "start-pending":
+			if launchStart == nil {
+				http.Error(w, "start launcher is not configured", http.StatusServiceUnavailable)
+				return
+			}
+			job, err := store.ClaimPendingJob(r.Context(), jobID)
+			if err != nil {
+				if errors.Is(err, gmaps.ErrActiveJobExists) || errors.Is(err, gmaps.ErrJobNotPending) {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			params, err := startParamsFromJob(job, stateDB)
+			if err != nil {
+				_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if err := launchStart(r.Context(), params); err != nil {
+				_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]string{"status": "started"})
 		case "resume":
 			if launchResume == nil {
 				http.Error(w, "resume launcher is not configured", http.StatusServiceUnavailable)
@@ -380,10 +448,96 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 				return
 			}
 			writeJSON(w, map[string]string{"status": "resume_started"})
+		case "recover-stale":
+			if err := store.RecoverStaleActiveJob(r.Context(), jobID, errors.New("process stopped before completion")); err != nil {
+				if errors.Is(err, gmaps.ErrJobNotStale) {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]string{"status": "recovered"})
 		default:
 			http.NotFound(w, r)
 		}
 	})
+}
+
+type jobLogsResponse struct {
+	JobID     string   `json:"job_id"`
+	Available bool     `json:"available"`
+	Active    bool     `json:"active"`
+	Lines     []string `json:"lines"`
+	Message   string   `json:"message,omitempty"`
+}
+
+func jobLogsResponseFromRequest(r *http.Request, store *gmaps.JobStore, stateDB, jobID string) (jobLogsResponse, error) {
+	job, err := store.GetJob(r.Context(), jobID)
+	if err != nil {
+		return jobLogsResponse{}, err
+	}
+	active := isActiveJobStatus(job.Status)
+	tail := parseLogTail(r)
+	path := jobLogPath(stateDB, jobID)
+	response := jobLogsResponse{JobID: jobID, Active: active, Lines: []string{}}
+	if path == "" {
+		return jobLogsResponse{}, os.ErrNotExist
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return jobLogsResponse{}, os.ErrNotExist
+		}
+		return jobLogsResponse{}, err
+	}
+	lines, err := readTailLines(path, tail)
+	if err != nil {
+		return jobLogsResponse{}, err
+	}
+	response.Available = true
+	response.Lines = lines
+	return response, nil
+}
+
+func parseLogTail(r *http.Request) int {
+	tail := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("tail")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			tail = n
+		}
+	}
+	if tail < 1 {
+		return 1
+	}
+	if tail > 1000 {
+		return 1000
+	}
+	return tail
+}
+
+func readTailLines(path string, tail int) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return []string{}, nil
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= tail {
+		return lines, nil
+	}
+	return lines[len(lines)-tail:], nil
+}
+
+func isActiveJobStatus(status string) bool {
+	return status == gmaps.JobStatusStarting || status == gmaps.JobStatusRunning
 }
 
 func renderControlPage(w http.ResponseWriter, r *http.Request, store *gmaps.JobStore, page string) {
@@ -416,9 +570,18 @@ func renderControlPage(w http.ResponseWriter, r *http.Request, store *gmaps.JobS
 	}
 
 	title := "Dashboard"
+	editor := newTemplateEditorView()
 	switch page {
 	case "templates":
 		title = "Job Templates"
+	case "template-editor":
+		var err error
+		editor, err = templateEditorViewFromRequest(r, store)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		title = editor.Title
 	case "strategies":
 		title = "Strategy Management"
 	default:
@@ -426,8 +589,64 @@ func renderControlPage(w http.ResponseWriter, r *http.Request, store *gmaps.JobS
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title)
+	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title).WithTemplateEditor(editor)
 	_ = controlTemplate.ExecuteTemplate(w, "control", data)
+}
+
+func newTemplateEditorView() templateEditorView {
+	return templateEditorView{
+		Mode:               "create",
+		Title:              "Create Job Template",
+		Subtitle:           "Create a template and start a job from the same synced values.",
+		CreateTitle:        "Create Job",
+		CreateSubtitle:     "Creates or reuses the corresponding template.",
+		CreateButton:       "Create Job + Template",
+		TemplateParamsJSON: "{\n  \"Queries\": []\n}",
+	}
+}
+
+func templateEditorViewFromRequest(r *http.Request, store *gmaps.JobStore) (templateEditorView, error) {
+	editor := newTemplateEditorView()
+	templateID := strings.TrimSpace(r.URL.Query().Get("template_id"))
+	if templateID == "" {
+		return editor, nil
+	}
+	tpl, err := store.GetJobTemplate(r.Context(), templateID)
+	if err != nil {
+		return templateEditorView{}, err
+	}
+	editor.Mode = "edit"
+	editor.Title = "Edit Job Template"
+	editor.Subtitle = "Edit the saved template and start jobs from the synced values."
+	editor.CreateTitle = "Create Job From Template"
+	editor.CreateSubtitle = "Starts a new job using this template's current values."
+	editor.CreateButton = "Create Job From Template"
+	editor.TemplateID = tpl.ID
+	editor.TemplateName = tpl.Name
+	editor.TemplateParamsJSON = formatTemplateParamsJSON(tpl.ParamsJSON)
+	if r.URL.Query().Get("mode") == "copy" {
+		editor.Mode = "copy"
+		editor.Title = "Duplicate Job Template"
+		editor.Subtitle = "Use an existing template as the starting point for a new one."
+		editor.CreateTitle = "Create Job From Copy"
+		editor.CreateSubtitle = "Starts a new job using the copied template values."
+		editor.CreateButton = "Create Job + Template Copy"
+		editor.TemplateID = ""
+		editor.TemplateName = strings.TrimSpace(tpl.Name + " copy")
+	}
+	return editor, nil
+}
+
+func formatTemplateParamsJSON(raw string) string {
+	var data any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return raw
+	}
+	formatted, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return string(formatted)
 }
 
 func parseJobsQueueParams(r *http.Request, pageKey, pageSizeKey, filterKey string) (int, int, string) {

@@ -35,6 +35,8 @@ var (
 	ErrNoPendingURL    = errors.New("scraper: no pending URLs")
 	ErrJobNotResumable = errors.New("scraper: job is already running or done")
 	ErrActiveJobExists = errors.New("scraper: a job is already starting or running")
+	ErrJobNotPending   = errors.New("scraper: job is not pending")
+	ErrJobNotStale     = errors.New("scraper: job is not starting or running")
 )
 
 // ErrSessionBlocked is returned by Scraper.Run when consecutive place-scrape
@@ -397,6 +399,53 @@ func (s *JobStore) ClaimNextPendingJob(ctx context.Context) (*Job, error) {
 	j.ExecutionStats, _ = s.JobExecutionStats(ctx, j.ID)
 	_, _ = s.db.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
 		j.ID, "starting", "queued job claimed by scheduler", now)
+	return &j, nil
+}
+
+func (s *JobStore) ClaimPendingJob(ctx context.Context, jobID string) (*Job, error) {
+	now := time.Now().UTC()
+	row := s.db.QueryRowContext(ctx, `UPDATE jobs
+		SET status = ?, pause_requested = 0,
+			started_at = COALESCE(started_at, ?), updated_at = ?,
+			finished_at = NULL, last_error = NULL
+		WHERE id = ?
+			AND status = ?
+			AND NOT EXISTS (SELECT 1 FROM jobs WHERE status IN (?, ?))
+		RETURNING id, queries_json, config_json, status, pause_requested,
+			template_id, strategy_id, strategy_run_id,
+			created_at, started_at, updated_at, finished_at, last_error`,
+		JobStatusStarting, now, now,
+		jobID, JobStatusPending, JobStatusStarting, JobStatusRunning)
+	var j Job
+	var queriesJSON string
+	var pause int
+	if err := row.Scan(&j.ID, &queriesJSON, &j.ConfigJSON, &j.Status, &pause,
+		&j.TemplateID, &j.StrategyID, &j.StrategyRunID,
+		&j.CreatedAt, &j.StartedAt, &j.UpdatedAt, &j.FinishedAt, &j.LastError); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			status, statusErr := s.jobStatus(ctx, jobID)
+			if statusErr != nil {
+				return nil, statusErr
+			}
+			if status != JobStatusPending {
+				return nil, ErrJobNotPending
+			}
+			return nil, ErrActiveJobExists
+		}
+		return nil, err
+	}
+	j.PauseRequested = pause != 0
+	if err := json.Unmarshal([]byte(queriesJSON), &j.Queries); err != nil {
+		return nil, err
+	}
+	stats, err := s.JobStats(ctx, j.ID)
+	if err != nil {
+		return nil, err
+	}
+	j.Stats = stats
+	j.ExecutionStats, _ = s.JobExecutionStats(ctx, j.ID)
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
+		j.ID, "starting", "pending job started manually", now)
 	return &j, nil
 }
 
@@ -864,6 +913,51 @@ func (s *JobStore) ResetInProgress(ctx context.Context, jobID string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE job_urls SET status = ?, updated_at = ?
 		WHERE job_id = ? AND status = ?`, URLStatusPending, now, jobID, URLStatusInProgress)
 	return err
+}
+
+func (s *JobStore) RecoverStaleActiveJob(ctx context.Context, jobID string, staleErr error) error {
+	status, err := s.jobStatus(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case JobStatusRunning:
+		if err := s.ResetInProgress(ctx, jobID); err != nil {
+			return err
+		}
+		if err := s.SetJobStatus(ctx, jobID, JobStatusPaused, staleErr); err != nil {
+			return err
+		}
+	case JobStatusStarting:
+		stats, err := s.JobStats(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if stats.Total > 0 {
+			if err := s.ResetInProgress(ctx, jobID); err != nil {
+				return err
+			}
+			if err := s.SetJobStatus(ctx, jobID, JobStatusPaused, staleErr); err != nil {
+				return err
+			}
+		} else if err := s.SetJobStatus(ctx, jobID, JobStatusFailed, staleErr); err != nil {
+			return err
+		}
+	default:
+		return ErrJobNotStale
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE jobs SET pause_requested = 0 WHERE id = ?`, jobID)
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
+		jobID, "recovered_stale", "stale active job recovered manually", time.Now().UTC())
+	return nil
+}
+
+func (s *JobStore) jobStatus(ctx context.Context, jobID string) (string, error) {
+	var status string
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, jobID).Scan(&status); err != nil {
+		return "", err
+	}
+	return status, nil
 }
 
 func (s *JobStore) RequestPause(ctx context.Context, jobID string) error {

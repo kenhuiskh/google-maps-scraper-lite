@@ -220,6 +220,88 @@ func TestJobStoreClaimNextPendingJobAfterDone(t *testing.T) {
 	}
 }
 
+func TestJobStoreClaimPendingJobByID(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	activeID, err := store.CreateStartingJob(ctx, []string{"active"}, nil)
+	if err != nil {
+		t.Fatalf("create active job: %v", err)
+	}
+	if err := store.StartJob(ctx, activeID); err != nil {
+		t.Fatalf("start active job: %v", err)
+	}
+	pendingID, err := store.CreateStartingJob(ctx, []string{"pending"}, nil)
+	if err != nil {
+		t.Fatalf("create pending job: %v", err)
+	}
+	if _, err := store.ClaimPendingJob(ctx, pendingID); !errors.Is(err, ErrActiveJobExists) {
+		t.Fatalf("claim with active error = %v, want ErrActiveJobExists", err)
+	}
+	if err := store.SetJobStatus(ctx, activeID, JobStatusDone, nil); err != nil {
+		t.Fatalf("mark active done: %v", err)
+	}
+	claimed, err := store.ClaimPendingJob(ctx, pendingID)
+	if err != nil {
+		t.Fatalf("claim pending: %v", err)
+	}
+	if claimed.ID != pendingID || claimed.Status != JobStatusStarting {
+		t.Fatalf("claimed job = %s/%s, want %s/starting", claimed.ID, claimed.Status, pendingID)
+	}
+	if _, err := store.ClaimPendingJob(ctx, activeID); !errors.Is(err, ErrJobNotPending) {
+		t.Fatalf("claim done error = %v, want ErrJobNotPending", err)
+	}
+}
+
+func TestJobStoreRecoverStaleActiveJob(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	runningID, err := store.CreateJob(ctx, []string{"running"}, nil, []string{"u1"})
+	if err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+	if err := store.StartJob(ctx, runningID); err != nil {
+		t.Fatalf("start running job: %v", err)
+	}
+	if _, err := store.ClaimNextURL(ctx, runningID); err != nil {
+		t.Fatalf("claim url: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, runningID, errors.New("process stopped before completion")); err != nil {
+		t.Fatalf("recover running: %v", err)
+	}
+	job, err := store.GetJob(ctx, runningID)
+	if err != nil {
+		t.Fatalf("get recovered running job: %v", err)
+	}
+	if job.Status != JobStatusPaused || !job.LastError.Valid {
+		t.Fatalf("running recovery status/error = %s/%v, want paused with error", job.Status, job.LastError)
+	}
+	stats, err := store.JobStats(ctx, runningID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.InProgress != 0 || stats.Pending != 1 {
+		t.Fatalf("stats after recovery = %+v, want in_progress reset to pending", stats)
+	}
+
+	startingID, err := store.CreateStartingJob(ctx, []string{"starting"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, startingID, errors.New("process stopped before completion")); err != nil {
+		t.Fatalf("recover starting: %v", err)
+	}
+	job, err = store.GetJob(ctx, startingID)
+	if err != nil {
+		t.Fatalf("get recovered starting job: %v", err)
+	}
+	if job.Status != JobStatusFailed {
+		t.Fatalf("starting recovery status = %s, want failed", job.Status)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, startingID, nil); !errors.Is(err, ErrJobNotStale) {
+		t.Fatalf("recover failed job error = %v, want ErrJobNotStale", err)
+	}
+}
+
 func TestJobStoreListJobsPage(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
