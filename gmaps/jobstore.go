@@ -865,6 +865,159 @@ func (s *JobStore) MarkStrategyUsed(ctx context.Context, id string) error {
 	return err
 }
 
+// BulkUpdateStrategyLang updates the Lang field in-place for every template
+// belonging to the given strategy. Because templates may be shared across
+// strategies, this affects all strategies that reference the same templates.
+func (s *JobStore) BulkUpdateStrategyLang(ctx context.Context, strategyID, lang string) (int, error) {
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM strategies WHERE id = ?`, strategyID).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if exists == 0 {
+		return 0, sql.ErrNoRows
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT template_id FROM strategy_templates WHERE strategy_id = ?`, strategyID)
+	if err != nil {
+		return 0, err
+	}
+	var templateIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		templateIDs = append(templateIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	for _, tplID := range templateIDs {
+		var paramsJSON string
+		if err := tx.QueryRowContext(ctx, `SELECT params_json FROM job_templates WHERE id = ?`, tplID).Scan(&paramsJSON); err != nil {
+			return 0, err
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return 0, err
+		}
+		if lang == "" {
+			delete(params, "Lang")
+		} else {
+			params["Lang"] = lang
+		}
+		updated, err := json.Marshal(params)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE job_templates SET params_json = ?, last_used_at = ? WHERE id = ?`,
+			string(updated), now, tplID); err != nil {
+			return 0, err
+		}
+	}
+	return len(templateIDs), tx.Commit()
+}
+
+// BulkDuplicateStrategyTemplatesWithLang clones every template in the strategy
+// with the new lang and nameSuffix appended to each template name, then
+// re-links the strategy to the new copies. Original templates are untouched.
+func (s *JobStore) BulkDuplicateStrategyTemplatesWithLang(ctx context.Context, strategyID, lang, nameSuffix string) (int, error) {
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM strategies WHERE id = ?`, strategyID).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if exists == 0 {
+		return 0, sql.ErrNoRows
+	}
+
+	type entry struct {
+		templateID string
+		position   int
+		name       string
+		paramsJSON string
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT st.template_id, st.position, jt.name, jt.params_json
+		FROM strategy_templates st
+		JOIN job_templates jt ON jt.id = st.template_id
+		WHERE st.strategy_id = ?
+		ORDER BY st.position ASC`, strategyID)
+	if err != nil {
+		return 0, err
+	}
+	var entries []entry
+	for rows.Next() {
+		var e entry
+		if err := rows.Scan(&e.templateID, &e.position, &e.name, &e.paramsJSON); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	for _, e := range entries {
+		var params map[string]any
+		if err := json.Unmarshal([]byte(e.paramsJSON), &params); err != nil {
+			return 0, err
+		}
+		if lang == "" {
+			delete(params, "Lang")
+		} else {
+			params["Lang"] = lang
+		}
+		newParamsJSON, err := json.Marshal(params)
+		if err != nil {
+			return 0, err
+		}
+		sum := sha256.Sum256(newParamsJSON)
+		newID := fmt.Sprintf("tpl_%x", sum[:12])
+		newName := strings.TrimSpace(e.name) + " " + strings.TrimSpace(nameSuffix)
+
+		if _, err := tx.ExecContext(ctx, `INSERT INTO job_templates (id, name, params_json, created_at, last_used_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_used_at = excluded.last_used_at`,
+			newID, newName, string(newParamsJSON), now, now); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM strategy_templates WHERE strategy_id = ? AND template_id = ?`,
+			strategyID, e.templateID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO strategy_templates (strategy_id, template_id, position, created_at)
+			VALUES (?, ?, ?, ?)`, strategyID, newID, e.position, now); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE strategies SET updated_at = ? WHERE id = ?`, now, strategyID); err != nil {
+		return 0, err
+	}
+	return len(entries), tx.Commit()
+}
+
 func (s *JobStore) StartJob(ctx context.Context, jobID string) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, pause_requested = 0,
