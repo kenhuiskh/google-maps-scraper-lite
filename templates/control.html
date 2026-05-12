@@ -557,6 +557,55 @@
     }
     .bulk-lang-section { display: flex; flex-direction: column; gap: 10px; }
     .bulk-lang-section .field { margin-bottom: 0; }
+    .bulk-lang-mode-group { display: grid; gap: 8px; }
+    .bulk-lang-mode {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 10px;
+      cursor: pointer;
+    }
+    .bulk-lang-mode:hover,
+    .bulk-lang-mode:has(input:focus-visible) {
+      border-color: #b7c8e1;
+      background: #f8fbff;
+    }
+    .bulk-lang-mode:has(input:checked) {
+      border-color: #bfdbfe;
+      background: var(--primary-soft);
+    }
+    .bulk-lang-mode input { margin-top: 2px; }
+    .bulk-lang-mode-copy {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .requirement-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      padding: 2px 7px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .requirement-badge.required {
+      border-color: #fecdca;
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    .requirement-badge.optional {
+      border-color: #abefc6;
+      background: var(--success-soft);
+      color: var(--success);
+    }
   </style>
 </head>
 <body>
@@ -993,33 +1042,43 @@
           <label for="bulk-lang-select">Language</label>
           <select id="bulk-lang-select">
             <option value="en">en — English</option>
-            <option value="es">es — Spanish</option>
-            <option value="fr">fr — French</option>
-            <option value="de">de — German</option>
-            <option value="pt">pt — Portuguese</option>
-            <option value="zh">zh — Chinese</option>
+            <option value="zh-TW">zh — Chinese (Traditional)</option>
             <option value="ja">ja — Japanese</option>
-            <option value="ko">ko — Korean</option>
-            <option value="ar">ar — Arabic</option>
-            <option value="it">it — Italian</option>
-            <option value="nl">nl — Dutch</option>
-            <option value="pl">pl — Polish</option>
-            <option value="ru">ru — Russian</option>
-            <option value="tr">tr — Turkish</option>
           </select>
         </div>
       </div>
-      <label class="check-field" for="bulk-lang-override">
-        <input type="checkbox" id="bulk-lang-override">
-        <span>Update existing templates (affects all strategies that share them)</span>
-      </label>
+      <div class="field">
+        <label>Update mode</label>
+        <div class="bulk-lang-mode-group" role="radiogroup" aria-label="Bulk language update mode">
+          <label class="bulk-lang-mode" for="bulk-lang-mode-copy">
+            <input type="radio" id="bulk-lang-mode-copy" name="bulk-lang-mode" value="copy" checked>
+            <span>
+              <span class="bulk-lang-mode-copy">
+                <span class="item-title">Create new language templates</span>
+                <span class="requirement-badge required">Suffix required</span>
+              </span>
+              <span class="muted tiny">Keeps originals unchanged. A name suffix is required so copies are easy to identify.</span>
+            </span>
+          </label>
+          <label class="bulk-lang-mode" for="bulk-lang-mode-update">
+            <input type="radio" id="bulk-lang-mode-update" name="bulk-lang-mode" value="update">
+            <span>
+              <span class="bulk-lang-mode-copy">
+                <span class="item-title">Update existing templates</span>
+                <span class="requirement-badge optional">Suffix not needed</span>
+              </span>
+              <span class="muted tiny">Edits the original templates and affects every strategy that shares them.</span>
+            </span>
+          </label>
+        </div>
+      </div>
       <div id="bulk-lang-warning" class="warning-note" hidden>
         Warning: This will modify the original templates. Any other strategy sharing these templates will also be affected.
       </div>
       <div id="bulk-lang-suffix-field" class="field">
-        <label for="bulk-lang-suffix">Name suffix <span style="color:var(--danger)">*</span></label>
-        <input id="bulk-lang-suffix" type="text" placeholder='e.g. "FR copy"'>
-        <div class="muted tiny">New templates will be named: &lt;original name&gt; &lt;suffix&gt;</div>
+        <label for="bulk-lang-suffix">Name suffix <span id="bulk-lang-suffix-required" style="color:var(--danger)">*</span></label>
+        <input id="bulk-lang-suffix" type="text" placeholder='e.g. "FR copy"' required>
+        <div id="bulk-lang-suffix-help" class="muted tiny">New templates will be named: &lt;original name&gt; &lt;suffix&gt;</div>
       </div>
       <div>
         <button type="button" onclick="applyBulkLang()">Apply Language</button>
@@ -1775,20 +1834,36 @@
   refreshActiveLog();
   setInterval(refreshPartials, 5000);
 
-  const bulkLangOverride = document.getElementById('bulk-lang-override');
-  if (bulkLangOverride) {
-    bulkLangOverride.addEventListener('change', function() {
-      const suffixField = document.getElementById('bulk-lang-suffix-field');
-      const warning = document.getElementById('bulk-lang-warning');
-      if (this.checked) {
-        if (suffixField) suffixField.hidden = true;
-        if (warning) warning.hidden = false;
-      } else {
-        if (suffixField) suffixField.hidden = false;
-        if (warning) warning.hidden = true;
-      }
-    });
+  function bulkLangUpdatesExisting() {
+    return document.querySelector('input[name="bulk-lang-mode"]:checked')?.value === 'update';
   }
+
+  function syncBulkLangMode() {
+    const updatesExisting = bulkLangUpdatesExisting();
+    const suffixField = document.getElementById('bulk-lang-suffix-field');
+    const suffixInput = document.getElementById('bulk-lang-suffix');
+    const suffixRequired = document.getElementById('bulk-lang-suffix-required');
+    const suffixHelp = document.getElementById('bulk-lang-suffix-help');
+    const warning = document.getElementById('bulk-lang-warning');
+    if (suffixField) suffixField.classList.toggle('muted', updatesExisting);
+    if (suffixInput) {
+      suffixInput.disabled = updatesExisting;
+      suffixInput.required = !updatesExisting;
+      if (updatesExisting) suffixInput.value = '';
+      suffixInput.placeholder = updatesExisting ? 'Not used when updating existing templates' : 'e.g. "FR copy"';
+    }
+    if (suffixRequired) suffixRequired.hidden = updatesExisting;
+    if (suffixHelp) {
+      suffixHelp.textContent = updatesExisting
+        ? 'Not required because this mode changes the selected templates in place.'
+        : 'New templates will be named: <original name> <suffix>';
+    }
+    if (warning) warning.hidden = !updatesExisting;
+  }
+  document.querySelectorAll('input[name="bulk-lang-mode"]').forEach(function(input) {
+    input.addEventListener('change', syncBulkLangMode);
+  });
+  syncBulkLangMode();
 
   async function applyBulkLang() {
     const strategyID = formValue('strategy-edit-id');
@@ -1801,7 +1876,7 @@
       alert('Please select a language.');
       return;
     }
-    const override = document.getElementById('bulk-lang-override')?.checked || false;
+    const override = bulkLangUpdatesExisting();
     const nameSuffix = override ? '' : formValue('bulk-lang-suffix');
     if (!override && !nameSuffix) {
       alert('Name suffix is required when not overriding existing templates.');
