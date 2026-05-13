@@ -110,7 +110,9 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = controlTemplate.ExecuteTemplate(w, "summary", newControlPageData(jobs, nil, nil))
+		if err := controlTemplate.ExecuteTemplate(w, "summary", newControlPageData(jobs, nil, nil)); err != nil {
+			log.Printf("template render error (summary): %v", err)
+		}
 	})
 	mux.HandleFunc("/ui/jobs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -135,7 +137,9 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = controlTemplate.ExecuteTemplate(w, "jobs-panel", newControlPageDataWithPagination(jobs, pageJobs, nil, nil, pagination))
+		if err := controlTemplate.ExecuteTemplate(w, "jobs-panel", newControlPageDataWithPagination(jobs, pageJobs, nil, nil, pagination)); err != nil {
+			log.Printf("template render error (jobs-panel): %v", err)
+		}
 	})
 	mux.HandleFunc("/api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -633,7 +637,9 @@ func renderControlPage(w http.ResponseWriter, r *http.Request, store *gmaps.JobS
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title).WithTemplateEditor(editor)
-	_ = controlTemplate.ExecuteTemplate(w, "control", data)
+	if err := controlTemplate.ExecuteTemplate(w, "control", data); err != nil {
+		log.Printf("template render error (control): %v", err)
+	}
 }
 
 func newTemplateEditorView() templateEditorView {

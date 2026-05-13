@@ -73,6 +73,12 @@ func main() {
 		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
 
+	// Allow the DSN to be supplied via environment so that subprocesses
+	// spawned by the control UI do not need it as a visible CLI argument.
+	if *dsn == "" {
+		*dsn = os.Getenv("DSN")
+	}
+
 	if *jobID == "" && *queries == "" && *controlAddr == "" {
 		fmt.Fprintln(os.Stderr, "error: -queries is required (or use -job to continue a previous run, or -control-addr for UI-only mode)")
 		flag.Usage()

@@ -3,6 +3,7 @@ package gmaps
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,15 @@ import (
 	"github.com/mcnijman/go-emailaddress"
 )
 
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("stopped after 5 redirects")
+		}
+		return nil
+	},
+}
 
 // ExtractEmails fetches the given URL and returns a deduplicated list of email
 // addresses found in the page (via mailto links and regex scan of the body).
