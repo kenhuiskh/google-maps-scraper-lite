@@ -101,6 +101,9 @@ CLAUDE.md
 .codex-go*
 .codex
 
+# Skills
+.agents/
+
 mcp.json
 
 # Air (live-reload tool)

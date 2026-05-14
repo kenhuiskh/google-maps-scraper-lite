@@ -167,11 +167,24 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Scraper Control") {
 		t.Fatalf("index did not include admin shell title: %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Pending jobs") {
-		t.Fatalf("index did not include summary cards: %s", rec.Body.String())
+	for _, want := range []string{"Feed URLs", "Queued", "Scraped", "Errors"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("index did not include analytics card %q: %s", want, rec.Body.String())
+		}
 	}
-	if !strings.Contains(rec.Body.String(), `id="active-log-panel"`) {
-		t.Fatalf("index did not include active log panel hook: %s", rec.Body.String())
+	for _, notWant := range []string{"Pending jobs", "Pending URLs", "Needs attention"} {
+		if strings.Contains(rec.Body.String(), notWant) {
+			t.Fatalf("index should not include old summary card %q: %s", notWant, rec.Body.String())
+		}
+	}
+	if strings.Contains(rec.Body.String(), `id="active-log-panel"`) {
+		t.Fatalf("index should not include global active log panel: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `data-log-row="`+jobID+`"`) {
+		t.Fatalf("index did not include inline log row for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `id="tracked-status-dot"`) {
+		t.Fatalf("index did not include tracked status dot: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `data-job-id="`+jobID+`"`) {
 		t.Fatalf("index did not include refreshable row for job ID %s: %s", jobID, rec.Body.String())
@@ -181,6 +194,9 @@ func TestControlIndexListsJobs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `viewJobLog('`+jobID+`')`) {
 		t.Fatalf("index did not include view log button for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `aria-label="View log for job `+jobID+`"`) {
+		t.Fatalf("index did not include accessible icon log button for job ID %s: %s", jobID, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `start-pending`) {
 		t.Fatalf("index did not include start action for unblocked pending job ID %s: %s", jobID, rec.Body.String())

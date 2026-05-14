@@ -119,6 +119,24 @@
     .nav-link:hover { background: #f1f5f9; color: var(--text); }
     .nav-link.active { background: var(--primary); color: #fff; }
     .topbar-meta { color: var(--muted); font-size: 0.82rem; text-align: right; white-space: nowrap; }
+    .tracked-status {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: #94a3b8;
+      box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.16);
+    }
+    .status-dot.active {
+      background: #16a34a;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.16);
+    }
     .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px 28px; }
     .page-head {
       display: flex;
@@ -129,19 +147,12 @@
     }
     .page-title { font-size: 1.24rem; font-weight: 850; letter-spacing: 0; }
     .page-meta { color: var(--muted); font-size: 0.84rem; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-    .summary-grid {
-      display: grid;
-      grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(120px, 1fr));
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-    .metric-card, .panel, .stat-cell, .compact-item {
+    .panel, .stat-cell, .compact-item {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
     }
-    .metric-card { padding: 9px 11px; min-height: 70px; }
     .metric-label {
       color: var(--muted);
       font-size: 0.76rem;
@@ -150,8 +161,6 @@
       letter-spacing: 0;
     }
     .metric-value { margin-top: 3px; font-size: 1.32rem; font-weight: 850; color: var(--text); letter-spacing: 0; }
-    .metric-note { margin-top: 3px; color: var(--muted); font-size: 0.78rem; overflow-wrap: anywhere; }
-    .active-card { border-color: #b7c8e1; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
     .dashboard-grid { display: grid; gap: 10px; }
     .management-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 14px; align-items: start; }
     .templates-workspace { display: grid; grid-template-columns: minmax(300px, 0.78fr) minmax(360px, 1fr); gap: 12px; align-items: start; }
@@ -255,7 +264,13 @@
     .result { min-height: 20px; font-size: 0.86rem; }
     #start-result, #template-result, #strategy-result { min-height: 20px; font-size: 0.86rem; }
     .table-wrap { overflow-x: auto; max-width: 100%; }
-    table { border-collapse: collapse; width: 100%; min-width: 920px; }
+    table { border-collapse: collapse; width: 100%; min-width: 1220px; table-layout: fixed; }
+    .job-col { width: 360px; }
+    .status-col { width: 130px; }
+    .progress-col { width: 240px; }
+    .analytics-col { width: 210px; }
+    .updated-col { width: 132px; }
+    .actions-col { width: 150px; }
     th, td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
     th {
       color: var(--muted);
@@ -268,7 +283,7 @@
     tbody tr:hover { background: #f8fafc; }
     tbody tr.active-row { background: #f8fbff; }
     .job-title, .item-title { font-weight: 850; color: var(--text); overflow-wrap: anywhere; }
-    .job-title { max-width: 340px; }
+    .job-title { max-width: 100%; }
     .job-meta, .item-meta {
       margin-top: 4px;
       display: flex;
@@ -277,6 +292,31 @@
       color: var(--muted);
       font-size: 0.8rem;
     }
+    .job-meta { gap: 5px; }
+    .meta-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 4px;
+      min-width: 0;
+      max-width: 100%;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: #f8fafc;
+    }
+    .meta-label {
+      color: var(--muted-2);
+      font-size: 0.68rem;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+    .meta-value {
+      min-width: 0;
+      color: #334155;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .meta-value code { font-size: 0.74rem; }
     .raw-status { display: block; margin-top: 5px; font-size: 0.76rem; }
     .progress-line { display: flex; justify-content: space-between; gap: 12px; color: #334155; font-size: 0.84rem; }
     .progress-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
@@ -284,11 +324,26 @@
     .progress-stats { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 0.76rem; }
     .analytics-compact { display: grid; gap: 3px; color: var(--muted); font-size: 0.76rem; }
     .analytics-compact strong { color: #334155; font-weight: 850; }
-    .log-panel { margin-top: 10px; }
+    .log-row td {
+      padding: 0;
+      border-bottom: 1px solid var(--border-strong);
+      background: #f8fafc;
+    }
+    .log-inline {
+      margin: 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+    .log-row:not([hidden]):not(.restore-log) .log-inline { animation: log-slide 160ms ease-out; }
+    @keyframes log-slide {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
     .log-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .log-viewer {
-      min-height: 180px;
-      max-height: 320px;
+      min-height: 260px;
+      max-height: 420px;
       overflow: auto;
       padding: 10px 12px;
       border-top: 1px solid var(--border);
@@ -303,6 +358,33 @@
     .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.8rem; overflow-wrap: anywhere; }
     .actions, .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .actions button, .item-actions button { min-height: 30px; padding: 5px 9px; }
+    .icon-button {
+      width: 32px;
+      min-width: 32px;
+      padding: 5px;
+      display: inline-grid;
+      place-items: center;
+    }
+    .icon-button svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     .actions .action-refresh { color: #334155; }
     .actions .action-primary, .item-actions .action-primary {
       background: var(--primary);
@@ -534,8 +616,6 @@
       .topbar-inner { grid-template-columns: 1fr; align-items: start; }
       .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
       .topbar-meta { text-align: left; }
-      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .active-card { grid-column: 1 / -1; }
       .dashboard-grid, .management-grid, .templates-workspace, .template-editor-workspace { grid-template-columns: 1fr; }
       .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -543,7 +623,7 @@
       .topbar-inner, .container { padding-left: 14px; padding-right: 14px; }
       .page-head { align-items: flex-start; flex-direction: column; }
       .page-meta { justify-content: flex-start; }
-      .summary-grid, .stat-strip { grid-template-columns: 1fr; }
+      .stat-strip { grid-template-columns: 1fr; }
       .field-row, .item-grid, .template-row { grid-template-columns: 1fr; }
       .template-actions { justify-content: flex-start; }
       .panel-header { align-items: flex-start; flex-direction: column; }
@@ -639,7 +719,10 @@
           <a class="nav-link {{if eq .ActivePage "strategies"}}active{{end}}" href="/strategies">Strategies</a>
         </nav>
         <div class="topbar-meta">
-          <div>{{.Summary.TotalJobs}} jobs tracked</div>
+          <div class="tracked-status">
+            <span id="tracked-status-dot" class="status-dot {{if .Summary.HasActiveJob}}active{{end}}" aria-hidden="true"></span>
+            <span id="tracked-jobs-count">{{.Summary.TotalJobs}}</span> jobs tracked
+          </div>
           <div>Last refreshed <span id="last-refreshed">{{.LastRefreshed}}</span></div>
         </div>
       </div>
@@ -703,9 +786,8 @@
   </div>
 </div>
 
-{{template "summary" .}}
-
 <div class="dashboard-grid">
+  {{template "analytics-strip" .}}
   <section class="panel" aria-labelledby="jobs-title">
     <div class="panel-header">
       <div>
@@ -718,22 +800,13 @@
             <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
           {{end}}
         </div>
-        <button type="button" onclick="refreshPartials()" title="Refresh dashboard and job table.">Refresh</button>
+        <button type="button" class="icon-button" onclick="refreshPartials()" title="Refresh dashboard and job table." aria-label="Refresh dashboard and job table">
+          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
+        </button>
       </div>
     </div>
     {{template "jobs-panel" .}}
   </section>
-  <section id="active-log-panel" class="panel log-panel" aria-labelledby="active-log-title" hidden>
-    <div class="panel-header">
-      <div>
-        <h2 id="active-log-title" class="panel-title">Job Logs</h2>
-        <div id="active-log-meta" class="muted tiny">Waiting for an active job.</div>
-      </div>
-      <button type="button" onclick="refreshSelectedJobLog()">Refresh Logs</button>
-    </div>
-    <pre id="active-log-viewer" class="log-viewer">No log lines yet.</pre>
-  </section>
-  {{template "analytics-strip" .}}
 </div>
 {{end}}
 
@@ -1104,7 +1177,7 @@
 {{end}}
 
 {{define "analytics-strip"}}
-<section class="stat-strip" aria-label="Execution analytics">
+<section id="execution-analytics" class="stat-strip" aria-label="Execution analytics">
   <div class="stat-cell">
     <div class="metric-label">Feed URLs</div>
     <div class="stat-value">{{.Analytics.FeedURLsFound}}</div>
@@ -1129,44 +1202,22 @@
 {{end}}
 
 {{define "summary"}}
-<section id="summary" class="summary-grid" aria-label="Job summary">
-  <article class="metric-card active-card">
-    <div class="metric-label">Active job</div>
-    {{if .Summary.HasActiveJob}}
-      <div class="metric-note"><strong>{{.Summary.ActiveJobTitle}}</strong></div>
-      <div class="metric-note"><span class="status {{.Summary.ActiveStatusClass}}">{{.Summary.ActiveStatus}}</span> {{.Summary.ActiveProgress}}</div>
-    {{else}}
-      <div class="metric-value">Idle</div>
-      <div class="metric-note">No scraper job is active.</div>
-    {{end}}
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Pending jobs</div>
-    <div class="metric-value">{{.Summary.PendingJobs}}</div>
-    <div class="metric-note">Queued</div>
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Running</div>
-    <div class="metric-value">{{.Summary.RunningJobs}}</div>
-    <div class="metric-note">{{.Summary.ActiveURLs}} URLs active</div>
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Pending URLs</div>
-    <div class="metric-value">{{.Summary.PendingURLs}}</div>
-    <div class="metric-note">Across jobs</div>
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Needs attention</div>
-    <div class="metric-value">{{.Summary.NeedsAttention}}</div>
-    <div class="metric-note">{{.Summary.FailedJobs}} failed</div>
-  </article>
-</section>
+<span id="summary" hidden data-total-jobs="{{.Summary.TotalJobs}}" data-has-active-job="{{if .Summary.HasActiveJob}}true{{else}}false{{end}}"></span>
+{{template "analytics-strip" .}}
 {{end}}
 
 {{define "jobs-panel"}}
-<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}">
+<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}" data-total-jobs="{{.Summary.TotalJobs}}" data-has-active-job="{{if .Summary.HasActiveJob}}true{{else}}false{{end}}">
   <div class="table-wrap">
     <table>
+      <colgroup>
+        <col class="job-col">
+        <col class="status-col">
+        <col class="progress-col">
+        <col class="analytics-col">
+        <col class="updated-col">
+        <col class="actions-col">
+      </colgroup>
       <thead>
         <tr>
           <th>Job</th>
@@ -1197,9 +1248,13 @@
           <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
         {{end}}
       </select>
-      <button type="button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}}>Previous</button>
+      <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}} title="Previous page" aria-label="Previous page">
+        {{template "icon-prev" .}}<span class="sr-only">Previous</span>
+      </button>
       <span class="muted tiny">Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
-      <button type="button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}}>Next</button>
+      <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}} title="Next page" aria-label="Next page">
+        {{template "icon-next" .}}<span class="sr-only">Next</span>
+      </button>
     </div>
   </div>
 </div>
@@ -1211,12 +1266,12 @@
     <td>
       <div class="job-title">{{.DisplayTitle}}</div>
       <div class="job-meta">
-        <code>{{.ID}}</code>
-        {{if ne .DisplayTitle .QueriesPreview}}<span>{{.QueriesPreview}}</span>{{end}}
-        <span>{{.OutputMode}}</span>
-        <span>{{.Lang}}</span>
-        {{if .TemplateID}}<span>tpl {{.TemplateID}}</span>{{end}}
-        {{if .StrategyID}}<span>strategy {{.StrategyID}}</span>{{end}}
+        <span class="meta-chip"><span class="meta-label">ID</span><span class="meta-value"><code>{{.ID}}</code></span></span>
+        {{if ne .DisplayTitle .QueriesPreview}}<span class="meta-chip"><span class="meta-label">Query</span><span class="meta-value">{{.QueriesPreview}}</span></span>{{end}}
+        <span class="meta-chip"><span class="meta-label">Output</span><span class="meta-value">{{.OutputMode}}</span></span>
+        <span class="meta-chip"><span class="meta-label">Lang</span><span class="meta-value">{{.Lang}}</span></span>
+        {{if .TemplateID}}<span class="meta-chip"><span class="meta-label">Template</span><span class="meta-value">{{.TemplateID}}</span></span>{{end}}
+        {{if .StrategyID}}<span class="meta-chip"><span class="meta-label">Strategy</span><span class="meta-value">{{.StrategyID}}</span></span>{{end}}
       </div>
     </td>
     <td>
@@ -1252,23 +1307,61 @@
     </td>
     <td>
       <div class="actions">
-        <button class="action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
-        <button class="action-refresh" onclick="viewJobLog('{{.ID}}')" title="View the saved log file for this job.">View Log</button>
+        <button class="icon-button action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database." aria-label="Refresh job {{.ID}}">
+          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
+        </button>
+        <button class="icon-button action-refresh" onclick="viewJobLog('{{.ID}}')" title="View the saved log file for this job." aria-label="View log for job {{.ID}}">
+          {{template "icon-log" .}}<span class="sr-only">View Log</span>
+        </button>
         {{if .ActionDisabled}}
           <button class="{{.ActionClass}}" disabled title="{{.ActionHelp}}">{{.ActionLabel}}</button>
         {{else}}
-          <button class="{{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+          <button class="icon-button {{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}" aria-label="{{.ActionLabel}} job {{.ID}}">
+            {{if eq .ActionLabel "Pause"}}{{template "icon-pause" .}}{{else}}{{template "icon-play" .}}{{end}}<span class="sr-only">{{.ActionLabel}}</span>
+          </button>
         {{end}}
         {{if not .RecoverDisabled}}
-          <button class="action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}">Recover</button>
+          <button class="icon-button action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}" aria-label="Recover job {{.ID}}">
+            {{template "icon-recover" .}}<span class="sr-only">Recover</span>
+          </button>
         {{end}}
       </div>
+    </td>
+  </tr>
+  <tr class="log-row" data-log-row="{{.ID}}" hidden>
+    <td colspan="6">
+      <section class="log-inline" aria-labelledby="log-title-{{.ID}}">
+        <div class="panel-header">
+          <div>
+            <h2 id="log-title-{{.ID}}" class="panel-title">Job Logs</h2>
+            <div class="muted tiny" data-log-meta="{{.ID}}">Waiting for log lines.</div>
+          </div>
+          <div class="actions">
+            <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
+              {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
+            </button>
+            <button type="button" class="icon-button" onclick="closeJobLog('{{.ID}}')" title="Close logs" aria-label="Close logs">
+              {{template "icon-close" .}}<span class="sr-only">Close</span>
+            </button>
+          </div>
+        </div>
+        <pre class="log-viewer" data-log-viewer="{{.ID}}">No log lines yet.</pre>
+      </section>
     </td>
   </tr>
 {{else}}
   <tr class="empty-row"><td colspan="6">No jobs yet.</td></tr>
 {{end}}
 {{end}}
+
+{{define "icon-refresh"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 8.5 8.5 0 0 1-6-2.5"></path><path d="M3 12a9 9 0 0 1 15-6.7"></path><path d="M18 2v5h-5"></path><path d="M6 22v-5h5"></path></svg>{{end}}
+{{define "icon-log"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M8 13h8"></path><path d="M8 17h6"></path></svg>{{end}}
+{{define "icon-play"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"></path></svg>{{end}}
+{{define "icon-pause"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H6v16h4z"></path><path d="M18 4h-4v16h4z"></path></svg>{{end}}
+{{define "icon-recover"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 3v6h6"></path></svg>{{end}}
+{{define "icon-close"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>{{end}}
+{{define "icon-prev"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{end}}
+{{define "icon-next"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>{{end}}
 
 {{define "control-script"}}
 <script>
@@ -1299,18 +1392,30 @@
   let jobsPageSize = {{.Pagination.PageSize}};
   let jobsFilter = '{{.Pagination.Filter}}';
   let selectedLogJobID = '';
+  let pendingLogSnapshot = null;
 
-  async function refreshPartials() {
+  async function refreshPartials(options) {
+    options = options || {};
     const jobsPanel = document.getElementById('jobs-panel');
-    const summary = document.getElementById('summary');
+    const analytics = document.getElementById('execution-analytics');
     const requests = [];
-    if (summary) requests.push(fetch('/ui/summary').then(async function(res) {
-      if (res.ok && document.getElementById('summary')) document.getElementById('summary').outerHTML = await res.text();
+    const preserveOpenLog = options.preserveOpenLog && !!selectedLogJobID;
+    if (analytics) requests.push(fetch('/ui/summary').then(async function(res) {
+      if (!res.ok) return;
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = await res.text();
+      const nextAnalytics = wrapper.querySelector('#execution-analytics');
+      const nextSummary = wrapper.querySelector('#summary');
+      if (nextAnalytics && document.getElementById('execution-analytics')) {
+        document.getElementById('execution-analytics').outerHTML = nextAnalytics.outerHTML;
+      }
+      if (nextSummary) syncTopbarJobState(nextSummary);
     }));
-    if (jobsPanel) {
+    if (jobsPanel && !preserveOpenLog) {
       const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
       requests.push(fetch(jobsPath).then(async function(res) {
         if (!res.ok || !document.getElementById('jobs-panel')) return;
+        pendingLogSnapshot = snapshotVisibleLog();
         document.getElementById('jobs-panel').outerHTML = await res.text();
         const panel = document.getElementById('jobs-panel');
         if (panel) {
@@ -1318,37 +1423,97 @@
           jobsPageSize = Number(panel.dataset.pageSize) || jobsPageSize;
           jobsFilter = panel.dataset.filter || jobsFilter;
           syncJobsFilterButtons();
+          syncTopbarJobState(panel);
         }
       }));
     }
     await Promise.all(requests);
-    await refreshSelectedJobLog();
+    await refreshSelectedJobLog({ restore: !preserveOpenLog });
     const refreshed = document.getElementById('last-refreshed');
     if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
   async function viewJobLog(jobID) {
+    if (selectedLogJobID === jobID) {
+      closeJobLog(jobID);
+      return;
+    }
     selectedLogJobID = jobID || '';
-    await refreshSelectedJobLog();
+    await refreshSelectedJobLog({ restore: false });
   }
 
-  async function refreshSelectedJobLog() {
-    const panel = document.getElementById('active-log-panel');
-    const viewer = document.getElementById('active-log-viewer');
-    const meta = document.getElementById('active-log-meta');
-    if (!panel || !viewer || !meta) return;
+  function closeJobLog(jobID) {
+    const row = document.querySelector('[data-log-row="' + cssEscape(jobID || selectedLogJobID) + '"]');
+    if (row) row.hidden = true;
+    if (!jobID || selectedLogJobID === jobID) selectedLogJobID = '';
+  }
+
+  function hideLogRows() {
+    document.querySelectorAll('[data-log-row]').forEach(function(row) {
+      row.hidden = true;
+    });
+  }
+
+  function snapshotVisibleLog() {
+    const row = document.querySelector('[data-log-row]:not([hidden])');
+    if (!row) return null;
+    const jobID = row.dataset.logRow || '';
+    const viewer = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const meta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    return {
+      jobID: jobID,
+      text: viewer ? viewer.textContent : '',
+      meta: meta ? meta.textContent : '',
+      scrollTop: viewer ? viewer.scrollTop : 0,
+      scrollHeight: viewer ? viewer.scrollHeight : 0
+    };
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value || ''));
+    return String(value || '').replace(/["\\]/g, '\\$&');
+  }
+
+  function syncTopbarJobState(panel) {
+    const count = document.getElementById('tracked-jobs-count');
+    const dot = document.getElementById('tracked-status-dot');
+    if (count && panel?.dataset.totalJobs) count.textContent = panel.dataset.totalJobs;
+    if (dot && panel) dot.classList.toggle('active', panel.dataset.hasActiveJob === 'true');
+  }
+
+  async function refreshSelectedJobLog(options) {
+    options = options || {};
     let jobID = selectedLogJobID;
     if (!jobID) {
       const activeRow = document.querySelector('#jobs-panel tr.active-row[data-job-id]');
       if (activeRow) jobID = activeRow.dataset.jobId || '';
     }
     if (!jobID) {
-      panel.hidden = true;
-      viewer.textContent = 'No active job.';
-      meta.textContent = 'Waiting for an active job.';
+      hideLogRows();
       return;
     }
-    panel.hidden = false;
+    const row = document.querySelector('[data-log-row="' + cssEscape(jobID) + '"]');
+    const viewer = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const meta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    if (!row || !viewer || !meta) return;
+    hideLogRows();
+    if (options.restore) row.classList.add('restore-log');
+    row.hidden = false;
+    if (pendingLogSnapshot && pendingLogSnapshot.jobID === jobID) {
+      if (pendingLogSnapshot.meta) meta.textContent = pendingLogSnapshot.meta;
+      if (pendingLogSnapshot.text) viewer.textContent = pendingLogSnapshot.text;
+      if (pendingLogSnapshot.scrollHeight && pendingLogSnapshot.scrollTop < pendingLogSnapshot.scrollHeight - viewer.clientHeight - 12) {
+        viewer.scrollTop = pendingLogSnapshot.scrollTop;
+      } else {
+        viewer.scrollTop = viewer.scrollHeight;
+      }
+    }
+    pendingLogSnapshot = null;
+    if (options.restore) {
+      window.requestAnimationFrame(function() {
+        row.classList.remove('restore-log');
+      });
+    }
     try {
       const res = await fetch('/api/jobs/' + encodeURIComponent(jobID) + '/logs?tail=200');
       if (!res.ok) {
@@ -1863,7 +2028,9 @@
   loadTemplates();
   updateStrategyOrder();
   refreshActiveLog();
-  setInterval(refreshPartials, 5000);
+  setInterval(function() {
+    refreshPartials({ preserveOpenLog: true });
+  }, 5000);
 
   function bulkLangUpdatesExisting() {
     return document.querySelector('input[name="bulk-lang-mode"]:checked')?.value === 'update';
