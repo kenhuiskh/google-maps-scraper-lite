@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -277,7 +278,7 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 		t.Fatalf("strategies status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	body = rec.Body.String()
-	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`, `class="strategy-template-list"`, `type="checkbox" name="template_ids"`, `id="strategy-run-modal"`, `id="strategy-run-template-list"`, `id="strategy-run-template-preview"`} {
+	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`, `class="strategy-template-list"`, `type="checkbox" name="template_ids"`, `id="strategy-run-modal"`, `id="strategy-run-template-list"`, `id="strategy-run-template-preview"`, `id="strategy-run-confirm"`, `data-idle-label="Run Strategy"`, `button-spinner`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("strategies page missing %q: %s", want, body)
 		}
@@ -1026,6 +1027,13 @@ func TestRunStrategyCreatesOrderedJobsWithSource(t *testing.T) {
 	}
 	var launched []startParams
 	launcher := startLauncher(func(_ context.Context, p startParams) error {
+		jobs, err := store.ListJobs(ctx)
+		if err != nil {
+			t.Fatalf("list jobs during launch: %v", err)
+		}
+		if len(jobs) != 2 {
+			t.Fatalf("jobs visible during launch = %d, want 2", len(jobs))
+		}
 		launched = append(launched, p)
 		return nil
 	})
@@ -1055,6 +1063,95 @@ func TestRunStrategyCreatesOrderedJobsWithSource(t *testing.T) {
 	}
 	if sourced != 2 {
 		t.Fatalf("sourced jobs = %d, want 2", sourced)
+	}
+}
+
+func TestRunStrategyCreatesAllTemplateJobs(t *testing.T) {
+	store := newStartStore(t)
+	ctx := context.Background()
+	var templateIDs []string
+	for i := 0; i < 71; i++ {
+		params := `{"Queries":["restaurant ` + strconv.Itoa(i+1) + `"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`
+		id, err := store.SaveJobTemplateJSON(ctx, "", "template "+strconv.Itoa(i+1), params)
+		if err != nil {
+			t.Fatalf("save template %d: %v", i+1, err)
+		}
+		templateIDs = append(templateIDs, id)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "production", "batch", templateIDs)
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/run", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 71 {
+		t.Fatalf("jobs len = %d, want 71", len(jobs))
+	}
+}
+
+func TestRunStrategyPreflightFailureCreatesNoJobs(t *testing.T) {
+	t.Setenv("DSN", "")
+	store := newStartStore(t)
+	ctx := context.Background()
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "database template", `{"Queries":["tea"],"OutputMode":"database","Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	thirdID, err := store.SaveJobTemplateJSON(ctx, "", "pastry", `{"Queries":["pastry"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save third template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "batch", []string{firstID, secondID, thirdID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/run", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `template 2 "database template"`) || !strings.Contains(body, "database output mode requires DSN") {
+		t.Fatalf("error body = %q, want template context and DSN error", body)
+	}
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("jobs len = %d, want 0", len(jobs))
+	}
+}
+
+func TestJobViewUsesTemplateNameAsDisplayTitle(t *testing.T) {
+	view := newJobViewWithQueueState(gmaps.Job{
+		ID:           "job_1",
+		Queries:      []string{"restaurants", "cafes"},
+		Status:       gmaps.JobStatusPending,
+		TemplateName: sql.NullString{String: "Downtown restaurants", Valid: true},
+	}, false)
+	if view.DisplayTitle != "Downtown restaurants" {
+		t.Fatalf("DisplayTitle = %q, want template name", view.DisplayTitle)
+	}
+	if view.QueriesPreview != "restaurants +1" {
+		t.Fatalf("QueriesPreview = %q, want query preview fallback value", view.QueriesPreview)
 	}
 }
 
@@ -1357,7 +1454,7 @@ func TestBuildResumeArgsDatabaseMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build resume args: %v", err)
 	}
-	want := []string{"-job", "job_db", "-state-db", "/data/state.sqlite", "-dsn", "postgres://localhost/test"}
+	want := []string{"-job", "job_db", "-state-db", "/data/state.sqlite"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}

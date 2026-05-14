@@ -65,6 +65,7 @@ type Job struct {
 	UpdatedAt      time.Time
 	FinishedAt     sql.NullTime
 	LastError      sql.NullString
+	TemplateName   sql.NullString
 	Stats          JobStats
 	ExecutionStats JobExecutionStats
 }
@@ -113,6 +114,14 @@ type ClaimedURL struct {
 	JobID    string
 	Position int
 	URL      string
+}
+
+type StrategyJobCreate struct {
+	Queries       []string
+	Config        any
+	TemplateID    string
+	StrategyID    string
+	StrategyRunID string
 }
 
 func OpenJobStore(path string) (*JobStore, error) {
@@ -377,6 +386,80 @@ func (s *JobStore) CreateStartingJobWithSource(ctx context.Context, queries []st
 	return id, tx.Commit()
 }
 
+func (s *JobStore) CreateStrategyJobsWithSource(ctx context.Context, jobs []StrategyJobCreate) ([]string, string, error) {
+	if len(jobs) == 0 {
+		return nil, "", nil
+	}
+	type encodedJob struct {
+		queriesJSON string
+		configJSON  string
+		job         StrategyJobCreate
+	}
+	encoded := make([]encodedJob, 0, len(jobs))
+	for _, job := range jobs {
+		queriesJSON, err := json.Marshal(job.Queries)
+		if err != nil {
+			return nil, "", err
+		}
+		configJSON, err := json.Marshal(job.Config)
+		if err != nil {
+			return nil, "", err
+		}
+		encoded = append(encoded, encodedJob{
+			queriesJSON: string(queriesJSON),
+			configJSON:  string(configJSON),
+			job:         job,
+		})
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback()
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE status IN (?, ?)`,
+		JobStatusStarting, JobStatusRunning).Scan(&active); err != nil {
+		return nil, "", err
+	}
+
+	ids := make([]string, 0, len(encoded))
+	var startedID string
+	var previous time.Time
+	for i, job := range encoded {
+		now := time.Now().UTC()
+		if !previous.IsZero() && !now.After(previous) {
+			now = previous.Add(time.Nanosecond)
+		}
+		previous = now
+		id := newJobID(now)
+		status := JobStatusPending
+		event := "queued"
+		message := "job queued by strategy"
+		if i == 0 && active == 0 {
+			status = JobStatusStarting
+			event = "starting"
+			message = "strategy job accepted by control UI"
+			startedID = id
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs
+			(id, queries_json, config_json, status, template_id, strategy_id, strategy_run_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+			id, job.queriesJSON, job.configJSON, status, job.job.TemplateID, job.job.StrategyID, job.job.StrategyRunID, now, now); err != nil {
+			return nil, "", err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO job_events (job_id, event, message, created_at) VALUES (?, ?, ?, ?)`,
+			id, event, message, now); err != nil {
+			return nil, "", err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO job_execution_stats (job_id, updated_at) VALUES (?, ?)`, id, now); err != nil {
+			return nil, "", err
+		}
+		ids = append(ids, id)
+	}
+	return ids, startedID, tx.Commit()
+}
+
 func (s *JobStore) ClaimNextPendingJob(ctx context.Context) (*Job, error) {
 	now := time.Now().UTC()
 	row := s.db.QueryRowContext(ctx, `UPDATE jobs
@@ -531,11 +614,15 @@ func (s *JobStore) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	var j Job
 	var queriesJSON string
 	var pause int
-	err := s.db.QueryRowContext(ctx, `SELECT id, queries_json, config_json, status, pause_requested,
-		template_id, strategy_id, strategy_run_id,
-		created_at, started_at, updated_at, finished_at, last_error
-		FROM jobs WHERE id = ?`, jobID).Scan(&j.ID, &queriesJSON, &j.ConfigJSON, &j.Status, &pause,
+	err := s.db.QueryRowContext(ctx, `SELECT jobs.id, jobs.queries_json, jobs.config_json, jobs.status, jobs.pause_requested,
+		jobs.template_id, jobs.strategy_id, jobs.strategy_run_id,
+		job_templates.name,
+		jobs.created_at, jobs.started_at, jobs.updated_at, jobs.finished_at, jobs.last_error
+		FROM jobs
+		LEFT JOIN job_templates ON job_templates.id = jobs.template_id
+		WHERE jobs.id = ?`, jobID).Scan(&j.ID, &queriesJSON, &j.ConfigJSON, &j.Status, &pause,
 		&j.TemplateID, &j.StrategyID, &j.StrategyRunID,
+		&j.TemplateName,
 		&j.CreatedAt, &j.StartedAt, &j.UpdatedAt, &j.FinishedAt, &j.LastError)
 	if err != nil {
 		return nil, err

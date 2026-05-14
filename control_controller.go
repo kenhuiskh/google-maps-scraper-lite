@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -786,30 +787,52 @@ func runStrategyFromControl(ctx context.Context, store *gmaps.JobStore, stateDB 
 	var response strategyRunResponse
 	response.Status = "queued"
 	response.StrategyRunID = runID
+	type plannedStrategyJob struct {
+		params startParams
+		create gmaps.StrategyJobCreate
+	}
+	planned := make([]plannedStrategyJob, 0, len(strategy.Templates))
 	for _, tpl := range strategy.Templates {
 		params, err := startParamsFromTemplate(tpl, stateDB)
 		if err != nil {
-			return strategyRunResponse{}, err
+			return strategyRunResponse{}, fmt.Errorf("template %d %q (%s): %w", len(planned)+1, tpl.Name, tpl.ID, err)
 		}
 		params.StrategyID = strategy.ID
 		params.StrategyRunID = runID
-		jobID, err := store.CreateStartingJobWithSource(ctx, params.Queries, scraperConfigFromStartParams(params), tpl.ID, strategy.ID, runID)
-		if err != nil {
-			return strategyRunResponse{}, err
-		}
-		params.JobID = jobID
-		response.JobIDs = append(response.JobIDs, jobID)
-		job, err := store.GetJob(ctx, jobID)
-		if err != nil {
-			return strategyRunResponse{}, err
-		}
-		if job.Status == gmaps.JobStatusStarting && response.StartedJobID == "" {
+		planned = append(planned, plannedStrategyJob{
+			params: params,
+			create: gmaps.StrategyJobCreate{
+				Queries:       params.Queries,
+				Config:        scraperConfigFromStartParams(params),
+				TemplateID:    tpl.ID,
+				StrategyID:    strategy.ID,
+				StrategyRunID: runID,
+			},
+		})
+	}
+	creates := make([]gmaps.StrategyJobCreate, 0, len(planned))
+	for _, job := range planned {
+		creates = append(creates, job.create)
+	}
+	jobIDs, startedID, err := store.CreateStrategyJobsWithSource(ctx, creates)
+	if err != nil {
+		return strategyRunResponse{}, err
+	}
+	response.JobIDs = append(response.JobIDs, jobIDs...)
+	if startedID != "" {
+		response.StartedJobID = startedID
+		response.Status = "started"
+		for i, jobID := range jobIDs {
+			if jobID != startedID {
+				continue
+			}
+			params := planned[i].params
+			params.JobID = jobID
 			if err := launchStart(ctx, params); err != nil {
 				_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
 				return strategyRunResponse{}, err
 			}
-			response.StartedJobID = jobID
-			response.Status = "started"
+			break
 		}
 	}
 	_ = store.MarkStrategyUsed(ctx, strategy.ID)

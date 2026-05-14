@@ -467,6 +467,20 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .button-spinner {
+      display: inline-block;
+      width: 0.9em;
+      height: 0.9em;
+      margin-right: 6px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      vertical-align: -0.12em;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
     .template-preview {
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
@@ -668,7 +682,7 @@
 	      <div class="run-modal-actions">
 	        <div id="strategy-run-status" class="muted tiny" role="status" aria-live="polite"></div>
 	        <button type="button" onclick="closeStrategyRunModal()">Cancel</button>
-	        <button id="strategy-run-confirm" type="button" class="action-primary" onclick="confirmStrategyRun()">Run Strategy</button>
+	        <button id="strategy-run-confirm" type="button" class="action-primary" onclick="confirmStrategyRun()" data-idle-label="Run Strategy">Run Strategy</button>
 	      </div>
 	    </div>
 	  </dialog>
@@ -1195,9 +1209,10 @@
 {{range .Jobs}}
   <tr data-job-id="{{.ID}}" class="{{if .Active}}active-row{{end}}">
     <td>
-      <div class="job-title">{{.QueriesPreview}}</div>
+      <div class="job-title">{{.DisplayTitle}}</div>
       <div class="job-meta">
         <code>{{.ID}}</code>
+        {{if ne .DisplayTitle .QueriesPreview}}<span>{{.QueriesPreview}}</span>{{end}}
         <span>{{.OutputMode}}</span>
         <span>{{.Lang}}</span>
         {{if .TemplateID}}<span>tpl {{.TemplateID}}</span>{{end}}
@@ -1700,7 +1715,11 @@
     if (title) title.textContent = strategy.Name || 'Confirm Strategy';
     if (subtitle) subtitle.textContent = (strategy.ID || '') + ' - ' + templates.length + ' templates';
     if (status) status.textContent = '';
-    if (confirm) confirm.disabled = templates.length === 0;
+    if (confirm) {
+      confirm.disabled = templates.length === 0;
+      confirm.innerHTML = confirm.dataset.idleLabel || 'Run Strategy';
+      confirm.removeAttribute('aria-busy');
+    }
     if (list) {
       list.innerHTML = '';
       if (!templates.length) {
@@ -1759,15 +1778,27 @@
     if (!pendingStrategyRun?.ID) return;
     const status = document.getElementById('strategy-run-status');
     const confirm = document.getElementById('strategy-run-confirm');
-    if (status) status.textContent = 'Starting strategy...';
-    if (confirm) confirm.disabled = true;
+    if (status) status.textContent = 'Validating templates and creating jobs...';
+    if (confirm) {
+      confirm.disabled = true;
+      confirm.setAttribute('aria-busy', 'true');
+      confirm.innerHTML = '<span class="button-spinner" aria-hidden="true"></span>Starting...';
+    }
     try {
       const payload = await fetchJSON('/api/strategies/' + encodeURIComponent(pendingStrategyRun.ID) + '/run', { method: 'POST' });
       if (status) status.textContent = (payload.status === 'started' ? 'Started ' : 'Queued ') + payload.job_ids.length + ' jobs.';
+      if (confirm) {
+        confirm.removeAttribute('aria-busy');
+        confirm.innerHTML = confirm.dataset.idleLabel || 'Run Strategy';
+      }
       await refreshPartials();
     } catch (err) {
       if (status) status.textContent = 'Error: ' + err.message;
-      if (confirm) confirm.disabled = false;
+      if (confirm) {
+        confirm.disabled = false;
+        confirm.removeAttribute('aria-busy');
+        confirm.innerHTML = confirm.dataset.idleLabel || 'Run Strategy';
+      }
     }
   }
 
