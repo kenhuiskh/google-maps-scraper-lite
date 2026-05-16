@@ -154,6 +154,54 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
+	mux.HandleFunc("/api/config/export", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		templateIDs, strategyIDs := parseConfigExportSelection(r)
+		cfg, err := store.ExportReusableConfigSelection(r.Context(), templateIDs, strategyIDs)
+		if err != nil {
+			if errors.Is(err, gmaps.ErrConfigExportInvalid) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		filename := "scraper-config-" + time.Now().UTC().Format("20060102-150405") + ".json"
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		writeJSON(w, cfg)
+	})
+	mux.HandleFunc("/api/config/import", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		mode := gmaps.ConfigImportMode(strings.TrimSpace(r.URL.Query().Get("collision")))
+		if mode == "" {
+			mode = gmaps.ConfigImportRename
+		}
+		var cfg gmaps.ReusableConfigExport
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		summary, err := store.ImportReusableConfig(r.Context(), cfg, mode)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, gmaps.ErrConfigImportInvalid) {
+				status = http.StatusBadRequest
+			} else if errors.Is(err, gmaps.ErrConfigImportConflict) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, summary)
+	})
 	mux.HandleFunc("/api/job-templates", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -763,6 +811,26 @@ func parseStrategySaveRequest(r *http.Request) (id, name, notes string, template
 		}
 	}
 	return strings.TrimSpace(r.FormValue("id")), strings.TrimSpace(r.FormValue("name")), strings.TrimSpace(r.FormValue("notes")), rawIDs, nil
+}
+
+func parseConfigExportSelection(r *http.Request) (templateIDs, strategyIDs []string) {
+	q := r.URL.Query()
+	templateIDs = splitQueryIDs(q["template_id"])
+	strategyIDs = splitQueryIDs(q["strategy_id"])
+	return templateIDs, strategyIDs
+}
+
+func splitQueryIDs(values []string) []string {
+	var ids []string
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				ids = append(ids, part)
+			}
+		}
+	}
+	return ids
 }
 
 type strategyRunResponse struct {

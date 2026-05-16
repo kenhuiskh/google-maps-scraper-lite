@@ -449,6 +449,13 @@
       gap: 12px;
       align-items: start;
     }
+    .config-transfer-actions {
+      display: grid;
+      grid-template-columns: minmax(160px, auto) minmax(220px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .import-summary { margin-top: 10px; font-size: 0.86rem; }
     .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
     .stat-cell { padding: 9px 11px; }
     .stat-value { margin-top: 3px; font-size: 1.05rem; font-weight: 850; color: var(--text); }
@@ -549,6 +556,134 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .export-modal {
+      width: min(1080px, calc(100vw - 32px));
+    }
+    .export-modal-body {
+      grid-template-columns: minmax(280px, 0.85fr) minmax(280px, 0.85fr) minmax(320px, 1fr);
+    }
+    .export-modal-pane {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 8px;
+    }
+    .export-modal-pane.selected-pane {
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .export-tabs {
+      display: inline-grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #f8fafc;
+    }
+    .export-tabs button {
+      border-color: transparent;
+      padding: 6px 9px;
+      background: transparent;
+      font-size: 0.8rem;
+    }
+    .export-tabs button.active {
+      border-color: var(--border);
+      background: #fff;
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+    .export-list {
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      max-height: 420px;
+      min-height: 180px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .export-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+      text-align: left;
+    }
+    button.export-row { cursor: pointer; }
+    button.export-row:hover,
+    button.export-row:focus-visible,
+    .export-row.selected {
+      border-color: #b7c8e1;
+      background: #f8fbff;
+    }
+    .export-row code {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .export-selected-groups {
+      display: grid;
+      gap: 10px;
+      max-height: 484px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .export-selected-group {
+      display: grid;
+      gap: 7px;
+      align-content: start;
+    }
+    .export-preview {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 10px;
+      min-height: 0;
+    }
+    .export-counts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+    .export-count {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      background: #f8fafc;
+    }
+    .export-count strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 1.05rem;
+      color: var(--text);
+    }
+    .export-preview-list {
+      display: grid;
+      gap: 8px;
+      max-height: 178px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .export-preview-strategy {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      background: #fff;
+    }
+    .export-preview-strategy ol {
+      margin: 6px 0 0 20px;
+      padding: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .export-query-preview {
+      min-height: 96px;
+      max-height: 160px;
+    }
     .button-spinner {
       display: inline-block;
       width: 0.9em;
@@ -624,12 +759,13 @@
       .page-head { align-items: flex-start; flex-direction: column; }
       .page-meta { justify-content: flex-start; }
       .stat-strip { grid-template-columns: 1fr; }
-      .field-row, .item-grid, .template-row { grid-template-columns: 1fr; }
+      .field-row, .item-grid, .template-row, .config-transfer-actions { grid-template-columns: 1fr; }
       .template-actions { justify-content: flex-start; }
       .panel-header { align-items: flex-start; flex-direction: column; }
       .pager { align-items: flex-start; flex-direction: column; }
-      .run-modal-body { grid-template-columns: 1fr; overflow: auto; }
+      .run-modal-body, .export-modal-body { grid-template-columns: 1fr; overflow: auto; }
       .modal-template-list { max-height: 220px; }
+      .export-list, .export-selected-groups { max-height: 260px; }
       .template-preview pre { min-height: 180px; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -823,6 +959,37 @@
 </div>
 
 <div class="dashboard-grid">
+  <section class="panel" aria-labelledby="config-transfer-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="config-transfer-title" class="panel-title">Import / Export</h2>
+        <div class="muted tiny">Move templates and strategies between state databases.</div>
+      </div>
+      <button type="button" class="secondary-button" onclick="openConfigExportModal()">Export JSON</button>
+    </div>
+    <div class="panel-body">
+      <form id="config-import-form">
+        <div class="config-transfer-actions">
+          <div class="field">
+            <label for="config-import-collision">Collision behavior</label>
+            <select id="config-import-collision" name="collision">
+              <option value="rename" selected>Rename</option>
+              <option value="skip">Skip</option>
+              <option value="overwrite">Overwrite</option>
+              <option value="duplicate">Duplicate</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="config-import-file">Import JSON</label>
+            <input id="config-import-file" name="config_file" type="file" accept="application/json,.json" required>
+          </div>
+          <button type="submit" class="secondary-button">Import</button>
+        </div>
+        <div id="config-import-result" class="import-summary" role="status" aria-live="polite"></div>
+      </form>
+    </div>
+  </section>
+
   <section class="panel" aria-labelledby="templates-title">
     <div class="panel-header">
       <div>
@@ -861,6 +1028,93 @@
     </div>
   </section>
 </div>
+
+<dialog id="config-export-modal" class="run-modal export-modal">
+  <div class="run-modal-shell">
+    <div class="run-modal-header">
+      <div>
+        <h2 class="panel-title">Export JSON</h2>
+        <div id="config-export-subtitle" class="muted tiny">Choose strategies and templates to export.</div>
+      </div>
+      <button type="button" onclick="closeConfigExportModal()" aria-label="Close export options">Close</button>
+    </div>
+    <div class="run-modal-body export-modal-body">
+      <div class="export-modal-pane">
+        <div class="split-actions">
+          <div class="export-tabs" role="tablist" aria-label="Available export items">
+            <button id="config-export-tab-strategies" type="button" class="active" onclick="setConfigExportTab('strategy')" role="tab" aria-selected="true">Strategies</button>
+            <button id="config-export-tab-templates" type="button" onclick="setConfigExportTab('template')" role="tab" aria-selected="false">Templates</button>
+          </div>
+          <button type="button" class="secondary-button" onclick="clearConfigExportSelection()">Clear</button>
+        </div>
+        <input id="config-export-search" type="search" placeholder="Search available items" oninput="renderConfigExportModal()" aria-label="Search available export items">
+        <div id="config-export-available" class="export-list" data-export-active-tab="strategy">
+          <div class="empty-state">No export items found.</div>
+        </div>
+      </div>
+      <div class="export-modal-pane selected-pane">
+        <div>
+          <div class="panel-title">Selected</div>
+          <div class="muted tiny">Strategy templates are included automatically.</div>
+        </div>
+        <div class="export-selected-groups">
+          <div class="export-selected-group">
+            <div class="muted tiny">Strategies</div>
+            <div id="config-export-selected-strategies" class="export-list">
+              <div class="empty-state">No strategies selected.</div>
+            </div>
+          </div>
+          <div class="export-selected-group">
+            <div class="muted tiny">Templates</div>
+            <div id="config-export-selected-templates" class="export-list">
+              <div class="empty-state">No templates selected.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="export-preview">
+        <div>
+          <div class="panel-title">Preview</div>
+          <div id="config-export-default-note" class="muted tiny">No selection exports everything.</div>
+        </div>
+        <div class="export-counts">
+          <div class="export-count"><span class="muted tiny">Strategies</span><strong id="config-export-count-strategies">0</strong></div>
+          <div class="export-count"><span class="muted tiny">Direct templates</span><strong id="config-export-count-direct-templates">0</strong></div>
+          <div class="export-count"><span class="muted tiny">Auto templates</span><strong id="config-export-count-auto-templates">0</strong></div>
+          <div class="export-count"><span class="muted tiny">Total templates</span><strong id="config-export-count-total-templates">0</strong></div>
+        </div>
+        <div>
+          <div class="muted tiny">Strategy template order</div>
+          <div id="config-export-strategy-preview" class="export-preview-list">
+            <div class="empty-state">No strategies selected.</div>
+          </div>
+        </div>
+        <details>
+          <summary class="muted tiny">Query preview</summary>
+          <div class="template-preview">
+            <div class="template-preview-head">GET /api/config/export</div>
+            <pre id="config-export-query-preview" class="export-query-preview">No query parameters. Full export.</pre>
+          </div>
+        </details>
+      </div>
+      <div id="config-export-catalog" hidden>
+        {{range .Strategies}}
+          <div data-export-kind="strategy" data-id="{{.ID}}" data-name="{{.Name}}" data-notes="{{.Notes}}">
+            {{range .Templates}}<span data-template-id="{{.ID}}" data-template-name="{{.Name}}"></span>{{end}}
+          </div>
+        {{end}}
+        {{range .Templates}}
+          <div data-export-kind="template" data-id="{{.ID}}" data-name="{{.Name}}" data-param-size="{{len .ParamsJSON}}"></div>
+        {{end}}
+      </div>
+    </div>
+    <div class="run-modal-actions">
+      <div id="config-export-status" class="muted tiny" role="status" aria-live="polite"></div>
+      <button type="button" onclick="closeConfigExportModal()">Cancel</button>
+      <button id="config-export-download" type="button" class="action-primary" onclick="exportSelectedConfig()">Download JSON</button>
+    </div>
+  </div>
+</dialog>
 {{end}}
 
 {{define "template-editor-page"}}
@@ -1819,6 +2073,297 @@
     } catch (err) {
       alert('Error: ' + err.message);
     }
+  }
+
+  function importSummaryText(summary) {
+    const t = summary.templates || {};
+    const s = summary.strategies || {};
+    return [
+      'Templates: ' + (t.created || 0) + ' created, ' + (t.updated || 0) + ' updated, ' + (t.skipped || 0) + ' skipped, ' + (t.renamed || 0) + ' renamed, ' + (t.duplicated || 0) + ' duplicated.',
+      'Strategies: ' + (s.created || 0) + ' created, ' + (s.updated || 0) + ' updated, ' + (s.skipped || 0) + ' skipped, ' + (s.renamed || 0) + ' renamed, ' + (s.duplicated || 0) + ' duplicated.'
+    ].join(' ');
+  }
+
+  const configExportState = {
+    activeTab: 'strategy',
+    selectedStrategies: new Set(),
+    selectedTemplates: new Set(),
+    catalog: null
+  };
+
+  function escapeHTML(value) {
+    return String(value || '').replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+
+  function jsArg(value) {
+    return escapeHTML(JSON.stringify(String(value || '')));
+  }
+
+  function getConfigExportCatalog() {
+    if (configExportState.catalog) return configExportState.catalog;
+    const root = document.getElementById('config-export-catalog');
+    const templates = [];
+    const strategies = [];
+    const templateMap = new Map();
+    const strategyMap = new Map();
+    if (!root) {
+      configExportState.catalog = { templates, strategies, templateMap, strategyMap };
+      return configExportState.catalog;
+    }
+    root.querySelectorAll('[data-export-kind="template"]').forEach(function(row) {
+      const template = {
+        id: row.dataset.id || '',
+        name: row.dataset.name || '',
+        paramSize: Number(row.dataset.paramSize || 0)
+      };
+      templates.push(template);
+      templateMap.set(template.id, template);
+    });
+    root.querySelectorAll('[data-export-kind="strategy"]').forEach(function(row) {
+      const refs = Array.from(row.querySelectorAll('[data-template-id]')).map(function(ref) {
+        return {
+          id: ref.dataset.templateId || '',
+          name: ref.dataset.templateName || ''
+        };
+      });
+      const strategy = {
+        id: row.dataset.id || '',
+        name: row.dataset.name || '',
+        notes: row.dataset.notes || '',
+        templates: refs
+      };
+      strategies.push(strategy);
+      strategyMap.set(strategy.id, strategy);
+    });
+    configExportState.catalog = { templates, strategies, templateMap, strategyMap };
+    return configExportState.catalog;
+  }
+
+  function configExportEffectiveSelection() {
+    const catalog = getConfigExportCatalog();
+    const hasExplicitSelection = configExportState.selectedStrategies.size > 0 || configExportState.selectedTemplates.size > 0;
+    const strategyIDs = hasExplicitSelection ? Array.from(configExportState.selectedStrategies) : catalog.strategies.map(function(strategy) { return strategy.id; });
+    const directTemplateIDs = hasExplicitSelection ? Array.from(configExportState.selectedTemplates) : catalog.templates.map(function(template) { return template.id; });
+    const autoTemplateIDs = new Set();
+    strategyIDs.forEach(function(strategyID) {
+      const strategy = catalog.strategyMap.get(strategyID);
+      (strategy?.templates || []).forEach(function(template) {
+        autoTemplateIDs.add(template.id);
+      });
+    });
+    const totalTemplateIDs = new Set(directTemplateIDs);
+    autoTemplateIDs.forEach(function(id) { totalTemplateIDs.add(id); });
+    return { hasExplicitSelection, strategyIDs, directTemplateIDs, autoTemplateIDs, totalTemplateIDs };
+  }
+
+  function openConfigExportModal() {
+    const modal = document.getElementById('config-export-modal');
+    if (!modal) return exportSelectedConfig();
+    renderConfigExportModal();
+    if (typeof modal.showModal === 'function') {
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', 'open');
+    }
+  }
+
+  function closeConfigExportModal() {
+    const modal = document.getElementById('config-export-modal');
+    if (!modal) return;
+    if (typeof modal.close === 'function') {
+      modal.close();
+    } else {
+      modal.removeAttribute('open');
+    }
+  }
+
+  function setConfigExportTab(tab) {
+    configExportState.activeTab = tab === 'template' ? 'template' : 'strategy';
+    renderConfigExportModal();
+  }
+
+  function clearConfigExportSelection() {
+    configExportState.selectedStrategies.clear();
+    configExportState.selectedTemplates.clear();
+    renderConfigExportModal();
+  }
+
+  function toggleConfigExportItem(kind, id) {
+    const set = kind === 'template' ? configExportState.selectedTemplates : configExportState.selectedStrategies;
+    if (set.has(id)) {
+      set.delete(id);
+    } else {
+      set.add(id);
+    }
+    renderConfigExportModal();
+  }
+
+  function removeConfigExportStrategy(id) {
+    configExportState.selectedStrategies.delete(id);
+    renderConfigExportModal();
+  }
+
+  function removeConfigExportTemplate(id) {
+    configExportState.selectedTemplates.delete(id);
+    renderConfigExportModal();
+  }
+
+  function exportRowHTML(item, kind, selected) {
+    const meta = kind === 'strategy'
+      ? '<span>' + item.templates.length + ' templates</span>'
+      : '<span>' + item.paramSize + ' bytes JSON</span>';
+    return '<button type="button" class="export-row' + (selected ? ' selected' : '') + '" onclick="toggleConfigExportItem(' + jsArg(kind) + ', ' + jsArg(item.id) + ')">' +
+      '<span><span class="item-title">' + escapeHTML(item.name || item.id) + '</span><span class="item-meta"><code>' + escapeHTML(item.id) + '</code>' + meta + '</span></span>' +
+      '<span class="status status-' + (selected ? 'running' : 'unknown') + '">' + (selected ? 'Selected' : 'Add') + '</span>' +
+      '</button>';
+  }
+
+  function selectedRowHTML(item, removeCall, locked) {
+    return '<div class="export-row">' +
+      '<span><span class="item-title">' + escapeHTML(item.name || item.id) + '</span><span class="item-meta"><code>' + escapeHTML(item.id) + '</code>' + (locked ? '<span>Included by strategy</span>' : '') + '</span></span>' +
+      (locked ? '<span class="status status-pending">Auto</span>' : '<button type="button" class="secondary-button" onclick="' + removeCall + '">Remove</button>') +
+      '</div>';
+  }
+
+  function renderConfigExportModal() {
+    const catalog = getConfigExportCatalog();
+    const effective = configExportEffectiveSelection();
+    const available = document.getElementById('config-export-available');
+    const search = (document.getElementById('config-export-search')?.value || '').trim().toLowerCase();
+    document.getElementById('config-export-tab-strategies')?.classList.toggle('active', configExportState.activeTab === 'strategy');
+    document.getElementById('config-export-tab-templates')?.classList.toggle('active', configExportState.activeTab === 'template');
+    document.getElementById('config-export-tab-strategies')?.setAttribute('aria-selected', configExportState.activeTab === 'strategy' ? 'true' : 'false');
+    document.getElementById('config-export-tab-templates')?.setAttribute('aria-selected', configExportState.activeTab === 'template' ? 'true' : 'false');
+    if (available) {
+      const source = configExportState.activeTab === 'template' ? catalog.templates : catalog.strategies;
+      const kind = configExportState.activeTab;
+      const filtered = source.filter(function(item) {
+        return !search || (item.name || '').toLowerCase().includes(search) || (item.id || '').toLowerCase().includes(search);
+      });
+      available.innerHTML = filtered.length
+        ? filtered.map(function(item) {
+          const selected = kind === 'template' ? configExportState.selectedTemplates.has(item.id) : configExportState.selectedStrategies.has(item.id);
+          return exportRowHTML(item, kind, selected);
+        }).join('')
+        : '<div class="empty-state">No export items found.</div>';
+    }
+
+    const selectedStrategies = document.getElementById('config-export-selected-strategies');
+    if (selectedStrategies) {
+      const rows = Array.from(configExportState.selectedStrategies).map(function(id) {
+        const strategy = catalog.strategyMap.get(id) || { id: id, name: id, templates: [] };
+        return selectedRowHTML(strategy, 'removeConfigExportStrategy(' + jsArg(id) + ')', false);
+      });
+      selectedStrategies.innerHTML = rows.length ? rows.join('') : '<div class="empty-state">No strategies selected.</div>';
+    }
+
+    const selectedTemplates = document.getElementById('config-export-selected-templates');
+    if (selectedTemplates) {
+      const manualRows = Array.from(configExportState.selectedTemplates).map(function(id) {
+        const template = catalog.templateMap.get(id) || { id: id, name: id };
+        return selectedRowHTML(template, 'removeConfigExportTemplate(' + jsArg(id) + ')', false);
+      });
+      const autoRows = Array.from(effective.autoTemplateIDs).filter(function(id) {
+        return !configExportState.selectedTemplates.has(id);
+      }).map(function(id) {
+        const template = catalog.templateMap.get(id) || { id: id, name: id };
+        return selectedRowHTML(template, '', true);
+      });
+      const rows = manualRows.concat(autoRows);
+      selectedTemplates.innerHTML = rows.length ? rows.join('') : '<div class="empty-state">No templates selected.</div>';
+    }
+
+    const strategyCount = document.getElementById('config-export-count-strategies');
+    const directCount = document.getElementById('config-export-count-direct-templates');
+    const autoCount = document.getElementById('config-export-count-auto-templates');
+    const totalCount = document.getElementById('config-export-count-total-templates');
+    if (strategyCount) strategyCount.textContent = String(effective.strategyIDs.length);
+    if (directCount) directCount.textContent = String(effective.directTemplateIDs.length);
+    if (autoCount) autoCount.textContent = String(effective.autoTemplateIDs.size);
+    if (totalCount) totalCount.textContent = String(effective.totalTemplateIDs.size);
+
+    const note = document.getElementById('config-export-default-note');
+    if (note) note.textContent = effective.hasExplicitSelection ? 'Download uses the selected IDs below.' : 'No selection exports all templates and strategies.';
+
+    const preview = document.getElementById('config-export-strategy-preview');
+    if (preview) {
+      const rows = effective.strategyIDs.map(function(id) {
+        const strategy = catalog.strategyMap.get(id);
+        if (!strategy) return '';
+        const templates = strategy.templates.length
+          ? '<ol>' + strategy.templates.map(function(template) { return '<li>' + escapeHTML(template.name || template.id) + ' <code>' + escapeHTML(template.id) + '</code></li>'; }).join('') + '</ol>'
+          : '<div class="muted tiny">No templates referenced.</div>';
+        return '<div class="export-preview-strategy"><div class="item-title">' + escapeHTML(strategy.name || strategy.id) + '</div><div class="item-meta"><code>' + escapeHTML(strategy.id) + '</code><span>' + strategy.templates.length + ' templates</span></div>' + templates + '</div>';
+      }).filter(Boolean);
+      preview.innerHTML = rows.length ? rows.join('') : '<div class="empty-state">No strategies selected.</div>';
+    }
+
+    const params = buildConfigExportParams(effective.hasExplicitSelection);
+    const queryPreview = document.getElementById('config-export-query-preview');
+    if (queryPreview) {
+      const query = params.toString();
+      queryPreview.textContent = '/api/config/export' + (query ? '?' + query : '\n\nNo query parameters. Full export.');
+    }
+  }
+
+  function buildConfigExportParams(onlyExplicit) {
+    const params = new URLSearchParams();
+    if (!onlyExplicit) return params;
+    Array.from(configExportState.selectedTemplates).forEach(function(id) {
+      params.append('template_id', id);
+    });
+    Array.from(configExportState.selectedStrategies).forEach(function(id) {
+      params.append('strategy_id', id);
+    });
+    return params;
+  }
+
+  function exportSelectedConfig() {
+    const effective = configExportEffectiveSelection();
+    const params = buildConfigExportParams(effective.hasExplicitSelection);
+    const query = params.toString();
+    window.location.href = '/api/config/export' + (query ? '?' + query : '');
+  }
+
+  const configImportForm = document.getElementById('config-import-form');
+  if (configImportForm) {
+    configImportForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('config-import-result');
+      const fileInput = document.getElementById('config-import-file');
+      const collision = document.getElementById('config-import-collision')?.value || 'rename';
+      if (result) {
+        result.style.color = '#475569';
+        result.textContent = '';
+      }
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        if (result) {
+          result.style.color = '#b42318';
+          result.textContent = 'Choose a JSON file to import.';
+        }
+        return;
+      }
+      try {
+        const body = await file.text();
+        const summary = await fetchJSON('/api/config/import?collision=' + encodeURIComponent(collision), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        });
+        if (result) {
+          result.style.color = '#027a48';
+          result.textContent = importSummaryText(summary);
+        }
+      } catch (err) {
+        if (result) {
+          result.style.color = '#b42318';
+          result.textContent = 'Error: ' + err.message;
+        }
+      }
+    });
   }
 
   const templateForm = document.getElementById('template-form');

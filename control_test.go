@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -231,12 +232,12 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 		t.Fatalf("templates status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Job Templates", `class="nav-link active" href="/templates"`, `href="/templates/editor"`, `href="/templates/editor?template_id=` + templateID + `"`, `href="/templates/editor?template_id=` + templateID + `&mode=copy"`, `data-template-row="` + templateID + `"`} {
+	for _, want := range []string{"Job Templates", `class="nav-link active" href="/templates"`, `id="config-import-form"`, `onclick="openConfigExportModal()"`, `id="config-export-modal"`, `id="config-export-available"`, `id="config-export-search"`, `id="config-export-selected-strategies"`, `id="config-export-selected-templates"`, `id="config-export-strategy-preview"`, `id="config-export-download"`, `onclick="exportSelectedConfig()"`, `data-export-kind="strategy" data-id="` + strategyID + `"`, `data-export-kind="template" data-id="` + templateID + `"`, `data-template-id="` + templateID + `"`, `id="config-import-collision"`, `<option value="rename" selected>Rename</option>`, `href="/templates/editor"`, `href="/templates/editor?template_id=` + templateID + `"`, `href="/templates/editor?template_id=` + templateID + `&mode=copy"`, `data-template-row="` + templateID + `"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("templates page missing %q: %s", want, body)
 		}
 	}
-	for _, notWant := range []string{`id="start-form"`, `id="template-form"`} {
+	for _, notWant := range []string{`id="start-form"`, `id="template-form"`, `name="export_strategy_ids"`, `name="export_template_ids"`} {
 		if strings.Contains(body, notWant) {
 			t.Fatalf("templates list page should not include %q: %s", notWant, body)
 		}
@@ -304,6 +305,143 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 	}
 	if strings.Contains(body, `id="jobs-panel"`) {
 		t.Fatalf("strategies page should not render job queue: %s", body)
+	}
+}
+
+func TestControlConfigExportEndpoint(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	templateID, err := store.SaveJobTemplateJSON(ctx, "", "coffee template", `{"Queries":["coffee"]}`)
+	if err != nil {
+		t.Fatalf("save template: %v", err)
+	}
+	otherID, err := store.SaveJobTemplateJSON(ctx, "", "tea template", `{"Queries":["tea"]}`)
+	if err != nil {
+		t.Fatalf("save other template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "", []string{templateID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config/export", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") || !strings.Contains(got, "scraper-config-") {
+		t.Fatalf("Content-Disposition = %q, want export attachment", got)
+	}
+	var cfg gmaps.ReusableConfigExport
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if cfg.Version != gmaps.ConfigExportVersion || len(cfg.Templates) != 2 || len(cfg.Strategies) != 1 {
+		t.Fatalf("export = %#v, want version with template and strategy", cfg)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/export?strategy_id="+url.QueryEscape(strategyID), nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered strategy status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode filtered strategy export: %v", err)
+	}
+	if len(cfg.Strategies) != 1 || len(cfg.Templates) != 1 || cfg.Templates[0].ID != templateID {
+		t.Fatalf("filtered strategy export = %#v, want selected strategy and referenced template", cfg)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/export?template_id="+url.QueryEscape(otherID), nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered template status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode filtered template export: %v", err)
+	}
+	if len(cfg.Templates) != 1 || cfg.Templates[0].ID != otherID || len(cfg.Strategies) != 0 {
+		t.Fatalf("filtered template export = %#v, want selected template only", cfg)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/export?strategy_id=str_missing", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing strategy status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestControlConfigImportEndpoint(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/import", strings.NewReader("{"))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	cfg := gmaps.ReusableConfigExport{
+		Version: gmaps.ConfigExportVersion,
+		Templates: []gmaps.ReusableConfigTemplate{{
+			ID:         "tpl_import",
+			Name:       "imported template",
+			ParamsJSON: `{"Queries":["coffee"]}`,
+		}},
+		Strategies: []gmaps.ReusableConfigStrategy{{
+			ID:          "str_import",
+			Name:        "imported strategy",
+			TemplateIDs: []string{"tpl_import"},
+		}},
+	}
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/config/import?collision=rename", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var summary gmaps.ConfigImportSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.Templates.Created != 1 || summary.Strategies.Created != 1 {
+		t.Fatalf("summary = %#v, want created template and strategy", summary)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/config/import?collision=bogus", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported mode status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	cfg.Strategies[0].TemplateIDs = []string{"tpl_missing"}
+	body, _ = json.Marshal(cfg)
+	req = httptest.NewRequest(http.MethodPost, "/api/config/import", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing reference status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 }
 
