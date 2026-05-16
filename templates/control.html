@@ -119,6 +119,24 @@
     .nav-link:hover { background: #f1f5f9; color: var(--text); }
     .nav-link.active { background: var(--primary); color: #fff; }
     .topbar-meta { color: var(--muted); font-size: 0.82rem; text-align: right; white-space: nowrap; }
+    .tracked-status {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: #94a3b8;
+      box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.16);
+    }
+    .status-dot.active {
+      background: #16a34a;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.16);
+    }
     .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px 28px; }
     .page-head {
       display: flex;
@@ -129,19 +147,12 @@
     }
     .page-title { font-size: 1.24rem; font-weight: 850; letter-spacing: 0; }
     .page-meta { color: var(--muted); font-size: 0.84rem; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-    .summary-grid {
-      display: grid;
-      grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(120px, 1fr));
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-    .metric-card, .panel, .stat-cell, .compact-item {
+    .panel, .stat-cell, .compact-item {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
     }
-    .metric-card { padding: 9px 11px; min-height: 70px; }
     .metric-label {
       color: var(--muted);
       font-size: 0.76rem;
@@ -150,8 +161,6 @@
       letter-spacing: 0;
     }
     .metric-value { margin-top: 3px; font-size: 1.32rem; font-weight: 850; color: var(--text); letter-spacing: 0; }
-    .metric-note { margin-top: 3px; color: var(--muted); font-size: 0.78rem; overflow-wrap: anywhere; }
-    .active-card { border-color: #b7c8e1; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
     .dashboard-grid { display: grid; gap: 10px; }
     .management-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 14px; align-items: start; }
     .templates-workspace { display: grid; grid-template-columns: minmax(300px, 0.78fr) minmax(360px, 1fr); gap: 12px; align-items: start; }
@@ -255,7 +264,13 @@
     .result { min-height: 20px; font-size: 0.86rem; }
     #start-result, #template-result, #strategy-result { min-height: 20px; font-size: 0.86rem; }
     .table-wrap { overflow-x: auto; max-width: 100%; }
-    table { border-collapse: collapse; width: 100%; min-width: 920px; }
+    table { border-collapse: collapse; width: 100%; min-width: 1220px; table-layout: fixed; }
+    .job-col { width: 360px; }
+    .status-col { width: 130px; }
+    .progress-col { width: 240px; }
+    .analytics-col { width: 210px; }
+    .updated-col { width: 132px; }
+    .actions-col { width: 150px; }
     th, td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
     th {
       color: var(--muted);
@@ -268,7 +283,7 @@
     tbody tr:hover { background: #f8fafc; }
     tbody tr.active-row { background: #f8fbff; }
     .job-title, .item-title { font-weight: 850; color: var(--text); overflow-wrap: anywhere; }
-    .job-title { max-width: 340px; }
+    .job-title { max-width: 100%; }
     .job-meta, .item-meta {
       margin-top: 4px;
       display: flex;
@@ -277,6 +292,31 @@
       color: var(--muted);
       font-size: 0.8rem;
     }
+    .job-meta { gap: 5px; }
+    .meta-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 4px;
+      min-width: 0;
+      max-width: 100%;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: #f8fafc;
+    }
+    .meta-label {
+      color: var(--muted-2);
+      font-size: 0.68rem;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+    .meta-value {
+      min-width: 0;
+      color: #334155;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .meta-value code { font-size: 0.74rem; }
     .raw-status { display: block; margin-top: 5px; font-size: 0.76rem; }
     .progress-line { display: flex; justify-content: space-between; gap: 12px; color: #334155; font-size: 0.84rem; }
     .progress-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
@@ -284,11 +324,26 @@
     .progress-stats { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 0.76rem; }
     .analytics-compact { display: grid; gap: 3px; color: var(--muted); font-size: 0.76rem; }
     .analytics-compact strong { color: #334155; font-weight: 850; }
-    .log-panel { margin-top: 10px; }
+    .log-row td {
+      padding: 0;
+      border-bottom: 1px solid var(--border-strong);
+      background: #f8fafc;
+    }
+    .log-inline {
+      margin: 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+    .log-row:not([hidden]):not(.restore-log) .log-inline { animation: log-slide 160ms ease-out; }
+    @keyframes log-slide {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
     .log-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .log-viewer {
-      min-height: 180px;
-      max-height: 320px;
+      min-height: 260px;
+      max-height: 420px;
       overflow: auto;
       padding: 10px 12px;
       border-top: 1px solid var(--border);
@@ -303,6 +358,33 @@
     .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.8rem; overflow-wrap: anywhere; }
     .actions, .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .actions button, .item-actions button { min-height: 30px; padding: 5px 9px; }
+    .icon-button {
+      width: 32px;
+      min-width: 32px;
+      padding: 5px;
+      display: inline-grid;
+      place-items: center;
+    }
+    .icon-button svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     .actions .action-refresh { color: #334155; }
     .actions .action-primary, .item-actions .action-primary {
       background: var(--primary);
@@ -367,6 +449,13 @@
       gap: 12px;
       align-items: start;
     }
+    .config-transfer-actions {
+      display: grid;
+      grid-template-columns: minmax(160px, auto) minmax(220px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .import-summary { margin-top: 10px; font-size: 0.86rem; }
     .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
     .stat-cell { padding: 9px 11px; }
     .stat-value { margin-top: 3px; font-size: 1.05rem; font-weight: 850; color: var(--text); }
@@ -467,6 +556,148 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .export-modal {
+      width: min(1080px, calc(100vw - 32px));
+    }
+    .export-modal-body {
+      grid-template-columns: minmax(280px, 0.85fr) minmax(280px, 0.85fr) minmax(320px, 1fr);
+    }
+    .export-modal-pane {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 8px;
+    }
+    .export-modal-pane.selected-pane {
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .export-tabs {
+      display: inline-grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #f8fafc;
+    }
+    .export-tabs button {
+      border-color: transparent;
+      padding: 6px 9px;
+      background: transparent;
+      font-size: 0.8rem;
+    }
+    .export-tabs button.active {
+      border-color: var(--border);
+      background: #fff;
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+    .export-list {
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      max-height: 420px;
+      min-height: 180px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .export-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+      text-align: left;
+    }
+    button.export-row { cursor: pointer; }
+    button.export-row:hover,
+    button.export-row:focus-visible,
+    .export-row.selected {
+      border-color: #b7c8e1;
+      background: #f8fbff;
+    }
+    .export-row code {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .export-selected-groups {
+      display: grid;
+      gap: 10px;
+      max-height: 484px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .export-selected-group {
+      display: grid;
+      gap: 7px;
+      align-content: start;
+    }
+    .export-preview {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 10px;
+      min-height: 0;
+    }
+    .export-counts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+    .export-count {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      background: #f8fafc;
+    }
+    .export-count strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 1.05rem;
+      color: var(--text);
+    }
+    .export-preview-list {
+      display: grid;
+      gap: 8px;
+      max-height: 178px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .export-preview-strategy {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      background: #fff;
+    }
+    .export-preview-strategy ol {
+      margin: 6px 0 0 20px;
+      padding: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .export-query-preview {
+      min-height: 96px;
+      max-height: 160px;
+    }
+    .button-spinner {
+      display: inline-block;
+      width: 0.9em;
+      height: 0.9em;
+      margin-right: 6px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      vertical-align: -0.12em;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
     .template-preview {
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
@@ -520,8 +751,6 @@
       .topbar-inner { grid-template-columns: 1fr; align-items: start; }
       .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
       .topbar-meta { text-align: left; }
-      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .active-card { grid-column: 1 / -1; }
       .dashboard-grid, .management-grid, .templates-workspace, .template-editor-workspace { grid-template-columns: 1fr; }
       .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -529,13 +758,14 @@
       .topbar-inner, .container { padding-left: 14px; padding-right: 14px; }
       .page-head { align-items: flex-start; flex-direction: column; }
       .page-meta { justify-content: flex-start; }
-      .summary-grid, .stat-strip { grid-template-columns: 1fr; }
-      .field-row, .item-grid, .template-row { grid-template-columns: 1fr; }
+      .stat-strip { grid-template-columns: 1fr; }
+      .field-row, .item-grid, .template-row, .config-transfer-actions { grid-template-columns: 1fr; }
       .template-actions { justify-content: flex-start; }
       .panel-header { align-items: flex-start; flex-direction: column; }
       .pager { align-items: flex-start; flex-direction: column; }
-      .run-modal-body { grid-template-columns: 1fr; overflow: auto; }
+      .run-modal-body, .export-modal-body { grid-template-columns: 1fr; overflow: auto; }
       .modal-template-list { max-height: 220px; }
+      .export-list, .export-selected-groups { max-height: 260px; }
       .template-preview pre { min-height: 180px; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -625,7 +855,10 @@
           <a class="nav-link {{if eq .ActivePage "strategies"}}active{{end}}" href="/strategies">Strategies</a>
         </nav>
         <div class="topbar-meta">
-          <div>{{.Summary.TotalJobs}} jobs tracked</div>
+          <div class="tracked-status">
+            <span id="tracked-status-dot" class="status-dot {{if .Summary.HasActiveJob}}active{{end}}" aria-hidden="true"></span>
+            <span id="tracked-jobs-count">{{.Summary.TotalJobs}}</span> jobs tracked
+          </div>
           <div>Last refreshed <span id="last-refreshed">{{.LastRefreshed}}</span></div>
         </div>
       </div>
@@ -668,7 +901,7 @@
 	      <div class="run-modal-actions">
 	        <div id="strategy-run-status" class="muted tiny" role="status" aria-live="polite"></div>
 	        <button type="button" onclick="closeStrategyRunModal()">Cancel</button>
-	        <button id="strategy-run-confirm" type="button" class="action-primary" onclick="confirmStrategyRun()">Run Strategy</button>
+	        <button id="strategy-run-confirm" type="button" class="action-primary" onclick="confirmStrategyRun()" data-idle-label="Run Strategy">Run Strategy</button>
 	      </div>
 	    </div>
 	  </dialog>
@@ -689,9 +922,8 @@
   </div>
 </div>
 
-{{template "summary" .}}
-
 <div class="dashboard-grid">
+  {{template "analytics-strip" .}}
   <section class="panel" aria-labelledby="jobs-title">
     <div class="panel-header">
       <div>
@@ -704,22 +936,13 @@
             <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
           {{end}}
         </div>
-        <button type="button" onclick="refreshPartials()" title="Refresh dashboard and job table.">Refresh</button>
+        <button type="button" class="icon-button" onclick="refreshPartials()" title="Refresh dashboard and job table." aria-label="Refresh dashboard and job table">
+          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
+        </button>
       </div>
     </div>
     {{template "jobs-panel" .}}
   </section>
-  <section id="active-log-panel" class="panel log-panel" aria-labelledby="active-log-title" hidden>
-    <div class="panel-header">
-      <div>
-        <h2 id="active-log-title" class="panel-title">Job Logs</h2>
-        <div id="active-log-meta" class="muted tiny">Waiting for an active job.</div>
-      </div>
-      <button type="button" onclick="refreshSelectedJobLog()">Refresh Logs</button>
-    </div>
-    <pre id="active-log-viewer" class="log-viewer">No log lines yet.</pre>
-  </section>
-  {{template "analytics-strip" .}}
 </div>
 {{end}}
 
@@ -736,6 +959,37 @@
 </div>
 
 <div class="dashboard-grid">
+  <section class="panel" aria-labelledby="config-transfer-title">
+    <div class="panel-header">
+      <div>
+        <h2 id="config-transfer-title" class="panel-title">Import / Export</h2>
+        <div class="muted tiny">Move templates and strategies between state databases.</div>
+      </div>
+      <button type="button" class="secondary-button" onclick="openConfigExportModal()">Export JSON</button>
+    </div>
+    <div class="panel-body">
+      <form id="config-import-form">
+        <div class="config-transfer-actions">
+          <div class="field">
+            <label for="config-import-collision">Collision behavior</label>
+            <select id="config-import-collision" name="collision">
+              <option value="rename" selected>Rename</option>
+              <option value="skip">Skip</option>
+              <option value="overwrite">Overwrite</option>
+              <option value="duplicate">Duplicate</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="config-import-file">Import JSON</label>
+            <input id="config-import-file" name="config_file" type="file" accept="application/json,.json" required>
+          </div>
+          <button type="submit" class="secondary-button">Import</button>
+        </div>
+        <div id="config-import-result" class="import-summary" role="status" aria-live="polite"></div>
+      </form>
+    </div>
+  </section>
+
   <section class="panel" aria-labelledby="templates-title">
     <div class="panel-header">
       <div>
@@ -774,6 +1028,93 @@
     </div>
   </section>
 </div>
+
+<dialog id="config-export-modal" class="run-modal export-modal">
+  <div class="run-modal-shell">
+    <div class="run-modal-header">
+      <div>
+        <h2 class="panel-title">Export JSON</h2>
+        <div id="config-export-subtitle" class="muted tiny">Choose strategies and templates to export.</div>
+      </div>
+      <button type="button" onclick="closeConfigExportModal()" aria-label="Close export options">Close</button>
+    </div>
+    <div class="run-modal-body export-modal-body">
+      <div class="export-modal-pane">
+        <div class="split-actions">
+          <div class="export-tabs" role="tablist" aria-label="Available export items">
+            <button id="config-export-tab-strategies" type="button" class="active" onclick="setConfigExportTab('strategy')" role="tab" aria-selected="true">Strategies</button>
+            <button id="config-export-tab-templates" type="button" onclick="setConfigExportTab('template')" role="tab" aria-selected="false">Templates</button>
+          </div>
+          <button type="button" class="secondary-button" onclick="clearConfigExportSelection()">Clear</button>
+        </div>
+        <input id="config-export-search" type="search" placeholder="Search available items" oninput="renderConfigExportModal()" aria-label="Search available export items">
+        <div id="config-export-available" class="export-list" data-export-active-tab="strategy">
+          <div class="empty-state">No export items found.</div>
+        </div>
+      </div>
+      <div class="export-modal-pane selected-pane">
+        <div>
+          <div class="panel-title">Selected</div>
+          <div class="muted tiny">Strategy templates are included automatically.</div>
+        </div>
+        <div class="export-selected-groups">
+          <div class="export-selected-group">
+            <div class="muted tiny">Strategies</div>
+            <div id="config-export-selected-strategies" class="export-list">
+              <div class="empty-state">No strategies selected.</div>
+            </div>
+          </div>
+          <div class="export-selected-group">
+            <div class="muted tiny">Templates</div>
+            <div id="config-export-selected-templates" class="export-list">
+              <div class="empty-state">No templates selected.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="export-preview">
+        <div>
+          <div class="panel-title">Preview</div>
+          <div id="config-export-default-note" class="muted tiny">No selection exports everything.</div>
+        </div>
+        <div class="export-counts">
+          <div class="export-count"><span class="muted tiny">Strategies</span><strong id="config-export-count-strategies">0</strong></div>
+          <div class="export-count"><span class="muted tiny">Direct templates</span><strong id="config-export-count-direct-templates">0</strong></div>
+          <div class="export-count"><span class="muted tiny">Auto templates</span><strong id="config-export-count-auto-templates">0</strong></div>
+          <div class="export-count"><span class="muted tiny">Total templates</span><strong id="config-export-count-total-templates">0</strong></div>
+        </div>
+        <div>
+          <div class="muted tiny">Strategy template order</div>
+          <div id="config-export-strategy-preview" class="export-preview-list">
+            <div class="empty-state">No strategies selected.</div>
+          </div>
+        </div>
+        <details>
+          <summary class="muted tiny">Query preview</summary>
+          <div class="template-preview">
+            <div class="template-preview-head">GET /api/config/export</div>
+            <pre id="config-export-query-preview" class="export-query-preview">No query parameters. Full export.</pre>
+          </div>
+        </details>
+      </div>
+      <div id="config-export-catalog" hidden>
+        {{range .Strategies}}
+          <div data-export-kind="strategy" data-id="{{.ID}}" data-name="{{.Name}}" data-notes="{{.Notes}}">
+            {{range .Templates}}<span data-template-id="{{.ID}}" data-template-name="{{.Name}}"></span>{{end}}
+          </div>
+        {{end}}
+        {{range .Templates}}
+          <div data-export-kind="template" data-id="{{.ID}}" data-name="{{.Name}}" data-param-size="{{len .ParamsJSON}}"></div>
+        {{end}}
+      </div>
+    </div>
+    <div class="run-modal-actions">
+      <div id="config-export-status" class="muted tiny" role="status" aria-live="polite"></div>
+      <button type="button" onclick="closeConfigExportModal()">Cancel</button>
+      <button id="config-export-download" type="button" class="action-primary" onclick="exportSelectedConfig()">Download JSON</button>
+    </div>
+  </div>
+</dialog>
 {{end}}
 
 {{define "template-editor-page"}}
@@ -1090,7 +1431,7 @@
 {{end}}
 
 {{define "analytics-strip"}}
-<section class="stat-strip" aria-label="Execution analytics">
+<section id="execution-analytics" class="stat-strip" aria-label="Execution analytics">
   <div class="stat-cell">
     <div class="metric-label">Feed URLs</div>
     <div class="stat-value">{{.Analytics.FeedURLsFound}}</div>
@@ -1115,44 +1456,22 @@
 {{end}}
 
 {{define "summary"}}
-<section id="summary" class="summary-grid" aria-label="Job summary">
-  <article class="metric-card active-card">
-    <div class="metric-label">Active job</div>
-    {{if .Summary.HasActiveJob}}
-      <div class="metric-note"><strong>{{.Summary.ActiveJobTitle}}</strong></div>
-      <div class="metric-note"><span class="status {{.Summary.ActiveStatusClass}}">{{.Summary.ActiveStatus}}</span> {{.Summary.ActiveProgress}}</div>
-    {{else}}
-      <div class="metric-value">Idle</div>
-      <div class="metric-note">No scraper job is active.</div>
-    {{end}}
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Pending jobs</div>
-    <div class="metric-value">{{.Summary.PendingJobs}}</div>
-    <div class="metric-note">Queued</div>
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Running</div>
-    <div class="metric-value">{{.Summary.RunningJobs}}</div>
-    <div class="metric-note">{{.Summary.ActiveURLs}} URLs active</div>
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Pending URLs</div>
-    <div class="metric-value">{{.Summary.PendingURLs}}</div>
-    <div class="metric-note">Across jobs</div>
-  </article>
-  <article class="metric-card">
-    <div class="metric-label">Needs attention</div>
-    <div class="metric-value">{{.Summary.NeedsAttention}}</div>
-    <div class="metric-note">{{.Summary.FailedJobs}} failed</div>
-  </article>
-</section>
+<span id="summary" hidden data-total-jobs="{{.Summary.TotalJobs}}" data-has-active-job="{{if .Summary.HasActiveJob}}true{{else}}false{{end}}"></span>
+{{template "analytics-strip" .}}
 {{end}}
 
 {{define "jobs-panel"}}
-<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}">
+<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}" data-total-jobs="{{.Summary.TotalJobs}}" data-has-active-job="{{if .Summary.HasActiveJob}}true{{else}}false{{end}}">
   <div class="table-wrap">
     <table>
+      <colgroup>
+        <col class="job-col">
+        <col class="status-col">
+        <col class="progress-col">
+        <col class="analytics-col">
+        <col class="updated-col">
+        <col class="actions-col">
+      </colgroup>
       <thead>
         <tr>
           <th>Job</th>
@@ -1183,9 +1502,13 @@
           <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
         {{end}}
       </select>
-      <button type="button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}}>Previous</button>
+      <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}} title="Previous page" aria-label="Previous page">
+        {{template "icon-prev" .}}<span class="sr-only">Previous</span>
+      </button>
       <span class="muted tiny">Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
-      <button type="button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}}>Next</button>
+      <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}} title="Next page" aria-label="Next page">
+        {{template "icon-next" .}}<span class="sr-only">Next</span>
+      </button>
     </div>
   </div>
 </div>
@@ -1195,13 +1518,14 @@
 {{range .Jobs}}
   <tr data-job-id="{{.ID}}" class="{{if .Active}}active-row{{end}}">
     <td>
-      <div class="job-title">{{.QueriesPreview}}</div>
+      <div class="job-title">{{.DisplayTitle}}</div>
       <div class="job-meta">
-        <code>{{.ID}}</code>
-        <span>{{.OutputMode}}</span>
-        <span>{{.Lang}}</span>
-        {{if .TemplateID}}<span>tpl {{.TemplateID}}</span>{{end}}
-        {{if .StrategyID}}<span>strategy {{.StrategyID}}</span>{{end}}
+        <span class="meta-chip"><span class="meta-label">ID</span><span class="meta-value"><code>{{.ID}}</code></span></span>
+        {{if ne .DisplayTitle .QueriesPreview}}<span class="meta-chip"><span class="meta-label">Query</span><span class="meta-value">{{.QueriesPreview}}</span></span>{{end}}
+        <span class="meta-chip"><span class="meta-label">Output</span><span class="meta-value">{{.OutputMode}}</span></span>
+        <span class="meta-chip"><span class="meta-label">Lang</span><span class="meta-value">{{.Lang}}</span></span>
+        {{if .TemplateID}}<span class="meta-chip"><span class="meta-label">Template</span><span class="meta-value">{{.TemplateID}}</span></span>{{end}}
+        {{if .StrategyID}}<span class="meta-chip"><span class="meta-label">Strategy</span><span class="meta-value">{{.StrategyID}}</span></span>{{end}}
       </div>
     </td>
     <td>
@@ -1237,23 +1561,61 @@
     </td>
     <td>
       <div class="actions">
-        <button class="action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
-        <button class="action-refresh" onclick="viewJobLog('{{.ID}}')" title="View the saved log file for this job.">View Log</button>
+        <button class="icon-button action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database." aria-label="Refresh job {{.ID}}">
+          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
+        </button>
+        <button class="icon-button action-refresh" onclick="viewJobLog('{{.ID}}')" title="View the saved log file for this job." aria-label="View log for job {{.ID}}">
+          {{template "icon-log" .}}<span class="sr-only">View Log</span>
+        </button>
         {{if .ActionDisabled}}
           <button class="{{.ActionClass}}" disabled title="{{.ActionHelp}}">{{.ActionLabel}}</button>
         {{else}}
-          <button class="{{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+          <button class="icon-button {{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}" aria-label="{{.ActionLabel}} job {{.ID}}">
+            {{if eq .ActionLabel "Pause"}}{{template "icon-pause" .}}{{else}}{{template "icon-play" .}}{{end}}<span class="sr-only">{{.ActionLabel}}</span>
+          </button>
         {{end}}
         {{if not .RecoverDisabled}}
-          <button class="action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}">Recover</button>
+          <button class="icon-button action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}" aria-label="Recover job {{.ID}}">
+            {{template "icon-recover" .}}<span class="sr-only">Recover</span>
+          </button>
         {{end}}
       </div>
+    </td>
+  </tr>
+  <tr class="log-row" data-log-row="{{.ID}}" hidden>
+    <td colspan="6">
+      <section class="log-inline" aria-labelledby="log-title-{{.ID}}">
+        <div class="panel-header">
+          <div>
+            <h2 id="log-title-{{.ID}}" class="panel-title">Job Logs</h2>
+            <div class="muted tiny" data-log-meta="{{.ID}}">Waiting for log lines.</div>
+          </div>
+          <div class="actions">
+            <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
+              {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
+            </button>
+            <button type="button" class="icon-button" onclick="closeJobLog('{{.ID}}')" title="Close logs" aria-label="Close logs">
+              {{template "icon-close" .}}<span class="sr-only">Close</span>
+            </button>
+          </div>
+        </div>
+        <pre class="log-viewer" data-log-viewer="{{.ID}}">No log lines yet.</pre>
+      </section>
     </td>
   </tr>
 {{else}}
   <tr class="empty-row"><td colspan="6">No jobs yet.</td></tr>
 {{end}}
 {{end}}
+
+{{define "icon-refresh"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 8.5 8.5 0 0 1-6-2.5"></path><path d="M3 12a9 9 0 0 1 15-6.7"></path><path d="M18 2v5h-5"></path><path d="M6 22v-5h5"></path></svg>{{end}}
+{{define "icon-log"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M8 13h8"></path><path d="M8 17h6"></path></svg>{{end}}
+{{define "icon-play"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"></path></svg>{{end}}
+{{define "icon-pause"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H6v16h4z"></path><path d="M18 4h-4v16h4z"></path></svg>{{end}}
+{{define "icon-recover"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 3v6h6"></path></svg>{{end}}
+{{define "icon-close"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>{{end}}
+{{define "icon-prev"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{end}}
+{{define "icon-next"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>{{end}}
 
 {{define "control-script"}}
 <script>
@@ -1284,18 +1646,30 @@
   let jobsPageSize = {{.Pagination.PageSize}};
   let jobsFilter = '{{.Pagination.Filter}}';
   let selectedLogJobID = '';
+  let pendingLogSnapshot = null;
 
-  async function refreshPartials() {
+  async function refreshPartials(options) {
+    options = options || {};
     const jobsPanel = document.getElementById('jobs-panel');
-    const summary = document.getElementById('summary');
+    const analytics = document.getElementById('execution-analytics');
     const requests = [];
-    if (summary) requests.push(fetch('/ui/summary').then(async function(res) {
-      if (res.ok && document.getElementById('summary')) document.getElementById('summary').outerHTML = await res.text();
+    const preserveOpenLog = options.preserveOpenLog && !!selectedLogJobID;
+    if (analytics) requests.push(fetch('/ui/summary').then(async function(res) {
+      if (!res.ok) return;
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = await res.text();
+      const nextAnalytics = wrapper.querySelector('#execution-analytics');
+      const nextSummary = wrapper.querySelector('#summary');
+      if (nextAnalytics && document.getElementById('execution-analytics')) {
+        document.getElementById('execution-analytics').outerHTML = nextAnalytics.outerHTML;
+      }
+      if (nextSummary) syncTopbarJobState(nextSummary);
     }));
-    if (jobsPanel) {
+    if (jobsPanel && !preserveOpenLog) {
       const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
       requests.push(fetch(jobsPath).then(async function(res) {
         if (!res.ok || !document.getElementById('jobs-panel')) return;
+        pendingLogSnapshot = snapshotVisibleLog();
         document.getElementById('jobs-panel').outerHTML = await res.text();
         const panel = document.getElementById('jobs-panel');
         if (panel) {
@@ -1303,37 +1677,97 @@
           jobsPageSize = Number(panel.dataset.pageSize) || jobsPageSize;
           jobsFilter = panel.dataset.filter || jobsFilter;
           syncJobsFilterButtons();
+          syncTopbarJobState(panel);
         }
       }));
     }
     await Promise.all(requests);
-    await refreshSelectedJobLog();
+    await refreshSelectedJobLog({ restore: !preserveOpenLog });
     const refreshed = document.getElementById('last-refreshed');
     if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
   async function viewJobLog(jobID) {
+    if (selectedLogJobID === jobID) {
+      closeJobLog(jobID);
+      return;
+    }
     selectedLogJobID = jobID || '';
-    await refreshSelectedJobLog();
+    await refreshSelectedJobLog({ restore: false });
   }
 
-  async function refreshSelectedJobLog() {
-    const panel = document.getElementById('active-log-panel');
-    const viewer = document.getElementById('active-log-viewer');
-    const meta = document.getElementById('active-log-meta');
-    if (!panel || !viewer || !meta) return;
+  function closeJobLog(jobID) {
+    const row = document.querySelector('[data-log-row="' + cssEscape(jobID || selectedLogJobID) + '"]');
+    if (row) row.hidden = true;
+    if (!jobID || selectedLogJobID === jobID) selectedLogJobID = '';
+  }
+
+  function hideLogRows() {
+    document.querySelectorAll('[data-log-row]').forEach(function(row) {
+      row.hidden = true;
+    });
+  }
+
+  function snapshotVisibleLog() {
+    const row = document.querySelector('[data-log-row]:not([hidden])');
+    if (!row) return null;
+    const jobID = row.dataset.logRow || '';
+    const viewer = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const meta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    return {
+      jobID: jobID,
+      text: viewer ? viewer.textContent : '',
+      meta: meta ? meta.textContent : '',
+      scrollTop: viewer ? viewer.scrollTop : 0,
+      scrollHeight: viewer ? viewer.scrollHeight : 0
+    };
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value || ''));
+    return String(value || '').replace(/["\\]/g, '\\$&');
+  }
+
+  function syncTopbarJobState(panel) {
+    const count = document.getElementById('tracked-jobs-count');
+    const dot = document.getElementById('tracked-status-dot');
+    if (count && panel?.dataset.totalJobs) count.textContent = panel.dataset.totalJobs;
+    if (dot && panel) dot.classList.toggle('active', panel.dataset.hasActiveJob === 'true');
+  }
+
+  async function refreshSelectedJobLog(options) {
+    options = options || {};
     let jobID = selectedLogJobID;
     if (!jobID) {
       const activeRow = document.querySelector('#jobs-panel tr.active-row[data-job-id]');
       if (activeRow) jobID = activeRow.dataset.jobId || '';
     }
     if (!jobID) {
-      panel.hidden = true;
-      viewer.textContent = 'No active job.';
-      meta.textContent = 'Waiting for an active job.';
+      hideLogRows();
       return;
     }
-    panel.hidden = false;
+    const row = document.querySelector('[data-log-row="' + cssEscape(jobID) + '"]');
+    const viewer = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const meta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    if (!row || !viewer || !meta) return;
+    hideLogRows();
+    if (options.restore) row.classList.add('restore-log');
+    row.hidden = false;
+    if (pendingLogSnapshot && pendingLogSnapshot.jobID === jobID) {
+      if (pendingLogSnapshot.meta) meta.textContent = pendingLogSnapshot.meta;
+      if (pendingLogSnapshot.text) viewer.textContent = pendingLogSnapshot.text;
+      if (pendingLogSnapshot.scrollHeight && pendingLogSnapshot.scrollTop < pendingLogSnapshot.scrollHeight - viewer.clientHeight - 12) {
+        viewer.scrollTop = pendingLogSnapshot.scrollTop;
+      } else {
+        viewer.scrollTop = viewer.scrollHeight;
+      }
+    }
+    pendingLogSnapshot = null;
+    if (options.restore) {
+      window.requestAnimationFrame(function() {
+        row.classList.remove('restore-log');
+      });
+    }
     try {
       const res = await fetch('/api/jobs/' + encodeURIComponent(jobID) + '/logs?tail=200');
       if (!res.ok) {
@@ -1641,6 +2075,297 @@
     }
   }
 
+  function importSummaryText(summary) {
+    const t = summary.templates || {};
+    const s = summary.strategies || {};
+    return [
+      'Templates: ' + (t.created || 0) + ' created, ' + (t.updated || 0) + ' updated, ' + (t.skipped || 0) + ' skipped, ' + (t.renamed || 0) + ' renamed, ' + (t.duplicated || 0) + ' duplicated.',
+      'Strategies: ' + (s.created || 0) + ' created, ' + (s.updated || 0) + ' updated, ' + (s.skipped || 0) + ' skipped, ' + (s.renamed || 0) + ' renamed, ' + (s.duplicated || 0) + ' duplicated.'
+    ].join(' ');
+  }
+
+  const configExportState = {
+    activeTab: 'strategy',
+    selectedStrategies: new Set(),
+    selectedTemplates: new Set(),
+    catalog: null
+  };
+
+  function escapeHTML(value) {
+    return String(value || '').replace(/[&<>"']/g, function(ch) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+
+  function jsArg(value) {
+    return escapeHTML(JSON.stringify(String(value || '')));
+  }
+
+  function getConfigExportCatalog() {
+    if (configExportState.catalog) return configExportState.catalog;
+    const root = document.getElementById('config-export-catalog');
+    const templates = [];
+    const strategies = [];
+    const templateMap = new Map();
+    const strategyMap = new Map();
+    if (!root) {
+      configExportState.catalog = { templates, strategies, templateMap, strategyMap };
+      return configExportState.catalog;
+    }
+    root.querySelectorAll('[data-export-kind="template"]').forEach(function(row) {
+      const template = {
+        id: row.dataset.id || '',
+        name: row.dataset.name || '',
+        paramSize: Number(row.dataset.paramSize || 0)
+      };
+      templates.push(template);
+      templateMap.set(template.id, template);
+    });
+    root.querySelectorAll('[data-export-kind="strategy"]').forEach(function(row) {
+      const refs = Array.from(row.querySelectorAll('[data-template-id]')).map(function(ref) {
+        return {
+          id: ref.dataset.templateId || '',
+          name: ref.dataset.templateName || ''
+        };
+      });
+      const strategy = {
+        id: row.dataset.id || '',
+        name: row.dataset.name || '',
+        notes: row.dataset.notes || '',
+        templates: refs
+      };
+      strategies.push(strategy);
+      strategyMap.set(strategy.id, strategy);
+    });
+    configExportState.catalog = { templates, strategies, templateMap, strategyMap };
+    return configExportState.catalog;
+  }
+
+  function configExportEffectiveSelection() {
+    const catalog = getConfigExportCatalog();
+    const hasExplicitSelection = configExportState.selectedStrategies.size > 0 || configExportState.selectedTemplates.size > 0;
+    const strategyIDs = hasExplicitSelection ? Array.from(configExportState.selectedStrategies) : catalog.strategies.map(function(strategy) { return strategy.id; });
+    const directTemplateIDs = hasExplicitSelection ? Array.from(configExportState.selectedTemplates) : catalog.templates.map(function(template) { return template.id; });
+    const autoTemplateIDs = new Set();
+    strategyIDs.forEach(function(strategyID) {
+      const strategy = catalog.strategyMap.get(strategyID);
+      (strategy?.templates || []).forEach(function(template) {
+        autoTemplateIDs.add(template.id);
+      });
+    });
+    const totalTemplateIDs = new Set(directTemplateIDs);
+    autoTemplateIDs.forEach(function(id) { totalTemplateIDs.add(id); });
+    return { hasExplicitSelection, strategyIDs, directTemplateIDs, autoTemplateIDs, totalTemplateIDs };
+  }
+
+  function openConfigExportModal() {
+    const modal = document.getElementById('config-export-modal');
+    if (!modal) return exportSelectedConfig();
+    renderConfigExportModal();
+    if (typeof modal.showModal === 'function') {
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', 'open');
+    }
+  }
+
+  function closeConfigExportModal() {
+    const modal = document.getElementById('config-export-modal');
+    if (!modal) return;
+    if (typeof modal.close === 'function') {
+      modal.close();
+    } else {
+      modal.removeAttribute('open');
+    }
+  }
+
+  function setConfigExportTab(tab) {
+    configExportState.activeTab = tab === 'template' ? 'template' : 'strategy';
+    renderConfigExportModal();
+  }
+
+  function clearConfigExportSelection() {
+    configExportState.selectedStrategies.clear();
+    configExportState.selectedTemplates.clear();
+    renderConfigExportModal();
+  }
+
+  function toggleConfigExportItem(kind, id) {
+    const set = kind === 'template' ? configExportState.selectedTemplates : configExportState.selectedStrategies;
+    if (set.has(id)) {
+      set.delete(id);
+    } else {
+      set.add(id);
+    }
+    renderConfigExportModal();
+  }
+
+  function removeConfigExportStrategy(id) {
+    configExportState.selectedStrategies.delete(id);
+    renderConfigExportModal();
+  }
+
+  function removeConfigExportTemplate(id) {
+    configExportState.selectedTemplates.delete(id);
+    renderConfigExportModal();
+  }
+
+  function exportRowHTML(item, kind, selected) {
+    const meta = kind === 'strategy'
+      ? '<span>' + item.templates.length + ' templates</span>'
+      : '<span>' + item.paramSize + ' bytes JSON</span>';
+    return '<button type="button" class="export-row' + (selected ? ' selected' : '') + '" onclick="toggleConfigExportItem(' + jsArg(kind) + ', ' + jsArg(item.id) + ')">' +
+      '<span><span class="item-title">' + escapeHTML(item.name || item.id) + '</span><span class="item-meta"><code>' + escapeHTML(item.id) + '</code>' + meta + '</span></span>' +
+      '<span class="status status-' + (selected ? 'running' : 'unknown') + '">' + (selected ? 'Selected' : 'Add') + '</span>' +
+      '</button>';
+  }
+
+  function selectedRowHTML(item, removeCall, locked) {
+    return '<div class="export-row">' +
+      '<span><span class="item-title">' + escapeHTML(item.name || item.id) + '</span><span class="item-meta"><code>' + escapeHTML(item.id) + '</code>' + (locked ? '<span>Included by strategy</span>' : '') + '</span></span>' +
+      (locked ? '<span class="status status-pending">Auto</span>' : '<button type="button" class="secondary-button" onclick="' + removeCall + '">Remove</button>') +
+      '</div>';
+  }
+
+  function renderConfigExportModal() {
+    const catalog = getConfigExportCatalog();
+    const effective = configExportEffectiveSelection();
+    const available = document.getElementById('config-export-available');
+    const search = (document.getElementById('config-export-search')?.value || '').trim().toLowerCase();
+    document.getElementById('config-export-tab-strategies')?.classList.toggle('active', configExportState.activeTab === 'strategy');
+    document.getElementById('config-export-tab-templates')?.classList.toggle('active', configExportState.activeTab === 'template');
+    document.getElementById('config-export-tab-strategies')?.setAttribute('aria-selected', configExportState.activeTab === 'strategy' ? 'true' : 'false');
+    document.getElementById('config-export-tab-templates')?.setAttribute('aria-selected', configExportState.activeTab === 'template' ? 'true' : 'false');
+    if (available) {
+      const source = configExportState.activeTab === 'template' ? catalog.templates : catalog.strategies;
+      const kind = configExportState.activeTab;
+      const filtered = source.filter(function(item) {
+        return !search || (item.name || '').toLowerCase().includes(search) || (item.id || '').toLowerCase().includes(search);
+      });
+      available.innerHTML = filtered.length
+        ? filtered.map(function(item) {
+          const selected = kind === 'template' ? configExportState.selectedTemplates.has(item.id) : configExportState.selectedStrategies.has(item.id);
+          return exportRowHTML(item, kind, selected);
+        }).join('')
+        : '<div class="empty-state">No export items found.</div>';
+    }
+
+    const selectedStrategies = document.getElementById('config-export-selected-strategies');
+    if (selectedStrategies) {
+      const rows = Array.from(configExportState.selectedStrategies).map(function(id) {
+        const strategy = catalog.strategyMap.get(id) || { id: id, name: id, templates: [] };
+        return selectedRowHTML(strategy, 'removeConfigExportStrategy(' + jsArg(id) + ')', false);
+      });
+      selectedStrategies.innerHTML = rows.length ? rows.join('') : '<div class="empty-state">No strategies selected.</div>';
+    }
+
+    const selectedTemplates = document.getElementById('config-export-selected-templates');
+    if (selectedTemplates) {
+      const manualRows = Array.from(configExportState.selectedTemplates).map(function(id) {
+        const template = catalog.templateMap.get(id) || { id: id, name: id };
+        return selectedRowHTML(template, 'removeConfigExportTemplate(' + jsArg(id) + ')', false);
+      });
+      const autoRows = Array.from(effective.autoTemplateIDs).filter(function(id) {
+        return !configExportState.selectedTemplates.has(id);
+      }).map(function(id) {
+        const template = catalog.templateMap.get(id) || { id: id, name: id };
+        return selectedRowHTML(template, '', true);
+      });
+      const rows = manualRows.concat(autoRows);
+      selectedTemplates.innerHTML = rows.length ? rows.join('') : '<div class="empty-state">No templates selected.</div>';
+    }
+
+    const strategyCount = document.getElementById('config-export-count-strategies');
+    const directCount = document.getElementById('config-export-count-direct-templates');
+    const autoCount = document.getElementById('config-export-count-auto-templates');
+    const totalCount = document.getElementById('config-export-count-total-templates');
+    if (strategyCount) strategyCount.textContent = String(effective.strategyIDs.length);
+    if (directCount) directCount.textContent = String(effective.directTemplateIDs.length);
+    if (autoCount) autoCount.textContent = String(effective.autoTemplateIDs.size);
+    if (totalCount) totalCount.textContent = String(effective.totalTemplateIDs.size);
+
+    const note = document.getElementById('config-export-default-note');
+    if (note) note.textContent = effective.hasExplicitSelection ? 'Download uses the selected IDs below.' : 'No selection exports all templates and strategies.';
+
+    const preview = document.getElementById('config-export-strategy-preview');
+    if (preview) {
+      const rows = effective.strategyIDs.map(function(id) {
+        const strategy = catalog.strategyMap.get(id);
+        if (!strategy) return '';
+        const templates = strategy.templates.length
+          ? '<ol>' + strategy.templates.map(function(template) { return '<li>' + escapeHTML(template.name || template.id) + ' <code>' + escapeHTML(template.id) + '</code></li>'; }).join('') + '</ol>'
+          : '<div class="muted tiny">No templates referenced.</div>';
+        return '<div class="export-preview-strategy"><div class="item-title">' + escapeHTML(strategy.name || strategy.id) + '</div><div class="item-meta"><code>' + escapeHTML(strategy.id) + '</code><span>' + strategy.templates.length + ' templates</span></div>' + templates + '</div>';
+      }).filter(Boolean);
+      preview.innerHTML = rows.length ? rows.join('') : '<div class="empty-state">No strategies selected.</div>';
+    }
+
+    const params = buildConfigExportParams(effective.hasExplicitSelection);
+    const queryPreview = document.getElementById('config-export-query-preview');
+    if (queryPreview) {
+      const query = params.toString();
+      queryPreview.textContent = '/api/config/export' + (query ? '?' + query : '\n\nNo query parameters. Full export.');
+    }
+  }
+
+  function buildConfigExportParams(onlyExplicit) {
+    const params = new URLSearchParams();
+    if (!onlyExplicit) return params;
+    Array.from(configExportState.selectedTemplates).forEach(function(id) {
+      params.append('template_id', id);
+    });
+    Array.from(configExportState.selectedStrategies).forEach(function(id) {
+      params.append('strategy_id', id);
+    });
+    return params;
+  }
+
+  function exportSelectedConfig() {
+    const effective = configExportEffectiveSelection();
+    const params = buildConfigExportParams(effective.hasExplicitSelection);
+    const query = params.toString();
+    window.location.href = '/api/config/export' + (query ? '?' + query : '');
+  }
+
+  const configImportForm = document.getElementById('config-import-form');
+  if (configImportForm) {
+    configImportForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const result = document.getElementById('config-import-result');
+      const fileInput = document.getElementById('config-import-file');
+      const collision = document.getElementById('config-import-collision')?.value || 'rename';
+      if (result) {
+        result.style.color = '#475569';
+        result.textContent = '';
+      }
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        if (result) {
+          result.style.color = '#b42318';
+          result.textContent = 'Choose a JSON file to import.';
+        }
+        return;
+      }
+      try {
+        const body = await file.text();
+        const summary = await fetchJSON('/api/config/import?collision=' + encodeURIComponent(collision), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        });
+        if (result) {
+          result.style.color = '#027a48';
+          result.textContent = importSummaryText(summary);
+        }
+      } catch (err) {
+        if (result) {
+          result.style.color = '#b42318';
+          result.textContent = 'Error: ' + err.message;
+        }
+      }
+    });
+  }
+
   const templateForm = document.getElementById('template-form');
   if (templateForm) {
     templateForm.addEventListener('submit', async function(e) {
@@ -1700,7 +2425,11 @@
     if (title) title.textContent = strategy.Name || 'Confirm Strategy';
     if (subtitle) subtitle.textContent = (strategy.ID || '') + ' - ' + templates.length + ' templates';
     if (status) status.textContent = '';
-    if (confirm) confirm.disabled = templates.length === 0;
+    if (confirm) {
+      confirm.disabled = templates.length === 0;
+      confirm.innerHTML = confirm.dataset.idleLabel || 'Run Strategy';
+      confirm.removeAttribute('aria-busy');
+    }
     if (list) {
       list.innerHTML = '';
       if (!templates.length) {
@@ -1759,15 +2488,27 @@
     if (!pendingStrategyRun?.ID) return;
     const status = document.getElementById('strategy-run-status');
     const confirm = document.getElementById('strategy-run-confirm');
-    if (status) status.textContent = 'Starting strategy...';
-    if (confirm) confirm.disabled = true;
+    if (status) status.textContent = 'Validating templates and creating jobs...';
+    if (confirm) {
+      confirm.disabled = true;
+      confirm.setAttribute('aria-busy', 'true');
+      confirm.innerHTML = '<span class="button-spinner" aria-hidden="true"></span>Starting...';
+    }
     try {
       const payload = await fetchJSON('/api/strategies/' + encodeURIComponent(pendingStrategyRun.ID) + '/run', { method: 'POST' });
       if (status) status.textContent = (payload.status === 'started' ? 'Started ' : 'Queued ') + payload.job_ids.length + ' jobs.';
+      if (confirm) {
+        confirm.removeAttribute('aria-busy');
+        confirm.innerHTML = confirm.dataset.idleLabel || 'Run Strategy';
+      }
       await refreshPartials();
     } catch (err) {
       if (status) status.textContent = 'Error: ' + err.message;
-      if (confirm) confirm.disabled = false;
+      if (confirm) {
+        confirm.disabled = false;
+        confirm.removeAttribute('aria-busy');
+        confirm.innerHTML = confirm.dataset.idleLabel || 'Run Strategy';
+      }
     }
   }
 
@@ -1832,7 +2573,9 @@
   loadTemplates();
   updateStrategyOrder();
   refreshActiveLog();
-  setInterval(refreshPartials, 5000);
+  setInterval(function() {
+    refreshPartials({ preserveOpenLog: true });
+  }, 5000);
 
   function bulkLangUpdatesExisting() {
     return document.querySelector('input[name="bulk-lang-mode"]:checked')?.value === 'update';

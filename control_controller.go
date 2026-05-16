@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -152,6 +153,54 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			return
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc("/api/config/export", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		templateIDs, strategyIDs := parseConfigExportSelection(r)
+		cfg, err := store.ExportReusableConfigSelection(r.Context(), templateIDs, strategyIDs)
+		if err != nil {
+			if errors.Is(err, gmaps.ErrConfigExportInvalid) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		filename := "scraper-config-" + time.Now().UTC().Format("20060102-150405") + ".json"
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		writeJSON(w, cfg)
+	})
+	mux.HandleFunc("/api/config/import", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		mode := gmaps.ConfigImportMode(strings.TrimSpace(r.URL.Query().Get("collision")))
+		if mode == "" {
+			mode = gmaps.ConfigImportRename
+		}
+		var cfg gmaps.ReusableConfigExport
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		summary, err := store.ImportReusableConfig(r.Context(), cfg, mode)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, gmaps.ErrConfigImportInvalid) {
+				status = http.StatusBadRequest
+			} else if errors.Is(err, gmaps.ErrConfigImportConflict) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, summary)
 	})
 	mux.HandleFunc("/api/job-templates", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -764,6 +813,26 @@ func parseStrategySaveRequest(r *http.Request) (id, name, notes string, template
 	return strings.TrimSpace(r.FormValue("id")), strings.TrimSpace(r.FormValue("name")), strings.TrimSpace(r.FormValue("notes")), rawIDs, nil
 }
 
+func parseConfigExportSelection(r *http.Request) (templateIDs, strategyIDs []string) {
+	q := r.URL.Query()
+	templateIDs = splitQueryIDs(q["template_id"])
+	strategyIDs = splitQueryIDs(q["strategy_id"])
+	return templateIDs, strategyIDs
+}
+
+func splitQueryIDs(values []string) []string {
+	var ids []string
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				ids = append(ids, part)
+			}
+		}
+	}
+	return ids
+}
+
 type strategyRunResponse struct {
 	Status        string   `json:"status"`
 	StrategyRunID string   `json:"strategy_run_id"`
@@ -786,30 +855,52 @@ func runStrategyFromControl(ctx context.Context, store *gmaps.JobStore, stateDB 
 	var response strategyRunResponse
 	response.Status = "queued"
 	response.StrategyRunID = runID
+	type plannedStrategyJob struct {
+		params startParams
+		create gmaps.StrategyJobCreate
+	}
+	planned := make([]plannedStrategyJob, 0, len(strategy.Templates))
 	for _, tpl := range strategy.Templates {
 		params, err := startParamsFromTemplate(tpl, stateDB)
 		if err != nil {
-			return strategyRunResponse{}, err
+			return strategyRunResponse{}, fmt.Errorf("template %d %q (%s): %w", len(planned)+1, tpl.Name, tpl.ID, err)
 		}
 		params.StrategyID = strategy.ID
 		params.StrategyRunID = runID
-		jobID, err := store.CreateStartingJobWithSource(ctx, params.Queries, scraperConfigFromStartParams(params), tpl.ID, strategy.ID, runID)
-		if err != nil {
-			return strategyRunResponse{}, err
-		}
-		params.JobID = jobID
-		response.JobIDs = append(response.JobIDs, jobID)
-		job, err := store.GetJob(ctx, jobID)
-		if err != nil {
-			return strategyRunResponse{}, err
-		}
-		if job.Status == gmaps.JobStatusStarting && response.StartedJobID == "" {
+		planned = append(planned, plannedStrategyJob{
+			params: params,
+			create: gmaps.StrategyJobCreate{
+				Queries:       params.Queries,
+				Config:        scraperConfigFromStartParams(params),
+				TemplateID:    tpl.ID,
+				StrategyID:    strategy.ID,
+				StrategyRunID: runID,
+			},
+		})
+	}
+	creates := make([]gmaps.StrategyJobCreate, 0, len(planned))
+	for _, job := range planned {
+		creates = append(creates, job.create)
+	}
+	jobIDs, startedID, err := store.CreateStrategyJobsWithSource(ctx, creates)
+	if err != nil {
+		return strategyRunResponse{}, err
+	}
+	response.JobIDs = append(response.JobIDs, jobIDs...)
+	if startedID != "" {
+		response.StartedJobID = startedID
+		response.Status = "started"
+		for i, jobID := range jobIDs {
+			if jobID != startedID {
+				continue
+			}
+			params := planned[i].params
+			params.JobID = jobID
 			if err := launchStart(ctx, params); err != nil {
 				_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
 				return strategyRunResponse{}, err
 			}
-			response.StartedJobID = jobID
-			response.Status = "started"
+			break
 		}
 	}
 	_ = store.MarkStrategyUsed(ctx, strategy.ID)

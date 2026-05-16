@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -166,11 +168,24 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Scraper Control") {
 		t.Fatalf("index did not include admin shell title: %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Pending jobs") {
-		t.Fatalf("index did not include summary cards: %s", rec.Body.String())
+	for _, want := range []string{"Feed URLs", "Queued", "Scraped", "Errors"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("index did not include analytics card %q: %s", want, rec.Body.String())
+		}
 	}
-	if !strings.Contains(rec.Body.String(), `id="active-log-panel"`) {
-		t.Fatalf("index did not include active log panel hook: %s", rec.Body.String())
+	for _, notWant := range []string{"Pending jobs", "Pending URLs", "Needs attention"} {
+		if strings.Contains(rec.Body.String(), notWant) {
+			t.Fatalf("index should not include old summary card %q: %s", notWant, rec.Body.String())
+		}
+	}
+	if strings.Contains(rec.Body.String(), `id="active-log-panel"`) {
+		t.Fatalf("index should not include global active log panel: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `data-log-row="`+jobID+`"`) {
+		t.Fatalf("index did not include inline log row for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `id="tracked-status-dot"`) {
+		t.Fatalf("index did not include tracked status dot: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `data-job-id="`+jobID+`"`) {
 		t.Fatalf("index did not include refreshable row for job ID %s: %s", jobID, rec.Body.String())
@@ -180,6 +195,9 @@ func TestControlIndexListsJobs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `viewJobLog('`+jobID+`')`) {
 		t.Fatalf("index did not include view log button for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `aria-label="View log for job `+jobID+`"`) {
+		t.Fatalf("index did not include accessible icon log button for job ID %s: %s", jobID, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `start-pending`) {
 		t.Fatalf("index did not include start action for unblocked pending job ID %s: %s", jobID, rec.Body.String())
@@ -214,12 +232,12 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 		t.Fatalf("templates status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Job Templates", `class="nav-link active" href="/templates"`, `href="/templates/editor"`, `href="/templates/editor?template_id=` + templateID + `"`, `href="/templates/editor?template_id=` + templateID + `&mode=copy"`, `data-template-row="` + templateID + `"`} {
+	for _, want := range []string{"Job Templates", `class="nav-link active" href="/templates"`, `id="config-import-form"`, `onclick="openConfigExportModal()"`, `id="config-export-modal"`, `id="config-export-available"`, `id="config-export-search"`, `id="config-export-selected-strategies"`, `id="config-export-selected-templates"`, `id="config-export-strategy-preview"`, `id="config-export-download"`, `onclick="exportSelectedConfig()"`, `data-export-kind="strategy" data-id="` + strategyID + `"`, `data-export-kind="template" data-id="` + templateID + `"`, `data-template-id="` + templateID + `"`, `id="config-import-collision"`, `<option value="rename" selected>Rename</option>`, `href="/templates/editor"`, `href="/templates/editor?template_id=` + templateID + `"`, `href="/templates/editor?template_id=` + templateID + `&mode=copy"`, `data-template-row="` + templateID + `"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("templates page missing %q: %s", want, body)
 		}
 	}
-	for _, notWant := range []string{`id="start-form"`, `id="template-form"`} {
+	for _, notWant := range []string{`id="start-form"`, `id="template-form"`, `name="export_strategy_ids"`, `name="export_template_ids"`} {
 		if strings.Contains(body, notWant) {
 			t.Fatalf("templates list page should not include %q: %s", notWant, body)
 		}
@@ -277,7 +295,7 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 		t.Fatalf("strategies status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	body = rec.Body.String()
-	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`, `class="strategy-template-list"`, `type="checkbox" name="template_ids"`, `id="strategy-run-modal"`, `id="strategy-run-template-list"`, `id="strategy-run-template-preview"`} {
+	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`, `class="strategy-template-list"`, `type="checkbox" name="template_ids"`, `id="strategy-run-modal"`, `id="strategy-run-template-list"`, `id="strategy-run-template-preview"`, `id="strategy-run-confirm"`, `data-idle-label="Run Strategy"`, `button-spinner`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("strategies page missing %q: %s", want, body)
 		}
@@ -287,6 +305,143 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 	}
 	if strings.Contains(body, `id="jobs-panel"`) {
 		t.Fatalf("strategies page should not render job queue: %s", body)
+	}
+}
+
+func TestControlConfigExportEndpoint(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	templateID, err := store.SaveJobTemplateJSON(ctx, "", "coffee template", `{"Queries":["coffee"]}`)
+	if err != nil {
+		t.Fatalf("save template: %v", err)
+	}
+	otherID, err := store.SaveJobTemplateJSON(ctx, "", "tea template", `{"Queries":["tea"]}`)
+	if err != nil {
+		t.Fatalf("save other template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "", []string{templateID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config/export", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") || !strings.Contains(got, "scraper-config-") {
+		t.Fatalf("Content-Disposition = %q, want export attachment", got)
+	}
+	var cfg gmaps.ReusableConfigExport
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if cfg.Version != gmaps.ConfigExportVersion || len(cfg.Templates) != 2 || len(cfg.Strategies) != 1 {
+		t.Fatalf("export = %#v, want version with template and strategy", cfg)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/export?strategy_id="+url.QueryEscape(strategyID), nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered strategy status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode filtered strategy export: %v", err)
+	}
+	if len(cfg.Strategies) != 1 || len(cfg.Templates) != 1 || cfg.Templates[0].ID != templateID {
+		t.Fatalf("filtered strategy export = %#v, want selected strategy and referenced template", cfg)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/export?template_id="+url.QueryEscape(otherID), nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered template status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode filtered template export: %v", err)
+	}
+	if len(cfg.Templates) != 1 || cfg.Templates[0].ID != otherID || len(cfg.Strategies) != 0 {
+		t.Fatalf("filtered template export = %#v, want selected template only", cfg)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/export?strategy_id=str_missing", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing strategy status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestControlConfigImportEndpoint(t *testing.T) {
+	store, err := gmaps.OpenJobStore(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/import", strings.NewReader("{"))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	cfg := gmaps.ReusableConfigExport{
+		Version: gmaps.ConfigExportVersion,
+		Templates: []gmaps.ReusableConfigTemplate{{
+			ID:         "tpl_import",
+			Name:       "imported template",
+			ParamsJSON: `{"Queries":["coffee"]}`,
+		}},
+		Strategies: []gmaps.ReusableConfigStrategy{{
+			ID:          "str_import",
+			Name:        "imported strategy",
+			TemplateIDs: []string{"tpl_import"},
+		}},
+	}
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/config/import?collision=rename", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var summary gmaps.ConfigImportSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.Templates.Created != 1 || summary.Strategies.Created != 1 {
+		t.Fatalf("summary = %#v, want created template and strategy", summary)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/config/import?collision=bogus", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported mode status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	cfg.Strategies[0].TemplateIDs = []string{"tpl_missing"}
+	body, _ = json.Marshal(cfg)
+	req = httptest.NewRequest(http.MethodPost, "/api/config/import", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing reference status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1026,6 +1181,13 @@ func TestRunStrategyCreatesOrderedJobsWithSource(t *testing.T) {
 	}
 	var launched []startParams
 	launcher := startLauncher(func(_ context.Context, p startParams) error {
+		jobs, err := store.ListJobs(ctx)
+		if err != nil {
+			t.Fatalf("list jobs during launch: %v", err)
+		}
+		if len(jobs) != 2 {
+			t.Fatalf("jobs visible during launch = %d, want 2", len(jobs))
+		}
 		launched = append(launched, p)
 		return nil
 	})
@@ -1055,6 +1217,95 @@ func TestRunStrategyCreatesOrderedJobsWithSource(t *testing.T) {
 	}
 	if sourced != 2 {
 		t.Fatalf("sourced jobs = %d, want 2", sourced)
+	}
+}
+
+func TestRunStrategyCreatesAllTemplateJobs(t *testing.T) {
+	store := newStartStore(t)
+	ctx := context.Background()
+	var templateIDs []string
+	for i := 0; i < 71; i++ {
+		params := `{"Queries":["restaurant ` + strconv.Itoa(i+1) + `"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`
+		id, err := store.SaveJobTemplateJSON(ctx, "", "template "+strconv.Itoa(i+1), params)
+		if err != nil {
+			t.Fatalf("save template %d: %v", i+1, err)
+		}
+		templateIDs = append(templateIDs, id)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "production", "batch", templateIDs)
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/run", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 71 {
+		t.Fatalf("jobs len = %d, want 71", len(jobs))
+	}
+}
+
+func TestRunStrategyPreflightFailureCreatesNoJobs(t *testing.T) {
+	t.Setenv("DSN", "")
+	store := newStartStore(t)
+	ctx := context.Background()
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "database template", `{"Queries":["tea"],"OutputMode":"database","Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	thirdID, err := store.SaveJobTemplateJSON(ctx, "", "pastry", `{"Queries":["pastry"],"OutputMode":"file","JSONOut":true,"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save third template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "batch", []string{firstID, secondID, thirdID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/run", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `template 2 "database template"`) || !strings.Contains(body, "database output mode requires DSN") {
+		t.Fatalf("error body = %q, want template context and DSN error", body)
+	}
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("jobs len = %d, want 0", len(jobs))
+	}
+}
+
+func TestJobViewUsesTemplateNameAsDisplayTitle(t *testing.T) {
+	view := newJobViewWithQueueState(gmaps.Job{
+		ID:           "job_1",
+		Queries:      []string{"restaurants", "cafes"},
+		Status:       gmaps.JobStatusPending,
+		TemplateName: sql.NullString{String: "Downtown restaurants", Valid: true},
+	}, false)
+	if view.DisplayTitle != "Downtown restaurants" {
+		t.Fatalf("DisplayTitle = %q, want template name", view.DisplayTitle)
+	}
+	if view.QueriesPreview != "restaurants +1" {
+		t.Fatalf("QueriesPreview = %q, want query preview fallback value", view.QueriesPreview)
 	}
 }
 
@@ -1357,7 +1608,7 @@ func TestBuildResumeArgsDatabaseMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build resume args: %v", err)
 	}
-	want := []string{"-job", "job_db", "-state-db", "/data/state.sqlite", "-dsn", "postgres://localhost/test"}
+	want := []string{"-job", "job_db", "-state-db", "/data/state.sqlite"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}

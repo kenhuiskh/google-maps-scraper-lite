@@ -65,6 +65,7 @@ type jobsFilterOption struct {
 
 type jobView struct {
 	ID              string
+	DisplayTitle    string
 	QueriesPreview  string
 	CreatedAt       string
 	UpdatedAt       string
@@ -287,6 +288,7 @@ func newJobViewWithQueueState(job gmaps.Job, hasActiveJob bool) jobView {
 	}
 	view := jobView{
 		ID:              job.ID,
+		DisplayTitle:    jobDisplayTitle(job),
 		QueriesPreview:  formatQueriesPreview(job.Queries),
 		CreatedAt:       formatControlTime(job.CreatedAt),
 		UpdatedAt:       formatControlTime(job.UpdatedAt),
@@ -379,7 +381,7 @@ func newControlSummaryView(jobs []gmaps.Job) controlSummaryView {
 			view := newJobView(job)
 			summary.HasActiveJob = true
 			summary.ActiveJobID = job.ID
-			summary.ActiveJobTitle = view.QueriesPreview
+			summary.ActiveJobTitle = view.DisplayTitle
 			summary.ActiveStatus = view.StatusLabel
 			summary.ActiveStatusClass = view.StatusClass
 			summary.ActiveProgress = view.Progress
@@ -401,6 +403,13 @@ func newAnalyticsView(jobs []gmaps.Job) analyticsView {
 		view.RetryEvents += job.ExecutionStats.RetryEvents
 	}
 	return view
+}
+
+func jobDisplayTitle(job gmaps.Job) string {
+	if job.TemplateName.Valid && strings.TrimSpace(job.TemplateName.String) != "" {
+		return strings.TrimSpace(job.TemplateName.String)
+	}
+	return formatQueriesPreview(job.Queries)
 }
 
 func formatQueriesPreview(queries []string) string {

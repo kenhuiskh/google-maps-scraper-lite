@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-16T13:45:17Z",
+  "title": "Design System: google-maps-scraper-lite",
+  "extensions": {
+    "colorMeta": {
+      "app-bg": {
+        "role": "neutral",
+        "displayName": "Workspace Mist",
+        "canonical": "#f6f8fb",
+        "tonalRamp": ["#0f172a", "#1e293b", "#334155", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f6f8fb"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface White",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#111827", "#1f2937", "#374151", "#6b7280", "#9ca3af", "#d1d5db", "#f3f4f6", "#ffffff"]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "Operator Blue",
+        "canonical": "#1e40af",
+        "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#93c5fd", "#bfdbfe", "#eaf1ff"]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Success Green",
+        "canonical": "#027a48",
+        "tonalRamp": ["#052e16", "#14532d", "#166534", "#027a48", "#16a34a", "#86efac", "#bbf7d0", "#ecfdf3"]
+      },
+      "warning": {
+        "role": "tertiary",
+        "displayName": "Warning Amber",
+        "canonical": "#b45309",
+        "tonalRamp": ["#451a03", "#78350f", "#92400e", "#b45309", "#d97706", "#fcd34d", "#fde68a", "#fffbeb"]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Failure Red",
+        "canonical": "#b42318",
+        "tonalRamp": ["#450a0a", "#7f1d1d", "#991b1b", "#b42318", "#dc2626", "#fca5a5", "#fecdca", "#fef3f2"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page Headline",
+        "purpose": "Compact page titles."
+      },
+      "title": {
+        "displayName": "Panel Title",
+        "purpose": "Panel and modal titles."
+      },
+      "body": {
+        "displayName": "Interface Body",
+        "purpose": "Default UI text, table cells, forms, and descriptions."
+      },
+      "label": {
+        "displayName": "Operational Label",
+        "purpose": "Form labels, metric labels, chips, and compact metadata."
+      },
+      "mono": {
+        "displayName": "Machine Text",
+        "purpose": "Logs, JSON, code, IDs, and query previews."
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-hairline-lift",
+        "value": "0 1px 2px rgba(15, 23, 42, 0.025)",
+        "purpose": "Default panels, stat cells, and compact items."
+      },
+      {
+        "name": "segment-lift",
+        "value": "0 1px 2px rgba(15, 23, 42, 0.05)",
+        "purpose": "Selected small segmented controls."
+      },
+      {
+        "name": "modal-lift",
+        "value": "0 24px 70px rgba(15, 23, 42, 0.24)",
+        "purpose": "Dialogs only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-transition",
+        "value": "160ms ease",
+        "purpose": "Button, row, and selection state changes."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }",
+        "purpose": "Disable transitions for reduced motion users."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "layout-collapse",
+        "value": "1100px"
+      },
+      {
+        "name": "mobile",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Full-width primary action for form submit and run actions.",
+      "html": "<button class=\"ds-btn-primary\">Start Job</button>",
+      "css": ".ds-btn-primary { min-height: 38px; width: 100%; border: 1px solid #1e40af; border-radius: 6px; background: #1e40af; color: #ffffff; padding: 6px 10px; font: 850 14px/1.42 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease; } .ds-btn-primary:hover:not([disabled]) { background: #1d4ed8; border-color: #1d4ed8; color: #ffffff; } .ds-btn-primary:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; } .ds-btn-primary[disabled] { color: #94a3b8; background: #f8fafc; border-color: #d8e0ea; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Neutral utility action for import, export, edit, and navigation commands.",
+      "html": "<button class=\"ds-btn-secondary\">Export JSON</button>",
+      "css": ".ds-btn-secondary { min-height: 32px; border: 1px solid #d8e0ea; border-radius: 6px; background: #ffffff; color: #1e293b; padding: 6px 10px; font: 750 14px/1.42 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease; } .ds-btn-secondary:hover:not([disabled]) { border-color: #b7c8e1; color: #1e40af; background: #f8fbff; } .ds-btn-secondary:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Compact field for scraper parameters and template names.",
+      "html": "<label class=\"ds-field\"><span>Queries</span><input class=\"ds-input\" value=\"restaurants in Toronto\" /></label>",
+      "css": ".ds-field { display: grid; gap: 5px; color: #334155; font: 700 0.82rem/1.42 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-input { width: 100%; border: 1px solid #c4cfdd; border-radius: 6px; background: #ffffff; color: #0f172a; padding: 8px 9px; font: 400 14px/1.42 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-input:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "status-chip",
+      "description": "Small semantic label for job lifecycle state.",
+      "html": "<span class=\"ds-status ds-status-running\">running</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; border-radius: 5px; padding: 3px 8px; font: 800 0.76rem/1.42 Inter, ui-sans-serif, system-ui, sans-serif; border: 1px solid transparent; white-space: nowrap; } .ds-status-running { background: #ecfdf3; color: #027a48; border-color: #abefc6; } .ds-status-paused { background: #eaf1ff; color: #1e40af; border-color: #bfdbfe; } .ds-status-failed { background: #fef3f2; color: #b42318; border-color: #fecdca; }"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Default working surface with header and body.",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-panel-header\"><h2>Job Queue</h2><p>Running, pending, paused, and completed scraper jobs.</p></div><div class=\"ds-panel-body\">Panel content</div></section>",
+      "css": ".ds-panel { background: #ffffff; border: 1px solid #d8e0ea; border-radius: 8px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025); color: #0f172a; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui, sans-serif; } .ds-panel-header { padding: 12px 14px; border-bottom: 1px solid #d8e0ea; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 57px; } .ds-panel-header h2 { margin: 0; font-size: 0.98rem; line-height: 1.2; font-weight: 850; } .ds-panel-header p { margin: 2px 0 0; color: #475569; font-size: 0.8rem; } .ds-panel-body { padding: 14px; }"
+    },
+    {
+      "name": "Top Navigation",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "Sticky top navigation for Jobs, Templates, and Strategies.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Control navigation\"><a class=\"ds-nav-link ds-active\" href=\"#\">Jobs</a><a class=\"ds-nav-link\" href=\"#\">Templates</a><a class=\"ds-nav-link\" href=\"#\">Strategies</a></nav>",
+      "css": ".ds-nav { display: flex; align-items: center; gap: 4px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; } .ds-nav-link { min-height: 34px; display: inline-flex; align-items: center; border-radius: 7px; padding: 7px 12px; color: #475569; font-size: 14px; font-weight: 750; text-decoration: none; } .ds-nav-link:hover { background: #f1f5f9; color: #0f172a; } .ds-nav-link:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; } .ds-nav-link.ds-active { background: #1e40af; color: #ffffff; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Operator Console",
+    "overview": "This interface is a local control surface for developers running scraper jobs. It should feel like a precise console for live work: dense enough to show queue state, progress, job metadata, and safe actions, but calm enough that the next move is obvious.\n\nThe system uses light structural depth everywhere: pale layered surfaces, firm borders, compact spacing, and small shadows that separate working areas without making the UI feel like a platform. Visual emphasis belongs to job state, current navigation, primary actions, and failure conditions.\n\nIt must preserve the product direction from PRODUCT.md: simple, professional, informative, and \"less is more.\" It explicitly rejects complicated platform patterns, enterprise BI density, hacker-terminal styling, generic admin-template sprawl, and analytics-first presentation.",
+    "keyCharacteristics": [
+      "Compact operational density with stable grids and predictable controls.",
+      "Restrained blue primary color used for selected navigation, primary actions, and pending/paused states.",
+      "Semantic status colors for running, blocked, failed, and warning states.",
+      "System-style typography with heavy labels and tabular numbers for scan speed.",
+      "Mobile-responsive viewing through structural grid collapse, not fluid type."
+    ],
+    "rules": [
+      {
+        "name": "The Action Color Rule",
+        "body": "Operator Blue is for current location, primary action, and selected state. Do not use it as decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The Status Means State Rule",
+        "body": "Green, amber, and red must map to real job or form state. Do not use semantic colors for visual variety.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Hero Type Rule",
+        "body": "This is a control UI. Do not introduce oversized display type, fluid headings, or marketing-style hierarchy.",
+        "section": "typography"
+      },
+      {
+        "name": "The Data Weight Rule",
+        "body": "Use heavier weights for labels and values only when they improve scanning. Do not bold entire blocks of explanatory text.",
+        "section": "typography"
+      },
+      {
+        "name": "The Modal Owns Height Rule",
+        "body": "Heavy shadow belongs to modals. Panels stay lightly lifted and structurally bordered.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Border First Rule",
+        "body": "If depth is needed, start with border and background contrast before adding stronger shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep the Web UI dense but calm: compact spacing, clear borders, and predictable grids.",
+      "Do use Operator Blue only for navigation selection, primary actions, active filters, and pending or paused states.",
+      "Do keep status colors tied to real states: running, done, blocked, failed, warning, required, optional.",
+      "Do preserve mobile viewing with structural collapse at 1100px and 640px.",
+      "Do use monospace only for logs, JSON, IDs, code, and query previews.",
+      "Do keep focus visible with the shared 3px pale blue outline."
+    ],
+    "donts": [
+      "Don't make the UI feel like a complicated platform.",
+      "Don't make it feel like enterprise BI.",
+      "Don't use hacker-terminal styling as the main surface.",
+      "Don't create generic admin-template sprawl with repeated decorative cards.",
+      "Don't add marketing hero typography, hero metrics, gradient text, decorative gradients, or glassmorphism.",
+      "Don't use semantic colors for decoration.",
+      "Don't add heavy shadows to panels; reserve heavy elevation for dialogs."
+    ]
+  }
+}

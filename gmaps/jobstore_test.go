@@ -418,6 +418,269 @@ func TestJobStoreSaveAndListJobTemplates(t *testing.T) {
 	}
 }
 
+func TestJobStoreExportReusableConfigIncludesOrderedStrategies(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"]}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "tea", `{"Queries":["tea"]}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "ordered", []string{secondID, firstID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+
+	cfg, err := store.ExportReusableConfig(ctx)
+	if err != nil {
+		t.Fatalf("export config: %v", err)
+	}
+	if cfg.Version != ConfigExportVersion || len(cfg.Templates) != 2 || len(cfg.Strategies) != 1 {
+		t.Fatalf("export = %#v, want version with 2 templates and 1 strategy", cfg)
+	}
+	if cfg.Strategies[0].ID != strategyID {
+		t.Fatalf("strategy id = %q, want %q", cfg.Strategies[0].ID, strategyID)
+	}
+	if got := cfg.Strategies[0].TemplateIDs; len(got) != 2 || got[0] != secondID || got[1] != firstID {
+		t.Fatalf("strategy template order = %#v, want [%q %q]", got, secondID, firstID)
+	}
+}
+
+func TestJobStoreExportReusableConfigSelection(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"]}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "tea", `{"Queries":["tea"]}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	thirdID, err := store.SaveJobTemplateJSON(ctx, "", "pastry", `{"Queries":["pastry"]}`)
+	if err != nil {
+		t.Fatalf("save third template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "ordered", []string{secondID, firstID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+
+	cfg, err := store.ExportReusableConfigSelection(ctx, nil, []string{strategyID})
+	if err != nil {
+		t.Fatalf("export strategy selection: %v", err)
+	}
+	if len(cfg.Strategies) != 1 {
+		t.Fatalf("strategies len = %d, want 1", len(cfg.Strategies))
+	}
+	if got := cfg.Strategies[0].TemplateIDs; len(got) != 2 || got[0] != secondID || got[1] != firstID {
+		t.Fatalf("strategy template ids = %#v, want selected strategy order", got)
+	}
+	exportedTemplates := map[string]bool{}
+	for _, tpl := range cfg.Templates {
+		exportedTemplates[tpl.ID] = true
+	}
+	if !exportedTemplates[firstID] || !exportedTemplates[secondID] || exportedTemplates[thirdID] {
+		t.Fatalf("exported templates = %#v, want only strategy templates", exportedTemplates)
+	}
+
+	cfg, err = store.ExportReusableConfigSelection(ctx, []string{thirdID}, nil)
+	if err != nil {
+		t.Fatalf("export template selection: %v", err)
+	}
+	if len(cfg.Templates) != 1 || cfg.Templates[0].ID != thirdID || len(cfg.Strategies) != 0 {
+		t.Fatalf("template-only export = %#v, want selected template and no strategies", cfg)
+	}
+
+	if _, err := store.ExportReusableConfigSelection(ctx, []string{"tpl_missing"}, nil); !errors.Is(err, ErrConfigExportInvalid) {
+		t.Fatalf("missing template err = %v, want export invalid", err)
+	}
+}
+
+func TestJobStoreImportReusableConfigPreservesStrategyOrder(t *testing.T) {
+	ctx := context.Background()
+	source := newTestJobStore(t)
+	firstID, err := source.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"]}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := source.SaveJobTemplateJSON(ctx, "", "tea", `{"Queries":["tea"]}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	if _, err := source.SaveStrategy(ctx, "", "morning", "ordered", []string{secondID, firstID}); err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	cfg, err := source.ExportReusableConfig(ctx)
+	if err != nil {
+		t.Fatalf("export config: %v", err)
+	}
+
+	target := newTestJobStore(t)
+	summary, err := target.ImportReusableConfig(ctx, cfg, ConfigImportRename)
+	if err != nil {
+		t.Fatalf("import config: %v", err)
+	}
+	if summary.Templates.Created != 2 || summary.Strategies.Created != 1 {
+		t.Fatalf("summary = %#v, want created templates and strategy", summary)
+	}
+	strategies, err := target.ListStrategies(ctx)
+	if err != nil {
+		t.Fatalf("list strategies: %v", err)
+	}
+	if len(strategies) != 1 {
+		t.Fatalf("strategies len = %d, want 1", len(strategies))
+	}
+	if got := strategies[0].Templates; len(got) != 2 || got[0].ID != secondID || got[1].ID != firstID {
+		t.Fatalf("imported strategy templates = %#v, want ordered ids", got)
+	}
+}
+
+func TestJobStoreImportReusableConfigCollisionModes(t *testing.T) {
+	ctx := context.Background()
+	cfg := ReusableConfigExport{
+		Version: ConfigExportVersion,
+		Source:  "test",
+		Templates: []ReusableConfigTemplate{{
+			ID:         "tpl_collision",
+			Name:       "incoming template",
+			ParamsJSON: `{"Queries":["incoming"]}`,
+		}},
+		Strategies: []ReusableConfigStrategy{{
+			ID:          "str_collision",
+			Name:        "incoming strategy",
+			TemplateIDs: []string{"tpl_collision"},
+		}},
+	}
+
+	t.Run("rename", func(t *testing.T) {
+		store := newTestJobStore(t)
+		if _, err := store.SaveJobTemplateJSON(ctx, "tpl_collision", "existing template", `{"Queries":["existing"]}`); err != nil {
+			t.Fatalf("save existing template: %v", err)
+		}
+		if _, err := store.SaveStrategy(ctx, "str_collision", "existing strategy", "", []string{"tpl_collision"}); err != nil {
+			t.Fatalf("save existing strategy: %v", err)
+		}
+		summary, err := store.ImportReusableConfig(ctx, cfg, ConfigImportRename)
+		if err != nil {
+			t.Fatalf("rename import: %v", err)
+		}
+		if summary.Templates.Renamed != 1 || summary.Strategies.Renamed != 1 {
+			t.Fatalf("summary = %#v, want renamed template and strategy", summary)
+		}
+		templates, err := store.ListJobTemplates(ctx)
+		if err != nil {
+			t.Fatalf("list templates: %v", err)
+		}
+		strategies, err := store.ListStrategies(ctx)
+		if err != nil {
+			t.Fatalf("list strategies: %v", err)
+		}
+		if len(templates) != 2 || len(strategies) != 2 {
+			t.Fatalf("counts = %d templates/%d strategies, want 2/2", len(templates), len(strategies))
+		}
+	})
+
+	t.Run("skip", func(t *testing.T) {
+		store := newTestJobStore(t)
+		if _, err := store.SaveJobTemplateJSON(ctx, "tpl_collision", "existing template", `{"Queries":["existing"]}`); err != nil {
+			t.Fatalf("save existing template: %v", err)
+		}
+		if _, err := store.SaveStrategy(ctx, "str_collision", "existing strategy", "", []string{"tpl_collision"}); err != nil {
+			t.Fatalf("save existing strategy: %v", err)
+		}
+		summary, err := store.ImportReusableConfig(ctx, cfg, ConfigImportSkip)
+		if err != nil {
+			t.Fatalf("skip import: %v", err)
+		}
+		if summary.Templates.Skipped != 1 || summary.Strategies.Skipped != 1 {
+			t.Fatalf("summary = %#v, want skipped template and strategy", summary)
+		}
+		templates, _ := store.ListJobTemplates(ctx)
+		strategies, _ := store.ListStrategies(ctx)
+		if len(templates) != 1 || len(strategies) != 1 {
+			t.Fatalf("counts = %d templates/%d strategies, want 1/1", len(templates), len(strategies))
+		}
+	})
+
+	t.Run("overwrite", func(t *testing.T) {
+		store := newTestJobStore(t)
+		if _, err := store.SaveJobTemplateJSON(ctx, "tpl_collision", "existing template", `{"Queries":["existing"]}`); err != nil {
+			t.Fatalf("save existing template: %v", err)
+		}
+		if _, err := store.SaveStrategy(ctx, "str_collision", "existing strategy", "", []string{"tpl_collision"}); err != nil {
+			t.Fatalf("save existing strategy: %v", err)
+		}
+		summary, err := store.ImportReusableConfig(ctx, cfg, ConfigImportOverwrite)
+		if err != nil {
+			t.Fatalf("overwrite import: %v", err)
+		}
+		if summary.Templates.Updated != 1 || summary.Strategies.Updated != 1 {
+			t.Fatalf("summary = %#v, want updated template and strategy", summary)
+		}
+		tpl, err := store.GetJobTemplate(ctx, "tpl_collision")
+		if err != nil {
+			t.Fatalf("get template: %v", err)
+		}
+		if tpl.Name != "incoming template" || tpl.ParamsJSON != `{"Queries":["incoming"]}` {
+			t.Fatalf("template = %#v, want overwritten incoming values", tpl)
+		}
+	})
+
+	t.Run("duplicate", func(t *testing.T) {
+		store := newTestJobStore(t)
+		summary, err := store.ImportReusableConfig(ctx, cfg, ConfigImportDuplicate)
+		if err != nil {
+			t.Fatalf("duplicate import: %v", err)
+		}
+		if summary.Templates.Duplicated != 1 || summary.Strategies.Duplicated != 1 {
+			t.Fatalf("summary = %#v, want duplicated template and strategy", summary)
+		}
+		templates, _ := store.ListJobTemplates(ctx)
+		strategies, _ := store.ListStrategies(ctx)
+		if len(templates) != 1 || len(strategies) != 1 {
+			t.Fatalf("counts = %d templates/%d strategies, want 1/1", len(templates), len(strategies))
+		}
+		if templates[0].ID == "tpl_collision" || strategies[0].ID == "str_collision" {
+			t.Fatalf("duplicate kept original ids: templates=%#v strategies=%#v", templates, strategies)
+		}
+	})
+}
+
+func TestJobStoreImportReusableConfigValidationIsTransactional(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	if _, err := store.SaveJobTemplateJSON(ctx, "tpl_existing", "existing", `{"Queries":["existing"]}`); err != nil {
+		t.Fatalf("save existing template: %v", err)
+	}
+	cfg := ReusableConfigExport{
+		Version: ConfigExportVersion,
+		Templates: []ReusableConfigTemplate{{
+			ID:         "tpl_new",
+			Name:       "new",
+			ParamsJSON: `{"Queries":["new"]}`,
+		}},
+		Strategies: []ReusableConfigStrategy{{
+			ID:          "str_bad",
+			Name:        "bad",
+			TemplateIDs: []string{"tpl_missing"},
+		}},
+	}
+	if _, err := store.ImportReusableConfig(ctx, cfg, ConfigImportRename); !errors.Is(err, ErrConfigImportInvalid) {
+		t.Fatalf("import err = %v, want invalid", err)
+	}
+	templates, err := store.ListJobTemplates(ctx)
+	if err != nil {
+		t.Fatalf("list templates: %v", err)
+	}
+	if len(templates) != 1 || templates[0].ID != "tpl_existing" {
+		t.Fatalf("templates after failed import = %#v, want only existing", templates)
+	}
+}
+
 func TestJobStoreMigratesExistingSQLiteSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.sqlite")
 	db, err := sql.Open("sqlite3", path)
