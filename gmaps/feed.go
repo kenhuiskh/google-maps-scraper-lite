@@ -11,6 +11,11 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
+// PlaceIDToURL converts a Google Maps place ID to a direct place detail URL.
+func PlaceIDToURL(placeID string) string {
+	return "https://www.google.com/maps/place/?q=place_id:" + url.QueryEscape(placeID)
+}
+
 // FeedOptions configures the feed scrape behaviour.
 type FeedOptions struct {
 	// MaxDepth controls how many scroll iterations are attempted.

@@ -430,9 +430,22 @@ type feedCollection struct {
 }
 
 func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions) feedCollection {
-	var placeURLs []string
-	total := len(queries)
-	for i, q := range queries {
+	var directURLs []string
+	var feedQueries []string
+	for _, q := range queries {
+		if id, ok := strings.CutPrefix(q, "place_id:"); ok {
+			directURLs = append(directURLs, PlaceIDToURL(id))
+		} else {
+			feedQueries = append(feedQueries, q)
+		}
+	}
+	if len(directURLs) > 0 {
+		log.Printf("Direct place-ID URLs: %d (no feed scraping)", len(directURLs))
+	}
+
+	var feedURLs []string
+	total := len(feedQueries)
+	for i, q := range feedQueries {
 		log.Printf("Query %d/%d %q — starting", i+1, total, q)
 		start := time.Now()
 		page := s.Pool.AcquirePage()
@@ -443,30 +456,32 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 			continue
 		}
 		log.Printf("Query %d/%d %q — %d URLs found (%ds)", i+1, total, q, len(urls), int(time.Since(start).Seconds()))
-		placeURLs = append(placeURLs, urls...)
+		feedURLs = append(feedURLs, urls...)
 	}
 
-	originalCount := len(placeURLs)
+	allURLs := append(directURLs, feedURLs...)
+	feedURLsFound := len(feedURLs)
+	originalCount := len(allURLs)
 	seen := make(map[string]struct{}, originalCount)
 	dedupedURLs := make([]string, 0, originalCount)
-	for _, u := range placeURLs {
+	for _, u := range allURLs {
 		if _, ok := seen[u]; ok {
 			continue
 		}
 		seen[u] = struct{}{}
 		dedupedURLs = append(dedupedURLs, u)
 	}
-	placeURLs = dedupedURLs
-	duplicatesRemoved := originalCount - len(placeURLs)
-	if s.Config.Limit > 0 && len(placeURLs) > s.Config.Limit {
-		placeURLs = placeURLs[:s.Config.Limit]
+	allURLs = dedupedURLs
+	duplicatesRemoved := originalCount - len(allURLs)
+	if s.Config.Limit > 0 && len(allURLs) > s.Config.Limit {
+		allURLs = allURLs[:s.Config.Limit]
 	}
 	if duplicatesRemoved > 0 {
-		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(placeURLs), total, duplicatesRemoved)
+		log.Printf("Collection done: %d URLs queued (%d duplicates removed)", len(allURLs), duplicatesRemoved)
 	} else {
-		log.Printf("Feed collection done: %d URLs queued across %d queries", len(placeURLs), total)
+		log.Printf("Collection done: %d URLs queued", len(allURLs))
 	}
-	return feedCollection{URLs: placeURLs, FeedURLsFound: originalCount, FeedDuplicateURLs: duplicatesRemoved}
+	return feedCollection{URLs: allURLs, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved}
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {
