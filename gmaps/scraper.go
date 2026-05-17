@@ -56,6 +56,7 @@ type Scraper struct {
 	Pool        PagePool
 	Store       *JobStore
 	ScrapePlace func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error)
+	ScrapeFeed  func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error)
 	OnJobReady  func(jobID string)
 }
 
@@ -430,58 +431,63 @@ type feedCollection struct {
 }
 
 func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions) feedCollection {
-	var directURLs []string
-	var feedQueries []string
-	for _, q := range queries {
-		if id, ok := strings.CutPrefix(q, "place_id:"); ok {
-			directURLs = append(directURLs, PlaceIDToURL(id))
-		} else {
-			feedQueries = append(feedQueries, q)
-		}
-	}
-	if len(directURLs) > 0 {
-		log.Printf("Direct place-ID URLs: %d (no feed scraping)", len(directURLs))
+	scrapeFeed := s.ScrapeFeed
+	if scrapeFeed == nil {
+		scrapeFeed = ScrapeFeed
 	}
 
 	var feedURLs []string
-	total := len(feedQueries)
-	for i, q := range feedQueries {
+	total := len(queries)
+	for i, q := range queries {
 		log.Printf("Query %d/%d %q — starting", i+1, total, q)
 		start := time.Now()
 		page := s.Pool.AcquirePage()
-		urls, err := ScrapeFeed(ctx, page, q, feedOpts)
+		urls, err := scrapeFeed(ctx, page, q, feedOpts)
 		s.Pool.ReleasePage(page)
 		if err != nil {
+			if id, ok := strings.CutPrefix(q, "place_id:"); ok {
+				fallbackURL := PlaceIDToURL(id)
+				log.Printf("Query %d/%d %q — feed error after %ds, using direct place-ID URL: %v", i+1, total, q, int(time.Since(start).Seconds()), err)
+				feedURLs = append(feedURLs, fallbackURL)
+				continue
+			}
 			log.Printf("Query %d/%d %q — feed error after %ds: %v", i+1, total, q, int(time.Since(start).Seconds()), err)
 			continue
+		}
+		if len(urls) == 0 {
+			if id, ok := strings.CutPrefix(q, "place_id:"); ok {
+				fallbackURL := PlaceIDToURL(id)
+				log.Printf("Query %d/%d %q — no feed URLs found, using direct place-ID URL", i+1, total, q)
+				feedURLs = append(feedURLs, fallbackURL)
+				continue
+			}
 		}
 		log.Printf("Query %d/%d %q — %d URLs found (%ds)", i+1, total, q, len(urls), int(time.Since(start).Seconds()))
 		feedURLs = append(feedURLs, urls...)
 	}
 
-	allURLs := append(directURLs, feedURLs...)
 	feedURLsFound := len(feedURLs)
-	originalCount := len(allURLs)
+	originalCount := len(feedURLs)
 	seen := make(map[string]struct{}, originalCount)
 	dedupedURLs := make([]string, 0, originalCount)
-	for _, u := range allURLs {
+	for _, u := range feedURLs {
 		if _, ok := seen[u]; ok {
 			continue
 		}
 		seen[u] = struct{}{}
 		dedupedURLs = append(dedupedURLs, u)
 	}
-	allURLs = dedupedURLs
-	duplicatesRemoved := originalCount - len(allURLs)
-	if s.Config.Limit > 0 && len(allURLs) > s.Config.Limit {
-		allURLs = allURLs[:s.Config.Limit]
+	feedURLs = dedupedURLs
+	duplicatesRemoved := originalCount - len(feedURLs)
+	if s.Config.Limit > 0 && len(feedURLs) > s.Config.Limit {
+		feedURLs = feedURLs[:s.Config.Limit]
 	}
 	if duplicatesRemoved > 0 {
-		log.Printf("Collection done: %d URLs queued (%d duplicates removed)", len(allURLs), duplicatesRemoved)
+		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(feedURLs), total, duplicatesRemoved)
 	} else {
-		log.Printf("Collection done: %d URLs queued", len(allURLs))
+		log.Printf("Feed collection done: %d URLs queued across %d queries", len(feedURLs), total)
 	}
-	return feedCollection{URLs: allURLs, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved}
+	return feedCollection{URLs: feedURLs, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved}
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {

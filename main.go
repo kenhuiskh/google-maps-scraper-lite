@@ -127,7 +127,7 @@ func main() {
 		}
 	}
 
-	if *jobID == "" && *queries == "" {
+	if controlUIOnly(*jobID, *queries, *placeIDs) {
 		log.Printf("control UI only; press Ctrl-C to stop")
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -384,6 +384,10 @@ func main() {
 	if err := w.Close(); err != nil {
 		log.Printf("writer close error: %v", err)
 	}
+}
+
+func controlUIOnly(jobID, queries, placeIDs string) bool {
+	return jobID == "" && strings.TrimSpace(queries) == "" && strings.TrimSpace(placeIDs) == ""
 }
 
 func outputMode(dsn string) string {

@@ -909,6 +909,15 @@ func TestStartJobMissingQueries(t *testing.T) {
 	}
 }
 
+func TestControlUIOnlyAllowsPlaceIDs(t *testing.T) {
+	if controlUIOnly("", "", "ChIJ123") {
+		t.Fatal("controlUIOnly returned true for place IDs")
+	}
+	if !controlUIOnly("", " ", " ") {
+		t.Fatal("controlUIOnly returned false for blank runnable inputs")
+	}
+}
+
 func TestStartJobDatabaseNoDSN(t *testing.T) {
 	t.Setenv("DSN", "")
 	store := newStartStore(t)
