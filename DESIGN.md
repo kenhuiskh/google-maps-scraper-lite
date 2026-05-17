@@ -2,18 +2,18 @@
 name: google-maps-scraper-lite
 description: Dense, calm Web UI for controlling local scraper jobs.
 colors:
-  app-bg: "#f6f8fb"
+  app-bg: "#f5f7fa"
   surface: "#ffffff"
-  surface-muted: "#eef2f7"
-  border: "#d8e0ea"
-  border-strong: "#c4cfdd"
+  surface-muted: "#eef1f5"
+  border: "#e1e6eb"
+  border-strong: "#cbd5df"
   text: "#0f172a"
   muted: "#475569"
   muted-subtle: "#64748b"
-  primary: "#1e40af"
-  primary-hover: "#1d4ed8"
-  primary-soft: "#eaf1ff"
-  info: "#2563eb"
+  primary: "#3d5a7a"
+  primary-hover: "#304966"
+  primary-soft: "#edf3f8"
+  info: "#3b6f9e"
   danger: "#b42318"
   danger-soft: "#fef3f2"
   success: "#027a48"
@@ -98,16 +98,16 @@ components:
 
 This interface is a local control surface for developers running scraper jobs. It should feel like a precise console for live work: dense enough to show queue state, progress, job metadata, and safe actions, but calm enough that the next move is obvious.
 
-The system uses light structural depth everywhere: pale layered surfaces, firm borders, compact spacing, and small shadows that separate working areas without making the UI feel like a platform. Visual emphasis belongs to job state, current navigation, primary actions, and failure conditions.
+The dashboard redesign is the implementation baseline for the rest of the app. The system uses light structural depth everywhere: pale layered surfaces, firm borders, compact spacing, command strips, compact rows, and small shadows that separate working areas without making the UI feel like a platform. Visual emphasis belongs to job state, reusable configuration state, current navigation, primary actions, and failure conditions.
 
 It must preserve the product direction from `PRODUCT.md`: simple, professional, informative, and "less is more." It explicitly rejects complicated platform patterns, enterprise BI density, hacker-terminal styling, generic admin-template sprawl, and analytics-first presentation.
 
 **Key Characteristics:**
-- Compact operational density with stable grids and predictable controls.
+- Compact operational density with stable grids, command strips, compact rows, and predictable controls.
 - Restrained blue primary color used for selected navigation, primary actions, and pending/paused states.
 - Semantic status colors for running, blocked, failed, and warning states.
 - System-style typography with heavy labels and tabular numbers for scan speed.
-- Mobile-responsive viewing through structural grid collapse, not fluid type.
+- Mobile-responsive viewing through structural grid collapse, sheet-like detail panels, and fixed type scales, not fluid type.
 
 ## 2. Colors
 
@@ -139,7 +139,7 @@ The palette is a restrained operational blue system over cool tinted neutrals, w
 
 ### Named Rules
 
-**The Action Color Rule.** Operator Blue is for current location, primary action, and selected state. Do not use it as decoration.
+**The Action Color Rule.** Operator Blue is for current location, primary action, selected state, and reusable configuration selection. Do not use it as decoration.
 
 **The Status Means State Rule.** Green, amber, and red must map to real job or form state. Do not use semantic colors for visual variety.
 
@@ -170,7 +170,7 @@ The palette is a restrained operational blue system over cool tinted neutrals, w
 The system uses light structural depth everywhere: borders and tonal fills do most of the work, with subtle shadows on panels and heavier elevation reserved for dialogs. Shadows should be quiet enough that layout structure remains the dominant cue.
 
 ### Shadow Vocabulary
-- **Panel Hairline Lift** (`0 1px 2px rgba(15, 23, 42, 0.025)`): Default panels, stat cells, and compact items.
+- **Panel Hairline Lift** (`0 1px 2px rgba(15, 23, 42, 0.035)`): Default panels, stat cells, and compact items.
 - **Segment Lift** (`0 1px 2px rgba(15, 23, 42, 0.05)`): Selected export tabs and small raised controls.
 - **Modal Lift** (`0 24px 70px rgba(15, 23, 42, 0.24)`): Dialogs only.
 - **Status Halo** (`0 0 0 3px rgba(148, 163, 184, 0.16)` or `rgba(22, 163, 74, 0.16)`): Tiny live status indicators only.
@@ -210,6 +210,23 @@ Panels are working surfaces with compact headers and clear separation.
 - **Border:** Always present on panels and compact items.
 - **Internal Padding:** 12-14px for panel headers and bodies; 9-11px for compact repeated items.
 
+### Command Strips
+
+Command strips are the preferred top area for dense operational panels. They combine a title, live state or short helper copy, filters, pagination, refresh, import/export, or create actions without becoming a separate toolbar.
+
+- **Layout:** Two-column grid on desktop, single-column below 640px.
+- **Copy:** One title line plus one concise helper line. Avoid restating the page title.
+- **Actions:** Icon buttons for refresh, close, previous, next, and inspect actions when the icon is familiar. Text buttons remain for create, run, import, export, save, duplicate, and delete.
+
+### Compact Rows
+
+The dashboard job row is the model for templates, strategies, selected items, and modal lists.
+
+- **Structure:** Primary identity, secondary metadata, and right-aligned actions.
+- **Selection:** Soft Operator Blue background with stronger cool border. Avoid colored side stripes.
+- **Metadata:** Use neutral chips or muted text for IDs, timestamps, counts, source, output, and dependency hints.
+- **Actions:** Keep row actions compact and stable; do not make row height jump on hover.
+
 ### Inputs / Fields
 
 Inputs should feel exact and stable, with enough padding for mobile use.
@@ -231,9 +248,10 @@ Top navigation stays plain and readable.
 
 Tables carry the highest information density. Lists carry saved templates, strategies, and selected items.
 
-- **Table:** Minimum wide table with horizontal overflow, fixed columns, uppercase header labels, and hover row tint.
+- **Table:** Use only when true tabular comparison is needed. The job dashboard uses a compact row list plus inspector instead of a wide table.
 - **Progress:** 6px pill track with Success Green fill and compact supporting stats.
 - **Compact List:** 8px panels with 9px gaps. Selected state uses Soft Operator Blue and stronger cool border.
+- **Inspector / Detail Panel:** Use for secondary data, logs, JSON, metrics, and metadata that would otherwise make a row too tall.
 
 ### Dialogs
 
@@ -242,6 +260,7 @@ Dialogs are the only strongly elevated surface.
 - **Shape:** 8px radius with cool border.
 - **Layout:** Header, scrollable body, action footer. Keep body grid responsive at 640px.
 - **Backdrop:** Dark slate overlay. Do not use blur or glass effects.
+- **Preview Panes:** JSON, logs, query previews, and strategy previews use dark code panes only when the content is machine-readable.
 
 ## 6. Do's and Don'ts
 
@@ -253,6 +272,7 @@ Dialogs are the only strongly elevated surface.
 - **Do** preserve mobile viewing with structural collapse at 1100px and 640px.
 - **Do** use monospace only for logs, JSON, IDs, code, and query previews.
 - **Do** keep focus visible with the shared 3px pale blue outline.
+- **Do** carry the dashboard pattern into Templates, Template Editor, Strategies, and dialogs so the app feels like one control surface.
 
 ### Don't:
 
@@ -263,3 +283,4 @@ Dialogs are the only strongly elevated surface.
 - **Don't** add marketing hero typography, hero metrics, gradient text, decorative gradients, or glassmorphism.
 - **Don't** use semantic colors for decoration.
 - **Don't** add heavy shadows to panels; reserve heavy elevation for dialogs.
+- **Don't** make each page invent its own list, toolbar, button, or modal vocabulary.

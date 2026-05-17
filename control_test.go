@@ -193,11 +193,11 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `refreshJob('`+jobID+`')`) {
 		t.Fatalf("index did not include refresh button for job ID %s: %s", jobID, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `viewJobLog('`+jobID+`')`) {
-		t.Fatalf("index did not include view log button for job ID %s: %s", jobID, rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `selectJob('`+jobID+`')`) {
+		t.Fatalf("index did not include more info button for job ID %s: %s", jobID, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `aria-label="View log for job `+jobID+`"`) {
-		t.Fatalf("index did not include accessible icon log button for job ID %s: %s", jobID, rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `aria-label="More info for job `+jobID+`"`) {
+		t.Fatalf("index did not include accessible more info button for job ID %s: %s", jobID, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `start-pending`) {
 		t.Fatalf("index did not include start action for unblocked pending job ID %s: %s", jobID, rec.Body.String())
@@ -625,8 +625,8 @@ func TestControlIndexRendersFiltersInJobHeader(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `class="panel-actions"`) || !strings.Contains(body, `data-filter-option="active"`) {
-		t.Fatalf("filter controls should render in the job header: %s", body)
+	if !strings.Contains(body, `class="queue-command-actions"`) || !strings.Contains(body, `data-filter-option="active"`) {
+		t.Fatalf("filter controls should render in the queue command strip: %s", body)
 	}
 	if strings.Contains(body, "queue-toolbar") {
 		t.Fatalf("filter controls should not render as a separate queue toolbar: %s", body)
