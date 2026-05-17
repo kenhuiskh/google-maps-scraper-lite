@@ -50,6 +50,8 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 	}
 
 	clickRejectCookiesPlaywright(page)
+	canonicalURL := waitForRichPlacePage(ctx, page)
+	expandOpeningHours(page)
 
 	raw, err := extractPlaceJSON(ctx, page)
 	if err != nil {
@@ -62,10 +64,7 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 	}
 
 	entry.ReviewTags = extractReviewTags(page)
-
-	if entry.Link == "" || mapsTabRE.MatchString(entry.Link) {
-		entry.Link = fullURL
-	}
+	entry.Link = choosePlaceLink(entry.Link, canonicalURL, fullURL)
 
 	if opts.ExtraReviews > 0 {
 		if err := scrapeExtraReviews(ctx, page, &entry, opts.ExtraReviews); err != nil {
@@ -105,6 +104,94 @@ func placeURLWithLang(placeURL, lang string) string {
 	q.Set("hl", lang)
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
+}
+
+func waitForRichPlacePage(ctx context.Context, page playwright.Page) string {
+	canonicalURL := waitForPlaceIDResolution(ctx, page, 20*time.Second)
+
+	selectors := []string{
+		`h1`,
+		`[data-item-id="oh"]`,
+		`[aria-label="Refine reviews"]`,
+		`[role="main"]`,
+	}
+	for _, sel := range selectors {
+		loc := page.Locator(sel).First()
+		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
+			State:   playwright.WaitForSelectorStateAttached,
+			Timeout: playwright.Float(2500),
+		}); err == nil {
+			return canonicalURL
+		}
+	}
+
+	return canonicalURL
+}
+
+func waitForPlaceIDResolution(ctx context.Context, page playwright.Page, timeout time.Duration) string {
+	if canonical := canonicalPlaceURL(page.URL()); canonical != "" && !isPlaceIDQueryURL(page.URL()) {
+		return canonical
+	}
+	if !isPlaceIDQueryURL(page.URL()) {
+		return ""
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-ticker.C:
+			if canonical := canonicalPlaceURL(page.URL()); canonical != "" && !isPlaceIDQueryURL(page.URL()) {
+				return canonical
+			}
+			if time.Now().After(deadline) {
+				return ""
+			}
+		}
+	}
+}
+
+func isPlaceIDQueryURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.Contains(rawURL, "place_id:") || strings.Contains(rawURL, "query_place_id=")
+	}
+	q := parsed.Query()
+	return strings.HasPrefix(q.Get("q"), "place_id:") ||
+		strings.HasPrefix(q.Get("query"), "place_id:") ||
+		q.Get("query_place_id") != ""
+}
+
+func choosePlaceLink(parsedLink, canonicalURL, fallbackURL string) string {
+	if canonical := canonicalPlaceURL(canonicalURL); canonical != "" {
+		return canonical
+	}
+	if parsedLink != "" && !mapsTabRE.MatchString(parsedLink) && !isPlaceIDQueryURL(parsedLink) {
+		return parsedLink
+	}
+	if canonical := canonicalPlaceURL(fallbackURL); canonical != "" {
+		return canonical
+	}
+	return fallbackURL
+}
+
+func canonicalPlaceURL(rawURL string) string {
+	if rawURL == "" || isPlaceIDQueryURL(rawURL) {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		if strings.Contains(rawURL, "/maps/place/") {
+			return rawURL
+		}
+		return ""
+	}
+	if !strings.Contains(parsed.Path, "/maps/place/") {
+		return ""
+	}
+	return rawURL
 }
 
 // scrapeExtraReviews opens the reviews dialog, sorts by newest, scrolls the DOM

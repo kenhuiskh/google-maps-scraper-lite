@@ -1520,8 +1520,12 @@
       <fieldset class="form-section">
         <legend>Search</legend>
         <div class="field">
-          <label for="queries">Queries *</label>
-          <textarea id="queries" name="queries" required placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
+          <label for="queries">Queries <span class="muted tiny">(mutually exclusive with Place IDs below)</span></label>
+          <textarea id="queries" name="queries" placeholder="One query per line&#10;e.g. restaurants in toronto"></textarea>
+        </div>
+        <div class="field">
+          <label for="place_ids">Place IDs <span class="muted tiny">(mutually exclusive with Queries above, max 2000)</span></label>
+          <textarea id="place_ids" name="place_ids" placeholder="One place ID per line&#10;e.g. ChIJN1t_tDeuEmsRUsoyG83frY4"></textarea>
         </div>
         <div class="field-row">
           <div class="field">
@@ -2299,7 +2303,13 @@
     syncStartTemplateJSON();
     syncingTemplate = true;
     setValue('job_title', p.JobTitle);
-    setValue('queries', Array.isArray(p.Queries) ? p.Queries.join('\n') : '');
+    if (Array.isArray(p.PlaceIDs) && p.PlaceIDs.length > 0) {
+      setValue('place_ids', p.PlaceIDs.join('\n'));
+      setValue('queries', '');
+    } else {
+      setValue('queries', Array.isArray(p.Queries) ? p.Queries.join('\n') : '');
+      setValue('place_ids', '');
+    }
     setValue('output_mode', p.OutputMode || 'file');
     setValue('geo', p.Geo);
     setValue('radius', p.Radius);
@@ -2331,7 +2341,14 @@
     }
     syncingTemplate = true;
     setOptional(data, 'JobTitle', formValue('job_title'));
-    data.Queries = formValue('queries').split('\n').map(function(q) { return q.trim(); }).filter(Boolean);
+    var placeIDsText = formValue('place_ids').trim();
+    if (placeIDsText) {
+      data.PlaceIDs = placeIDsText.split('\n').map(function(q) { return q.trim(); }).filter(Boolean);
+      delete data.Queries;
+    } else {
+      data.Queries = formValue('queries').split('\n').map(function(q) { return q.trim(); }).filter(Boolean);
+      delete data.PlaceIDs;
+    }
     setOptional(data, 'OutputMode', formValue('output_mode'));
     setOptional(data, 'Geo', formValue('geo'));
     setOptional(data, 'Radius', numberOrNull('radius'));
@@ -2396,6 +2413,24 @@
     el.addEventListener('input', applyFormToTemplateJSON);
     el.addEventListener('change', applyFormToTemplateJSON);
   });
+
+  (function() {
+    var queriesEl = document.getElementById('queries');
+    var placeIDsEl = document.getElementById('place_ids');
+    if (!queriesEl || !placeIDsEl) return;
+    queriesEl.addEventListener('input', function() {
+      if (this.value.trim() && placeIDsEl.value.trim()) {
+        placeIDsEl.value = '';
+        applyFormToTemplateJSON();
+      }
+    });
+    placeIDsEl.addEventListener('input', function() {
+      if (this.value.trim() && queriesEl.value.trim()) {
+        queriesEl.value = '';
+        applyFormToTemplateJSON();
+      }
+    });
+  })();
 
   const startForm = document.getElementById('start-form');
   if (startForm) {

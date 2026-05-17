@@ -15,6 +15,59 @@ type fakePagePool struct{}
 func (fakePagePool) AcquirePage() playwright.Page     { return nil }
 func (fakePagePool) ReleasePage(page playwright.Page) {}
 
+func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
+	ctx := context.Background()
+	var gotQueries []string
+	s := Scraper{
+		Pool: fakePagePool{},
+		ScrapeFeed: func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+			gotQueries = append(gotQueries, query)
+			switch query {
+			case "place_id:ChIJ123":
+				return []string{"https://www.google.com/maps/place/Test/data=!4m2!3m1!1s0x1:0x2"}, nil
+			case "coffee":
+				return []string{"https://www.google.com/maps/place/Coffee/data=!4m2!3m1!1s0x3:0x4"}, nil
+			default:
+				t.Fatalf("unexpected query %q", query)
+				return nil, nil
+			}
+		},
+	}
+
+	collected := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"})
+	if len(gotQueries) != 2 || gotQueries[0] != "place_id:ChIJ123" || gotQueries[1] != "coffee" {
+		t.Fatalf("queries = %#v, want place_id then coffee", gotQueries)
+	}
+	if len(collected.URLs) != 2 {
+		t.Fatalf("urls = %#v, want 2", collected.URLs)
+	}
+	if collected.URLs[0] == PlaceIDToURL("ChIJ123") {
+		t.Fatalf("place ID queued synthetic URL %q", collected.URLs[0])
+	}
+	if collected.URLs[0] != "https://www.google.com/maps/place/Test/data=!4m2!3m1!1s0x1:0x2" {
+		t.Fatalf("first url = %q, want canonical feed URL", collected.URLs[0])
+	}
+	if collected.FeedURLsFound != 2 {
+		t.Fatalf("FeedURLsFound = %d, want 2", collected.FeedURLsFound)
+	}
+}
+
+func TestCollectPlaceURLsFallsBackForPlaceIDFeedError(t *testing.T) {
+	ctx := context.Background()
+	s := Scraper{
+		Pool: fakePagePool{},
+		ScrapeFeed: func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+			return nil, errors.New("feed selector timeout")
+		},
+	}
+
+	collected := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"})
+	want := PlaceIDToURL("ChIJ123")
+	if len(collected.URLs) != 1 || collected.URLs[0] != want {
+		t.Fatalf("urls = %#v, want only %q", collected.URLs, want)
+	}
+}
+
 func TestScraperGracefulPauseFinishesCurrentURL(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)

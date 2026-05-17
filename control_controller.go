@@ -423,7 +423,7 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			}
 			params.TemplateID = templateID
 		}
-		jobID, err := store.CreateStartingJobWithSource(r.Context(), params.Queries, scraperConfigFromStartParams(params), params.TemplateID, "", "")
+		jobID, err := store.CreateStartingJobWithSource(r.Context(), queriesForJob(params), scraperConfigFromStartParams(params), params.TemplateID, "", "")
 		if errors.Is(err, gmaps.ErrActiveJobExists) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -870,7 +870,7 @@ func runStrategyFromControl(ctx context.Context, store *gmaps.JobStore, stateDB 
 		planned = append(planned, plannedStrategyJob{
 			params: params,
 			create: gmaps.StrategyJobCreate{
-				Queries:       params.Queries,
+				Queries:       queriesForJob(params),
 				Config:        scraperConfigFromStartParams(params),
 				TemplateID:    tpl.ID,
 				StrategyID:    strategy.ID,

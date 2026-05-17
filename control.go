@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -29,6 +30,7 @@ type startParams struct {
 	StrategyRunID    string
 	JobTitle         string
 	Queries          []string
+	PlaceIDs         []string // mutually exclusive with Queries
 	Geo              string
 	Radius           float64
 	Depth            int
@@ -47,7 +49,8 @@ type startParams struct {
 
 type templateParams struct {
 	JobTitle         string   `json:"JobTitle,omitempty"`
-	Queries          []string `json:"Queries"`
+	Queries          []string `json:"Queries,omitempty"`
+	PlaceIDs         []string `json:"PlaceIDs,omitempty"`
 	Geo              string   `json:"Geo,omitempty"`
 	Radius           *float64 `json:"Radius,omitempty"`
 	Depth            *int     `json:"Depth,omitempty"`
@@ -76,18 +79,42 @@ func parseStartParams(r *http.Request) (startParams, string) {
 		return startParams{}, "invalid form data"
 	}
 	queriesRaw := strings.TrimSpace(r.FormValue("queries"))
-	if queriesRaw == "" {
-		return startParams{}, "queries is required"
+	placeIDsRaw := strings.TrimSpace(r.FormValue("place_ids"))
+
+	if queriesRaw != "" && placeIDsRaw != "" {
+		return startParams{}, "queries and place_ids are mutually exclusive"
 	}
+	if queriesRaw == "" && placeIDsRaw == "" {
+		return startParams{}, "queries or place_ids is required"
+	}
+
 	var queries []string
-	for _, q := range strings.Split(queriesRaw, "\n") {
-		q = strings.TrimSpace(q)
-		if q != "" {
-			queries = append(queries, q)
+	if queriesRaw != "" {
+		for _, q := range strings.Split(queriesRaw, "\n") {
+			q = strings.TrimSpace(q)
+			if q != "" {
+				queries = append(queries, q)
+			}
+		}
+		if len(queries) == 0 {
+			return startParams{}, "queries is required"
 		}
 	}
-	if len(queries) == 0 {
-		return startParams{}, "queries is required"
+
+	var placeIDs []string
+	if placeIDsRaw != "" {
+		for _, id := range strings.Split(placeIDsRaw, "\n") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				placeIDs = append(placeIDs, id)
+			}
+		}
+		if len(placeIDs) == 0 {
+			return startParams{}, "place_ids is required"
+		}
+		if len(placeIDs) > 2000 {
+			return startParams{}, fmt.Sprintf("place_ids accepts at most 2000 IDs, got %d", len(placeIDs))
+		}
 	}
 
 	outputMode := r.FormValue("output_mode")
@@ -107,6 +134,7 @@ func parseStartParams(r *http.Request) (startParams, string) {
 		JobTitle:         strings.TrimSpace(r.FormValue("job_title")),
 		TemplateID:       strings.TrimSpace(r.FormValue("template_id")),
 		Queries:          queries,
+		PlaceIDs:         placeIDs,
 		Geo:              strings.TrimSpace(r.FormValue("geo")),
 		Lang:             strings.TrimSpace(r.FormValue("lang")),
 		ConcurrencyMode:  strings.TrimSpace(r.FormValue("concurrency_mode")),
@@ -203,6 +231,19 @@ func scraperConfigFromStartParams(p startParams) gmaps.Config {
 	return cfg
 }
 
+// queriesForJob returns the slice of query strings to store in the job.
+// For place-ID mode the queries are the place_id:-prefixed IDs.
+func queriesForJob(p startParams) []string {
+	if len(p.PlaceIDs) > 0 {
+		qs := make([]string, len(p.PlaceIDs))
+		for i, id := range p.PlaceIDs {
+			qs[i] = "place_id:" + id
+		}
+		return qs
+	}
+	return p.Queries
+}
+
 func jobTemplateName(p startParams) string {
 	if p.JobTitle != "" {
 		return p.JobTitle
@@ -210,6 +251,8 @@ func jobTemplateName(p startParams) string {
 	name := "job"
 	if len(p.Queries) > 0 {
 		name = p.Queries[0]
+	} else if len(p.PlaceIDs) > 0 {
+		name = fmt.Sprintf("%d place IDs", len(p.PlaceIDs))
 	}
 	if len(name) > 48 {
 		name = name[:48]
@@ -221,6 +264,7 @@ func templateParamsFromForm(r *http.Request, p startParams) templateParams {
 	t := templateParams{
 		JobTitle:        p.JobTitle,
 		Queries:         append([]string(nil), p.Queries...),
+		PlaceIDs:        append([]string(nil), p.PlaceIDs...),
 		Geo:             p.Geo,
 		ConcurrencyMode: p.ConcurrencyMode,
 		Lang:            p.Lang,
@@ -255,12 +299,30 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 	if err := json.Unmarshal([]byte(job.ConfigJSON), &cfg); err != nil {
 		return startParams{}, err
 	}
+	var jobQueries []string
+	var jobPlaceIDs []string
+	allPlaceIDs := len(job.Queries) > 0
+	for _, q := range job.Queries {
+		if !strings.HasPrefix(q, "place_id:") {
+			allPlaceIDs = false
+			break
+		}
+	}
+	if allPlaceIDs {
+		for _, q := range job.Queries {
+			jobPlaceIDs = append(jobPlaceIDs, strings.TrimPrefix(q, "place_id:"))
+		}
+	} else {
+		jobQueries = job.Queries
+	}
+
 	p := startParams{
 		JobID:            job.ID,
 		TemplateID:       job.TemplateID.String,
 		StrategyID:       job.StrategyID.String,
 		StrategyRunID:    job.StrategyRunID.String,
-		Queries:          job.Queries,
+		Queries:          jobQueries,
+		PlaceIDs:         jobPlaceIDs,
 		Geo:              cfg.Geo,
 		Radius:           cfg.Radius,
 		Depth:            cfg.Depth,
@@ -316,6 +378,7 @@ func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams
 		TemplateID:       tpl.ID,
 		JobTitle:         t.JobTitle,
 		Queries:          append([]string(nil), t.Queries...),
+		PlaceIDs:         append([]string(nil), t.PlaceIDs...),
 		Geo:              t.Geo,
 		ConcurrencyMode:  t.ConcurrencyMode,
 		Lang:             t.Lang,
@@ -360,8 +423,8 @@ func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams
 	} else if p.OutDir == "" {
 		p.OutDir = defaultControlOutDir(stateDB)
 	}
-	if len(p.Queries) == 0 {
-		return startParams{}, errors.New("template has no queries")
+	if len(p.Queries) == 0 && len(p.PlaceIDs) == 0 {
+		return startParams{}, errors.New("template has no queries or place IDs")
 	}
 	return p, nil
 }

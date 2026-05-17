@@ -27,7 +27,8 @@ func main() {
 		return
 	}
 
-	queries := flag.String("queries", "", "comma-separated search queries")
+	queries := flag.String("queries", "", "comma-separated search queries (mutually exclusive with -place-ids)")
+	placeIDs := flag.String("place-ids", "", "comma-separated Google Maps place IDs, e.g. ChIJN1t_tDeuEmsRUsoyG83frY4 (mutually exclusive with -queries; max 2000)")
 	jobID := flag.String("job", "", "SQLite job ID to resume")
 	stateDB := flag.String("state-db", filepath.Join("gmdata", "scraper-state.sqlite"), "path to local SQLite scraper state database")
 	controlAddr := flag.String("control-addr", "", "optional local HTTP control UI address, e.g. 127.0.0.1:8080")
@@ -79,8 +80,14 @@ func main() {
 		*dsn = os.Getenv("DSN")
 	}
 
-	if *jobID == "" && *queries == "" && *controlAddr == "" {
-		fmt.Fprintln(os.Stderr, "error: -queries is required (or use -job to continue a previous run, or -control-addr for UI-only mode)")
+	if *queries != "" && *placeIDs != "" {
+		fmt.Fprintln(os.Stderr, "error: -queries and -place-ids are mutually exclusive")
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if *jobID == "" && *queries == "" && *placeIDs == "" && *controlAddr == "" {
+		fmt.Fprintln(os.Stderr, "error: -queries or -place-ids is required (or use -job to continue a previous run, or -control-addr for UI-only mode)")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -120,7 +127,7 @@ func main() {
 		}
 	}
 
-	if *jobID == "" && *queries == "" {
+	if controlUIOnly(*jobID, *queries, *placeIDs) {
 		log.Printf("control UI only; press Ctrl-C to stop")
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -269,9 +276,27 @@ func main() {
 
 	var qs []string
 	if *jobID == "" {
-		qs = strings.Split(*queries, ",")
-		for i, q := range qs {
-			qs[i] = strings.TrimSpace(q)
+		if *placeIDs != "" {
+			ids := strings.Split(*placeIDs, ",")
+			for _, id := range ids {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					continue
+				}
+				qs = append(qs, "place_id:"+id)
+			}
+			if len(qs) > 2000 {
+				fmt.Fprintf(os.Stderr, "error: -place-ids accepts at most 2000 IDs, got %d\n", len(qs))
+				os.Exit(1)
+			}
+		} else {
+			parts := strings.Split(*queries, ",")
+			for _, q := range parts {
+				q = strings.TrimSpace(q)
+				if q != "" {
+					qs = append(qs, q)
+				}
+			}
 		}
 	} else {
 		job, err := store.GetJob(ctx, *jobID)
@@ -359,6 +384,10 @@ func main() {
 	if err := w.Close(); err != nil {
 		log.Printf("writer close error: %v", err)
 	}
+}
+
+func controlUIOnly(jobID, queries, placeIDs string) bool {
+	return jobID == "" && strings.TrimSpace(queries) == "" && strings.TrimSpace(placeIDs) == ""
 }
 
 func outputMode(dsn string) string {
