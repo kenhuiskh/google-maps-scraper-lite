@@ -6,18 +6,18 @@
   <title>{{.PageTitle}} - Scraper Control</title>
   <style>
     :root {
-      --bg: #f6f8fb;
+      --bg: #f5f7fa;
       --surface: #ffffff;
-      --surface-muted: #eef2f7;
-      --border: #d8e0ea;
-      --border-strong: #c4cfdd;
+      --surface-muted: #eef1f5;
+      --border: #e1e6eb;
+      --border-strong: #cbd5df;
       --text: #0f172a;
       --muted: #475569;
       --muted-2: #64748b;
-      --primary: #1e40af;
-      --primary-hover: #1d4ed8;
-      --primary-soft: #eaf1ff;
-      --info: #2563eb;
+      --primary: #3d5a7a;
+      --primary-hover: #304966;
+      --primary-soft: #edf3f8;
+      --info: #3b6f9e;
       --danger: #b42318;
       --danger-soft: #fef3f2;
       --success: #027a48;
@@ -49,7 +49,7 @@
     }
     button:hover:not([disabled]) { border-color: #b7c8e1; color: var(--primary); background: #f8fbff; }
     button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
-      outline: 3px solid #bfdbfe;
+      outline: 3px solid #c9d9e8;
       outline-offset: 1px;
     }
     button[disabled] { color: #94a3b8; background: #f8fafc; cursor: not-allowed; }
@@ -151,7 +151,7 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
     }
     .metric-label {
       color: var(--muted);
@@ -162,6 +162,197 @@
     }
     .metric-value { margin-top: 3px; font-size: 1.32rem; font-weight: 850; color: var(--text); letter-spacing: 0; }
     .dashboard-grid { display: grid; gap: 10px; }
+    .jobs-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(420px, 0.56fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .topbar-counts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 3px; }
+    .queue-panel-controls {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(0, auto);
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+    .queue-command-copy { display: grid; gap: 4px; min-width: 0; }
+    .queue-title-line { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+    .queue-controls-stack { display: grid; gap: 7px; justify-items: end; min-width: 0; }
+    .queue-command-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .active-job-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .active-job-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .jobs-list-shell {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+      overflow: hidden;
+    }
+    .jobs-list-head,
+    .job-row {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.95fr) minmax(180px, 0.7fr) 76px;
+      gap: 12px;
+      align-items: center;
+    }
+    .jobs-list-head {
+      padding: 8px 12px;
+      color: var(--muted);
+      background: #f8fafc;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.72rem;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+    .jobs-list { display: grid; }
+    .job-row {
+      width: 100%;
+      padding: 10px 12px;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0;
+      background: var(--surface);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+    .job-row:hover { background: #f8fbff; }
+    .job-row:focus-visible { outline: 3px solid #c9d9e8; outline-offset: -3px; }
+    .job-row.active-row {
+      background: var(--primary-soft);
+      box-shadow: inset 3px 0 0 var(--primary);
+    }
+    .job-row:last-child { border-bottom: 0; }
+    .job-main { min-width: 0; display: grid; gap: 6px; }
+    .job-runline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .job-runline .status-dot { width: 9px; height: 9px; box-shadow: none; }
+    .job-summary { min-width: 0; }
+    .job-title-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .job-title-row .job-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job-status-icon {
+      width: 22px;
+      height: 22px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      background: #fff;
+    }
+    .job-status-icon svg { width: 13px; height: 13px; }
+    .job-subline {
+      margin-top: 2px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+    .job-progress-mini { display: grid; gap: 5px; }
+    .job-progress-mini .progress-track { margin: 0; }
+    .job-progress-copy { display: flex; justify-content: space-between; gap: 8px; color: #334155; font-size: 0.8rem; }
+    .job-action-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+    .more-info { font-weight: 750; white-space: nowrap; }
+    .jobs-inspector {
+      position: sticky;
+      top: 82px;
+      max-height: calc(100vh - 104px);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .inspector-empty,
+    .inspector-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .inspector-empty { padding: 18px; color: var(--muted); }
+    .inspector-card { display: none; min-height: 0; overflow: hidden; }
+    .inspector-card.active { display: flex; flex-direction: column; }
+    .inspector-header {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .inspector-body { padding: 12px 14px 14px; overflow: auto; display: grid; gap: 12px; }
+    .inspector-section { display: grid; gap: 8px; }
+    .inspector-grid .inspector-ratio {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+    .inspector-ratio-bar {
+      display: flex;
+      width: 100%;
+      height: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #eef2f7;
+    }
+    .inspector-ratio-segment { min-width: 0; }
+    .inspector-ratio-done { background: #16a34a; }
+    .inspector-ratio-pending { background: var(--primary); }
+    .inspector-ratio-active { background: #0f766e; }
+    .inspector-ratio-failed { background: var(--danger); }
+    .inspector-ratio-legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+    .inspector-ratio-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .inspector-ratio-legend i {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .inspector-grid { display: grid; gap: 0; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .inspector-metric {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: baseline;
+      padding: 6px 8px;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0;
+      background: #fff;
+    }
+    .inspector-metric:nth-child(even) { background: #f8fafc; }
+    .inspector-metric:last-child { border-bottom: 0; }
+    .inspector-metric strong { color: var(--text); font-size: 0.86rem; }
+    .inspector-meta { display: grid; gap: 6px; }
+    .inspector-meta-row {
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .inspector-meta-row code,
+    .inspector-meta-row span:last-child { color: #334155; overflow-wrap: anywhere; }
+    .inspector-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .inspector-log { border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .inspector-log .panel-header { min-height: 0; padding: 9px 10px; }
+    .inspector-log .log-viewer { min-height: 180px; max-height: 260px; }
     .management-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 14px; align-items: start; }
     .templates-workspace { display: grid; grid-template-columns: minmax(300px, 0.78fr) minmax(360px, 1fr); gap: 12px; align-items: start; }
     .template-editor-workspace { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(380px, 1fr); gap: 12px; align-items: stretch; }
@@ -172,6 +363,35 @@
       flex-direction: column;
     }
     .template-forms-stack { display: grid; gap: 12px; min-width: 0; }
+    .page-workspace { display: grid; gap: 12px; }
+    .command-strip {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(0, auto);
+      gap: 12px;
+      align-items: end;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+    }
+    .command-copy { display: grid; gap: 4px; min-width: 0; }
+    .command-title-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+    .command-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+    .operator-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: #f8fafc;
+      color: #334155;
+      font-size: 0.76rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .operator-badge strong { color: var(--text); }
     .panel-header {
       padding: 12px 14px;
       border-bottom: 1px solid var(--border);
@@ -194,6 +414,7 @@
     .status {
       display: inline-flex;
       align-items: center;
+      gap: 5px;
       border-radius: 5px;
       padding: 3px 8px;
       font-size: 0.76rem;
@@ -201,9 +422,20 @@
       border: 1px solid transparent;
       white-space: nowrap;
     }
+    .status svg,
+    .filter-tabs svg {
+      width: 13px;
+      height: 13px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      flex: 0 0 auto;
+    }
     .status-starting, .status-pausing { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
     .status-running { background: var(--success-soft); color: var(--success); border-color: #abefc6; }
-    .status-paused, .status-pending { background: var(--primary-soft); color: var(--primary); border-color: #bfdbfe; }
+    .status-paused, .status-pending { background: var(--primary-soft); color: var(--primary); border-color: #c9d9e8; }
     .status-blocked { background: var(--warning-soft); color: #92400e; border-color: #fde68a; }
     .status-done { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
     .status-failed { background: var(--danger-soft); color: var(--danger); border-color: #fecdca; }
@@ -320,7 +552,8 @@
     .raw-status { display: block; margin-top: 5px; font-size: 0.76rem; }
     .progress-line { display: flex; justify-content: space-between; gap: 12px; color: #334155; font-size: 0.84rem; }
     .progress-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin: 8px 0; overflow: hidden; }
-    .progress-fill { height: 100%; border-radius: inherit; background: var(--success); }
+    .progress-fill { height: 100%; border-radius: inherit; background: #d97706; }
+    .progress-fill-complete { background: var(--success); }
     .progress-stats { display: flex; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 0.76rem; }
     .analytics-compact { display: grid; gap: 3px; color: var(--muted); font-size: 0.76rem; }
     .analytics-compact strong { color: #334155; font-weight: 850; }
@@ -411,15 +644,51 @@
       flex-wrap: wrap;
       background: #fff;
     }
+    .queue-panel-controls .pager { padding: 0; border-top: 0; background: transparent; }
+    .queue-controls-stack .pager { justify-content: flex-end; }
     .pager-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
     .pager select { width: auto; min-width: 76px; padding: 6px 26px 6px 8px; }
     .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
     .filter-tabs { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: #f8fafc; }
-    .filter-tabs button { min-height: 28px; padding: 4px 9px; border-color: transparent; background: transparent; }
+    .filter-tabs button { min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-color: transparent; background: transparent; }
     .filter-tabs button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 850; }
     .compact-list { display: grid; gap: 9px; }
     .compact-item { padding: 11px; min-width: 0; overflow: hidden; }
     .compact-item.selected { border-color: #b7c8e1; background: #f8fbff; }
+    .compact-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.1fr) minmax(220px, 0.9fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+    .row-primary, .row-secondary { min-width: 0; display: grid; gap: 5px; align-content: start; }
+    .row-title-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .row-title-line .item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-kicker {
+      color: var(--muted-2);
+      font-size: 0.7rem;
+      font-weight: 850;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .row-detail {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .row-detail code {
+      display: inline-block;
+      max-width: min(100%, 260px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: bottom;
+    }
     .item-actions { margin-top: 9px; }
     .item-grid {
       display: grid;
@@ -456,6 +725,24 @@
       align-items: end;
     }
     .import-summary { margin-top: 10px; font-size: 0.86rem; }
+    .form-section {
+      display: grid;
+      gap: 10px;
+      padding: 11px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .form-section + .form-section { margin-top: -2px; }
+    .form-section > legend,
+    .section-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      padding: 0;
+    }
     .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
     .stat-cell { padding: 9px 11px; }
     .stat-value { margin-top: 3px; font-size: 1.05rem; font-weight: 850; color: var(--text); }
@@ -751,7 +1038,8 @@
       .topbar-inner { grid-template-columns: 1fr; align-items: start; }
       .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
       .topbar-meta { text-align: left; }
-      .dashboard-grid, .management-grid, .templates-workspace, .template-editor-workspace { grid-template-columns: 1fr; }
+      .dashboard-grid, .jobs-workspace, .management-grid, .templates-workspace, .template-editor-workspace { grid-template-columns: 1fr; }
+      .jobs-inspector { position: static; max-height: none; }
       .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 640px) {
@@ -759,7 +1047,26 @@
       .page-head { align-items: flex-start; flex-direction: column; }
       .page-meta { justify-content: flex-start; }
       .stat-strip { grid-template-columns: 1fr; }
-      .field-row, .item-grid, .template-row, .config-transfer-actions { grid-template-columns: 1fr; }
+      .topbar-counts, .queue-command-actions { justify-content: flex-start; }
+      .queue-panel-controls { grid-template-columns: 1fr; }
+      .queue-controls-stack { justify-items: start; }
+      .command-strip { grid-template-columns: 1fr; align-items: start; }
+      .command-actions { justify-content: flex-start; }
+      .jobs-list-head { display: none; }
+      .job-row { grid-template-columns: 1fr; gap: 8px; }
+      .job-action-cell { justify-content: flex-start; }
+      .jobs-inspector.has-selection {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 35;
+        max-height: 82vh;
+        padding: 12px;
+        background: rgba(15, 23, 42, 0.24);
+      }
+      .inspector-card.active { box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24); }
+      .field-row, .item-grid, .template-row, .compact-row, .config-transfer-actions { grid-template-columns: 1fr; }
       .template-actions { justify-content: flex-start; }
       .panel-header { align-items: flex-start; flex-direction: column; }
       .pager { align-items: flex-start; flex-direction: column; }
@@ -857,7 +1164,12 @@
         <div class="topbar-meta">
           <div class="tracked-status">
             <span id="tracked-status-dot" class="status-dot {{if .Summary.HasActiveJob}}active{{end}}" aria-hidden="true"></span>
-            <span id="tracked-jobs-count">{{.Summary.TotalJobs}}</span> jobs tracked
+            <span id="tracked-status-label">{{if .Summary.HasActiveJob}}Active job{{else}}Idle{{end}}</span>
+          </div>
+          <div class="topbar-counts tiny">
+            <span><span id="tracked-running-count">{{.Summary.RunningJobs}}</span> running</span>
+            <span><span id="tracked-pending-count">{{.Summary.PendingJobs}}</span> pending</span>
+            <span><span id="tracked-attention-count">{{.Summary.NeedsAttention}}</span> attention</span>
           </div>
           <div>Last refreshed <span id="last-refreshed">{{.LastRefreshed}}</span></div>
         </div>
@@ -916,31 +1228,10 @@
     <h2 class="page-title">Dashboard</h2>
     <p class="subtitle">Queue health and lifecycle actions.</p>
   </div>
-  <div class="page-meta">
-    <span>{{.Pagination.FilterLabel}} filter</span>
-    <span>{{.Pagination.TotalJobs}} listed jobs</span>
-  </div>
 </div>
 
 <div class="dashboard-grid">
-  {{template "analytics-strip" .}}
   <section class="panel" aria-labelledby="jobs-title">
-    <div class="panel-header">
-      <div>
-        <h2 id="jobs-title" class="panel-title">Job Queue</h2>
-        <div class="muted tiny">Running, pending, paused, and completed scraper jobs.</div>
-      </div>
-      <div class="panel-actions">
-        <div class="filter-tabs" aria-label="Job status filter">
-          {{range .Pagination.FilterOptions}}
-            <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{.Label}}</button>
-          {{end}}
-        </div>
-        <button type="button" class="icon-button" onclick="refreshPartials()" title="Refresh dashboard and job table." aria-label="Refresh dashboard and job table">
-          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
-        </button>
-      </div>
-    </div>
     {{template "jobs-panel" .}}
   </section>
 </div>
@@ -958,36 +1249,34 @@
   </div>
 </div>
 
-<div class="dashboard-grid">
-  <section class="panel" aria-labelledby="config-transfer-title">
-    <div class="panel-header">
-      <div>
+<div class="page-workspace">
+  <section class="command-strip" aria-labelledby="config-transfer-title">
+    <div class="command-copy">
+      <div class="command-title-line">
         <h2 id="config-transfer-title" class="panel-title">Import / Export</h2>
-        <div class="muted tiny">Move templates and strategies between state databases.</div>
+        <span class="operator-badge"><strong>{{len .Templates}}</strong> templates</span>
+        <span class="operator-badge"><strong>{{len .Strategies}}</strong> strategies</span>
       </div>
+      <div class="muted tiny">Move reusable scraper configuration between state databases.</div>
+      <div id="config-import-result" class="import-summary" role="status" aria-live="polite"></div>
+    </div>
+    <form id="config-import-form" class="command-actions">
+      <div class="field">
+        <label for="config-import-collision">Collision</label>
+        <select id="config-import-collision" name="collision">
+          <option value="rename" selected>Rename</option>
+          <option value="skip">Skip</option>
+          <option value="overwrite">Overwrite</option>
+          <option value="duplicate">Duplicate</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="config-import-file">Import JSON</label>
+        <input id="config-import-file" name="config_file" type="file" accept="application/json,.json" required>
+      </div>
+      <button type="submit" class="secondary-button">Import</button>
       <button type="button" class="secondary-button" onclick="openConfigExportModal()">Export JSON</button>
-    </div>
-    <div class="panel-body">
-      <form id="config-import-form">
-        <div class="config-transfer-actions">
-          <div class="field">
-            <label for="config-import-collision">Collision behavior</label>
-            <select id="config-import-collision" name="collision">
-              <option value="rename" selected>Rename</option>
-              <option value="skip">Skip</option>
-              <option value="overwrite">Overwrite</option>
-              <option value="duplicate">Duplicate</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="config-import-file">Import JSON</label>
-            <input id="config-import-file" name="config_file" type="file" accept="application/json,.json" required>
-          </div>
-          <button type="submit" class="secondary-button">Import</button>
-        </div>
-        <div id="config-import-result" class="import-summary" role="status" aria-live="polite"></div>
-      </form>
-    </div>
+    </form>
   </section>
 
   <section class="panel" aria-labelledby="templates-title">
@@ -1002,17 +1291,21 @@
       <div class="compact-list" id="template-list">
         {{range .Templates}}
           <div class="compact-item" data-template-row="{{.ID}}">
-            <div class="template-row">
-              <div class="template-primary">
-                <div class="item-title">{{.Name}}</div>
-                <div class="item-meta">
+            <div class="compact-row">
+              <div class="row-primary">
+                <div class="row-title-line">
+                  <span class="status status-pending">Template</span>
+                  <div class="item-title">{{.Name}}</div>
+                </div>
+                <div class="row-detail">
                   <span>Created {{time .CreatedAt}}</span>
                   <span>Last used {{time .LastUsedAt}}</span>
                 </div>
               </div>
-              <div class="template-secondary">
-                <div class="item-meta"><span>ID</span></div>
-                <code>{{.ID}}</code>
+              <div class="row-secondary">
+                <div class="row-kicker">Saved params</div>
+                <div class="row-detail"><span>ID</span><code>{{.ID}}</code></div>
+                <div class="row-detail"><span>{{len .ParamsJSON}} bytes JSON</span></div>
               </div>
               <div class="template-actions">
                 <a class="button-link" href="/templates/editor?template_id={{.ID}}">Edit</a>
@@ -1160,14 +1453,22 @@
       <div class="compact-list" id="strategy-list">
         {{range .Strategies}}
           <div class="compact-item" data-strategy-row="{{.ID}}">
-            <div class="item-grid">
-              <div>
-                <div class="item-title">{{.Name}}</div>
-                <div class="item-meta"><code>{{.ID}}</code><span>{{len .Templates}} templates</span></div>
+            <div class="compact-row">
+              <div class="row-primary">
+                <div class="row-title-line">
+                  <span class="status status-paused">Strategy</span>
+                  <div class="item-title">{{.Name}}</div>
+                </div>
+                <div class="row-detail"><code>{{.ID}}</code><span>{{len .Templates}} templates</span></div>
               </div>
-              <div class="item-meta">
-                {{if .Notes}}<span>{{.Notes}}</span>{{else}}<span>No notes</span>{{end}}
-                {{if .LastUsedAt.Valid}}<span>Last used {{nullableTime .LastUsedAt}}</span>{{else}}<span>Never run</span>{{end}}
+              <div class="row-secondary">
+                <div class="row-kicker">Run context</div>
+                <div class="row-detail">
+                  {{if .Notes}}<span>{{.Notes}}</span>{{else}}<span>No notes</span>{{end}}
+                </div>
+                <div class="row-detail">
+                  {{if .LastUsedAt.Valid}}<span>Last used {{nullableTime .LastUsedAt}}</span>{{else}}<span>Never run</span>{{end}}
+                </div>
               </div>
               <div class="item-actions">
                 <button type="button" onclick="editStrategy('{{.ID}}')">Edit</button>
@@ -1198,7 +1499,7 @@
   <div class="panel-body">
     <form id="start-form">
       <input id="start-template-json" name="params_json" type="hidden">
-      <fieldset>
+      <fieldset class="form-section">
         <legend>Template source</legend>
         <div class="field">
           <label for="template_select">Saved template</label>
@@ -1216,7 +1517,7 @@
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="form-section">
         <legend>Search</legend>
         <div class="field">
           <label for="queries">Queries *</label>
@@ -1234,7 +1535,7 @@
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="form-section">
         <legend>Location</legend>
         <div class="field">
           <label for="geo">Geo center</label>
@@ -1246,7 +1547,7 @@
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="form-section">
         <legend>Execution</legend>
         <div class="field-row">
           <div class="field">
@@ -1277,7 +1578,7 @@
         </label>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="form-section">
         <legend>Output</legend>
         <div class="field-row">
           <div class="field">
@@ -1312,12 +1613,17 @@
   <div class="panel-body">
     <form id="template-form">
       <input id="template-edit-id" name="id" type="hidden" value="{{.TemplateEditor.TemplateID}}">
-      <div class="field">
-        <label for="template-edit-name">Template name</label>
-        <input id="template-edit-name" name="name" type="text" required value="{{.TemplateEditor.TemplateName}}">
+      <div class="form-section">
+        <div class="field">
+          <label for="template-edit-name">Template name</label>
+          <input id="template-edit-name" name="name" type="text" required value="{{.TemplateEditor.TemplateName}}">
+        </div>
       </div>
-      <div class="field json-field">
-        <label for="template-edit-json">Params JSON</label>
+      <div class="form-section json-field">
+        <div class="section-label">
+          <label for="template-edit-json">Params JSON</label>
+          <span class="operator-badge">Synced source</span>
+        </div>
         <textarea id="template-edit-json" class="code-field" name="params_json" required>{{.TemplateEditor.TemplateParamsJSON}}</textarea>
       </div>
       <div id="template-sync-result" role="status" aria-live="polite"></div>
@@ -1339,16 +1645,21 @@
   <div class="panel-body">
     <form id="strategy-form">
       <input id="strategy-edit-id" name="id" type="hidden">
-      <div class="field">
-        <label for="strategy-name">Strategy name</label>
-        <input id="strategy-name" name="name" type="text" required>
+      <div class="form-section">
+        <div class="field">
+          <label for="strategy-name">Strategy name</label>
+          <input id="strategy-name" name="name" type="text" required>
+        </div>
+        <div class="field">
+          <label for="strategy-notes">Notes</label>
+          <textarea id="strategy-notes" name="notes"></textarea>
+        </div>
       </div>
-      <div class="field">
-        <label for="strategy-notes">Notes</label>
-        <textarea id="strategy-notes" name="notes"></textarea>
-      </div>
-      <div class="field">
-        <label>Templates</label>
+      <div class="form-section">
+        <div class="section-label">
+          <label>Templates</label>
+          <span class="operator-badge"><strong>{{len .Templates}}</strong> available</span>
+        </div>
         <div id="strategy-template-ids" class="strategy-template-list">
           {{range .Templates}}
             <label class="strategy-template-choice" for="strategy-template-{{.ID}}">
@@ -1361,8 +1672,11 @@
           {{end}}
         </div>
       </div>
-      <div class="field">
-        <label>Selected order</label>
+      <div class="form-section">
+        <div class="section-label">
+          <label>Selected order</label>
+          <span class="operator-badge">Run order</span>
+        </div>
         <div id="strategy-selected-order" class="ordered-list">
           <div class="empty-state">No templates selected.</div>
         </div>
@@ -1373,7 +1687,7 @@
 
     <hr class="panel-divider">
 
-    <div class="bulk-lang-section">
+    <div class="bulk-lang-section form-section">
       <div>
         <strong>Bulk Language Update</strong>
         <div class="muted tiny">Apply a new language flag to all templates in the loaded strategy.</div>
@@ -1461,112 +1775,194 @@
 {{end}}
 
 {{define "jobs-panel"}}
-<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}" data-total-jobs="{{.Summary.TotalJobs}}" data-has-active-job="{{if .Summary.HasActiveJob}}true{{else}}false{{end}}">
-  <div class="table-wrap">
-    <table>
-      <colgroup>
-        <col class="job-col">
-        <col class="status-col">
-        <col class="progress-col">
-        <col class="analytics-col">
-        <col class="updated-col">
-        <col class="actions-col">
-      </colgroup>
-      <thead>
-        <tr>
-          <th>Job</th>
-          <th>Status</th>
-          <th>Progress</th>
-          <th>Analytics</th>
-          <th>Updated</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="jobs-tbody">
-        {{template "jobs-body" .}}
-      </tbody>
-    </table>
+<div id="jobs-panel" data-page="{{.Pagination.Page}}" data-page-size="{{.Pagination.PageSize}}" data-filter="{{.Pagination.Filter}}" data-total-jobs="{{.Summary.TotalJobs}}" data-running-jobs="{{.Summary.RunningJobs}}" data-pending-jobs="{{.Summary.PendingJobs}}" data-needs-attention="{{.Summary.NeedsAttention}}" data-has-active-job="{{if .Summary.HasActiveJob}}true{{else}}false{{end}}">
+  <div class="queue-panel-controls">
+    <div class="queue-command-copy">
+      <div class="queue-title-line">
+        <h2 id="jobs-title" class="panel-title">Job Queue</h2>
+        <div class="active-job-title tiny">
+          <span id="dashboard-status-dot" class="status-dot {{if .Summary.HasActiveJob}}active{{end}}" aria-hidden="true"></span>
+          <strong>{{if .Summary.HasActiveJob}}{{.Summary.ActiveJobTitle}}{{else}}Idle{{end}}</strong>
+        </div>
+      </div>
+      <div class="muted tiny">Select a run for metrics, IDs, logs, and secondary details.</div>
+    </div>
+    <div class="queue-controls-stack">
+      <div class="queue-command-actions">
+        <div class="filter-tabs" aria-label="Job status filter">
+          {{range .Pagination.FilterOptions}}
+            <button type="button" data-filter-option="{{.Value}}" onclick="setJobsFilter('{{.Value}}')" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">{{template "icon-filter-status" .Value}}{{.Label}}</button>
+          {{end}}
+        </div>
+        <button type="button" class="icon-button" onclick="refreshPartials()" title="Refresh dashboard and job table." aria-label="Refresh dashboard and job table">
+          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
+        </button>
+      </div>
+      <div class="pager" aria-label="Job queue pagination">
+        <div class="muted tiny">
+          {{if .Pagination.TotalJobs}}
+            Showing {{.Pagination.StartItem}}-{{.Pagination.EndItem}} of {{.Pagination.TotalJobs}}
+          {{else}}
+            No jobs to show
+          {{end}}
+        </div>
+        <div class="pager-controls">
+          <label class="muted tiny" for="jobs-page-size">Rows</label>
+          <select id="jobs-page-size" onchange="setJobsPageSize(this.value)">
+            {{range .Pagination.PageSizeOptions}}
+              <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
+            {{end}}
+          </select>
+          <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}} title="Previous page" aria-label="Previous page">
+            {{template "icon-prev" .}}<span class="sr-only">Previous</span>
+          </button>
+          <span class="muted tiny">Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
+          <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}} title="Next page" aria-label="Next page">
+            {{template "icon-next" .}}<span class="sr-only">Next</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="pager" aria-label="Job queue pagination">
-    <div class="muted tiny">
-      {{if .Pagination.TotalJobs}}
-        Showing {{.Pagination.StartItem}}-{{.Pagination.EndItem}} of {{.Pagination.TotalJobs}}
-      {{else}}
-        No jobs to show
+  <div class="jobs-workspace">
+    <section class="jobs-list-shell" aria-label="Scraper jobs">
+      <div class="jobs-list-head" aria-hidden="true">
+        <span>Run</span>
+        <span>Progress</span>
+        <span>Action</span>
+      </div>
+      <div id="jobs-tbody" class="jobs-list">
+        {{template "jobs-body" .}}
+      </div>
+    </section>
+    <aside id="jobs-inspector" class="jobs-inspector" aria-label="Selected job details">
+      <div id="inspector-empty" class="inspector-empty">
+        <div class="panel-title">Job details</div>
+        <p class="muted tiny">Select a run to inspect metrics, metadata, and logs without expanding the whole queue.</p>
+      </div>
+      {{range .Jobs}}
+        <section class="inspector-card" data-inspector-job="{{.ID}}" data-log-row="{{.ID}}" aria-labelledby="inspector-title-{{.ID}}">
+          <div class="inspector-header">
+            <div>
+              <h2 id="inspector-title-{{.ID}}" class="panel-title">{{.DisplayTitle}}</h2>
+              <div class="muted tiny">{{.UpdatedAt}} updated</div>
+            </div>
+            <button type="button" class="icon-button" onclick="closeJobInspector()" title="Close details" aria-label="Close job details">
+              {{template "icon-close" .}}<span class="sr-only">Close</span>
+            </button>
+          </div>
+          <div class="inspector-body">
+            <div class="inspector-section">
+              <div class="progress-line">
+                <span>{{.Progress}}</span>
+                <span>{{.ProgressPercent}}%</span>
+              </div>
+              <div class="progress-track" aria-hidden="true">
+                <div class="progress-fill {{if eq .ProgressPercent 100}}progress-fill-complete{{end}}" style="width: {{.ProgressPercent}}%"></div>
+              </div>
+              <div><span class="status {{.StatusClass}}" title="{{.StatusHelp}}">{{template "icon-status" .StatusLabel}}{{.StatusLabel}}</span></div>
+              <span class="error-text" title="{{.LastError}}"{{if not .LastError}} hidden{{end}}>{{.LastError}}</span>
+            </div>
+            <div class="inspector-grid" aria-label="Job metrics">
+              <div class="inspector-ratio" aria-label="Job status ratio">
+                <div class="inspector-ratio-bar" role="img" aria-label="Done {{.Done}}, pending {{.Pending}}, active {{.InProgress}}, failed {{.Failed}}">
+                  <span class="inspector-ratio-segment inspector-ratio-done" style="flex: {{.Done}} 1 0;" title="Done: {{.Done}}"></span>
+                  <span class="inspector-ratio-segment inspector-ratio-pending" style="flex: {{.Pending}} 1 0;" title="Pending: {{.Pending}}"></span>
+                  <span class="inspector-ratio-segment inspector-ratio-active" style="flex: {{.InProgress}} 1 0;" title="Active: {{.InProgress}}"></span>
+                  <span class="inspector-ratio-segment inspector-ratio-failed" style="flex: {{.Failed}} 1 0;" title="Failed: {{.Failed}}"></span>
+                </div>
+                <div class="inspector-ratio-legend" aria-hidden="true">
+                  <span><i class="inspector-ratio-done"></i>Done</span>
+                  <span><i class="inspector-ratio-pending"></i>Pending</span>
+                  <span><i class="inspector-ratio-active"></i>Active</span>
+                  <span><i class="inspector-ratio-failed"></i>Failed</span>
+                </div>
+              </div>
+              <div class="inspector-metric"><span class="metric-label">Done</span><strong>{{.Done}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Pending</span><strong>{{.Pending}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Active</span><strong>{{.InProgress}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Failed</span><strong>{{.Failed}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Feed URLs</span><strong>{{.FeedURLsFound}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Queued</span><strong>{{.QueuedURLs}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Scraped</span><strong>{{.ScrapedURLs}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Errors</span><strong>{{add .ScrapeErrors .WriteErrors}}</strong></div>
+            </div>
+            <div class="inspector-section">
+              <div class="metric-label">Metadata</div>
+              <div class="inspector-meta">
+                <div class="inspector-meta-row"><span>ID</span><code>{{.ID}}</code></div>
+                <div class="inspector-meta-row"><span>Query</span><span>{{.QueriesPreview}}</span></div>
+                <div class="inspector-meta-row"><span>Output</span><span>{{.OutputMode}}</span></div>
+                <div class="inspector-meta-row"><span>Lang</span><span>{{.Lang}}</span></div>
+                <div class="inspector-meta-row"><span>Raw</span><span>{{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span></div>
+                {{if .TemplateID}}<div class="inspector-meta-row"><span>Template</span><span>{{.TemplateID}}</span></div>{{end}}
+                {{if .StrategyID}}<div class="inspector-meta-row"><span>Strategy</span><span>{{.StrategyID}}</span></div>{{end}}
+              </div>
+            </div>
+            <div class="inspector-section">
+              <div class="metric-label">Actions</div>
+              <div class="inspector-actions">
+                <button class="action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
+                {{if ne .StatusLabel "Done"}}
+                  {{if .ActionDisabled}}
+                    <button class="{{.ActionClass}}" disabled title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+                  {{else}}
+                    <button class="{{.ActionClass}}" onclick="post('{{.ActionPath}}')" title="{{.ActionHelp}}">{{.ActionLabel}}</button>
+                  {{end}}
+                {{end}}
+                {{if not .RecoverDisabled}}<button class="action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}">Recover</button>{{end}}
+              </div>
+            </div>
+            <section class="inspector-log" aria-labelledby="log-title-{{.ID}}">
+              <div class="panel-header">
+                <div>
+                  <h2 id="log-title-{{.ID}}" class="panel-title">Job Logs</h2>
+                  <div class="muted tiny" data-log-meta="{{.ID}}">Open logs to load recent lines.</div>
+                </div>
+                <div class="actions">
+                  <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
+                    {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
+                  </button>
+                </div>
+              </div>
+              <pre class="log-viewer" data-log-viewer="{{.ID}}">No log lines yet.</pre>
+            </section>
+          </div>
+        </section>
       {{end}}
-    </div>
-    <div class="pager-controls">
-      <label class="muted tiny" for="jobs-page-size">Rows</label>
-      <select id="jobs-page-size" onchange="setJobsPageSize(this.value)">
-        {{range .Pagination.PageSizeOptions}}
-          <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
-        {{end}}
-      </select>
-      <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.PreviousPage}})"{{if not .Pagination.HasPrevious}} disabled{{end}} title="Previous page" aria-label="Previous page">
-        {{template "icon-prev" .}}<span class="sr-only">Previous</span>
-      </button>
-      <span class="muted tiny">Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
-      <button type="button" class="icon-button" onclick="goJobsPage({{.Pagination.NextPage}})"{{if not .Pagination.HasNext}} disabled{{end}} title="Next page" aria-label="Next page">
-        {{template "icon-next" .}}<span class="sr-only">Next</span>
-      </button>
-    </div>
+    </aside>
   </div>
 </div>
 {{end}}
 
 {{define "jobs-body"}}
 {{range .Jobs}}
-  <tr data-job-id="{{.ID}}" class="{{if .Active}}active-row{{end}}">
-    <td>
-      <div class="job-title">{{.DisplayTitle}}</div>
-      <div class="job-meta">
-        <span class="meta-chip"><span class="meta-label">ID</span><span class="meta-value"><code>{{.ID}}</code></span></span>
-        {{if ne .DisplayTitle .QueriesPreview}}<span class="meta-chip"><span class="meta-label">Query</span><span class="meta-value">{{.QueriesPreview}}</span></span>{{end}}
-        <span class="meta-chip"><span class="meta-label">Output</span><span class="meta-value">{{.OutputMode}}</span></span>
-        <span class="meta-chip"><span class="meta-label">Lang</span><span class="meta-value">{{.Lang}}</span></span>
-        {{if .TemplateID}}<span class="meta-chip"><span class="meta-label">Template</span><span class="meta-value">{{.TemplateID}}</span></span>{{end}}
-        {{if .StrategyID}}<span class="meta-chip"><span class="meta-label">Strategy</span><span class="meta-value">{{.StrategyID}}</span></span>{{end}}
-      </div>
-    </td>
-    <td>
-      <span class="status {{.StatusClass}}" title="{{.StatusHelp}}">{{.StatusLabel}}</span>
-      <span class="raw-status muted" title="Raw DB state">raw: {{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span>
-      <span class="error-text" title="{{.LastError}}"{{if not .LastError}} hidden{{end}}>{{.LastError}}</span>
-    </td>
-    <td>
-      <div class="progress-line">
-        <span>{{.Progress}}</span>
-        <span>{{.ProgressPercent}}%</span>
-      </div>
-      <div class="progress-track" aria-hidden="true">
-        <div class="progress-fill" style="width: {{.ProgressPercent}}%"></div>
-      </div>
-      <div class="progress-stats">
-        <span>{{.Done}} done</span>
-        <span>{{.Pending}} pending</span>
-        <span>{{.InProgress}} active</span>
-        <span>{{.Failed}} failed</span>
-      </div>
-    </td>
-    <td>
-      <div class="analytics-compact">
-        <span><strong>{{.FeedURLsFound}}</strong> feed / <strong>{{.ScrapedURLs}}</strong> scraped</span>
-        <span><strong>{{.ScrapeErrors}}</strong> scrape errors / <strong>{{.RetryEvents}}</strong> retries</span>
-        <span>{{.FeedDuplicates}} URL dupes / {{.DuplicatePlaces}} place dupes</span>
-      </div>
-    </td>
-    <td>
-      <div>{{.UpdatedAt}}</div>
-      <div class="muted tiny">Created {{.CreatedAt}}</div>
-    </td>
-    <td>
-      <div class="actions">
-        <button class="icon-button action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database." aria-label="Refresh job {{.ID}}">
-          {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
-        </button>
-        <button class="icon-button action-refresh" onclick="viewJobLog('{{.ID}}')" title="View the saved log file for this job." aria-label="View log for job {{.ID}}">
-          {{template "icon-log" .}}<span class="sr-only">View Log</span>
-        </button>
+  <div data-job-id="{{.ID}}" class="job-row {{if .Active}}active-row{{end}}">
+    <span class="job-main">
+      <span class="job-runline">
+        <span class="job-status-icon {{.StatusClass}}" title="{{.StatusHelp}}" aria-label="{{.StatusLabel}}">{{template "icon-status" .StatusLabel}}</span>
+        <span class="job-summary">
+          <span class="job-title-row">
+            <span class="job-title">{{.DisplayTitle}}</span>
+          </span>
+          <span class="job-subline">
+            <span>{{.UpdatedAt}} updated</span>
+            <span>{{.OutputMode}}</span>
+            <span>{{.Lang}}</span>
+            {{if .LastError}}<span class="error-text" title="{{.LastError}}">{{.LastError}}</span>{{end}}
+          </span>
+        </span>
+      </span>
+    </span>
+    <span class="job-progress-mini">
+      <span class="job-progress-copy"><span>{{.Progress}}</span><span>{{.ProgressPercent}}%</span></span>
+      <span class="progress-track" aria-hidden="true"><span class="progress-fill {{if eq .ProgressPercent 100}}progress-fill-complete{{end}}" style="width: {{.ProgressPercent}}%"></span></span>
+    </span>
+    <span class="job-action-cell">
+      <button class="icon-button action-refresh more-info" onclick="selectJob('{{.ID}}')" title="More info for this job." aria-label="More info for job {{.ID}}" aria-expanded="false" aria-controls="inspector-title-{{.ID}}">
+        {{template "icon-log" .}}<span class="sr-only">More info</span>
+      </button>
+      {{if ne .StatusLabel "Done"}}
         {{if .ActionDisabled}}
           <button class="{{.ActionClass}}" disabled title="{{.ActionHelp}}">{{.ActionLabel}}</button>
         {{else}}
@@ -1574,37 +1970,11 @@
             {{if eq .ActionLabel "Pause"}}{{template "icon-pause" .}}{{else}}{{template "icon-play" .}}{{end}}<span class="sr-only">{{.ActionLabel}}</span>
           </button>
         {{end}}
-        {{if not .RecoverDisabled}}
-          <button class="icon-button action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}" aria-label="Recover job {{.ID}}">
-            {{template "icon-recover" .}}<span class="sr-only">Recover</span>
-          </button>
-        {{end}}
-      </div>
-    </td>
-  </tr>
-  <tr class="log-row" data-log-row="{{.ID}}" hidden>
-    <td colspan="6">
-      <section class="log-inline" aria-labelledby="log-title-{{.ID}}">
-        <div class="panel-header">
-          <div>
-            <h2 id="log-title-{{.ID}}" class="panel-title">Job Logs</h2>
-            <div class="muted tiny" data-log-meta="{{.ID}}">Waiting for log lines.</div>
-          </div>
-          <div class="actions">
-            <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
-              {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
-            </button>
-            <button type="button" class="icon-button" onclick="closeJobLog('{{.ID}}')" title="Close logs" aria-label="Close logs">
-              {{template "icon-close" .}}<span class="sr-only">Close</span>
-            </button>
-          </div>
-        </div>
-        <pre class="log-viewer" data-log-viewer="{{.ID}}">No log lines yet.</pre>
-      </section>
-    </td>
-  </tr>
+      {{end}}
+    </span>
+  </div>
 {{else}}
-  <tr class="empty-row"><td colspan="6">No jobs yet.</td></tr>
+  <div class="empty-state">No jobs yet.</div>
 {{end}}
 {{end}}
 
@@ -1616,6 +1986,8 @@
 {{define "icon-close"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>{{end}}
 {{define "icon-prev"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{end}}
 {{define "icon-next"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>{{end}}
+{{define "icon-status"}}{{if or (eq . "Running") (eq . "Done")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "Pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if or (eq . "Blocked") (eq . "Failed")}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else if or (eq . "Paused") (eq . "Pausing")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H7v14h3z"></path><path d="M17 5h-3v14h3z"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle></svg>{{end}}{{end}}
+{{define "icon-filter-status"}}{{if eq . "active"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if eq . "done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "attention"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M7 12h10"></path><path d="M10 17h4"></path></svg>{{end}}{{end}}
 
 {{define "control-script"}}
 <script>
@@ -1645,27 +2017,16 @@
   let jobsPage = {{.Pagination.Page}};
   let jobsPageSize = {{.Pagination.PageSize}};
   let jobsFilter = '{{.Pagination.Filter}}';
+  let selectedJobID = '';
   let selectedLogJobID = '';
   let pendingLogSnapshot = null;
 
   async function refreshPartials(options) {
     options = options || {};
     const jobsPanel = document.getElementById('jobs-panel');
-    const analytics = document.getElementById('execution-analytics');
     const requests = [];
-    const preserveOpenLog = options.preserveOpenLog && !!selectedLogJobID;
-    if (analytics) requests.push(fetch('/ui/summary').then(async function(res) {
-      if (!res.ok) return;
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = await res.text();
-      const nextAnalytics = wrapper.querySelector('#execution-analytics');
-      const nextSummary = wrapper.querySelector('#summary');
-      if (nextAnalytics && document.getElementById('execution-analytics')) {
-        document.getElementById('execution-analytics').outerHTML = nextAnalytics.outerHTML;
-      }
-      if (nextSummary) syncTopbarJobState(nextSummary);
-    }));
-    if (jobsPanel && !preserveOpenLog) {
+    const selectedBeforeRefresh = selectedJobID || selectedLogJobID;
+    if (jobsPanel) {
       const jobsPath = '/ui/jobs?page=' + encodeURIComponent(jobsPage) + '&page_size=' + encodeURIComponent(jobsPageSize) + '&filter=' + encodeURIComponent(jobsFilter);
       requests.push(fetch(jobsPath).then(async function(res) {
         if (!res.ok || !document.getElementById('jobs-panel')) return;
@@ -1678,40 +2039,52 @@
           jobsFilter = panel.dataset.filter || jobsFilter;
           syncJobsFilterButtons();
           syncTopbarJobState(panel);
+          syncJobInspector(selectedBeforeRefresh);
         }
       }));
     }
     await Promise.all(requests);
-    await refreshSelectedJobLog({ restore: !preserveOpenLog });
+    if (selectedLogJobID) await refreshSelectedJobLog({ restore: true });
     const refreshed = document.getElementById('last-refreshed');
     if (refreshed) refreshed.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
-  async function viewJobLog(jobID) {
-    if (selectedLogJobID === jobID) {
-      closeJobLog(jobID);
-      return;
-    }
+  function selectJob(jobID) {
+    selectedJobID = jobID || '';
     selectedLogJobID = jobID || '';
-    await refreshSelectedJobLog({ restore: false });
+    syncJobInspector(selectedJobID);
+    refreshSelectedJobLog({ restore: true });
   }
 
-  function closeJobLog(jobID) {
-    const row = document.querySelector('[data-log-row="' + cssEscape(jobID || selectedLogJobID) + '"]');
-    if (row) row.hidden = true;
-    if (!jobID || selectedLogJobID === jobID) selectedLogJobID = '';
+  function closeJobInspector() {
+    selectedJobID = '';
+    selectedLogJobID = '';
+    syncJobInspector('');
   }
 
-  function hideLogRows() {
-    document.querySelectorAll('[data-log-row]').forEach(function(row) {
-      row.hidden = true;
+  function syncJobInspector(jobID) {
+    const inspector = document.getElementById('jobs-inspector');
+    const empty = document.getElementById('inspector-empty');
+    let hasSelection = false;
+    document.querySelectorAll('[data-job-id]').forEach(function(row) {
+      const active = !!jobID && row.dataset.jobId === jobID;
+      row.classList.toggle('active-row', active);
+      const trigger = row.querySelector('.more-info');
+      if (trigger) trigger.setAttribute('aria-expanded', active ? 'true' : 'false');
     });
+    document.querySelectorAll('[data-inspector-job]').forEach(function(card) {
+      const active = !!jobID && card.dataset.inspectorJob === jobID;
+      card.classList.toggle('active', active);
+      if (active) hasSelection = true;
+    });
+    if (empty) empty.hidden = hasSelection;
+    if (inspector) inspector.classList.toggle('has-selection', hasSelection);
   }
 
   function snapshotVisibleLog() {
-    const row = document.querySelector('[data-log-row]:not([hidden])');
-    if (!row) return null;
-    const jobID = row.dataset.logRow || '';
+    const card = document.querySelector('[data-inspector-job].active');
+    if (!card) return null;
+    const jobID = card.dataset.inspectorJob || '';
     const viewer = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
     const meta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
     return {
@@ -1729,28 +2102,37 @@
   }
 
   function syncTopbarJobState(panel) {
-    const count = document.getElementById('tracked-jobs-count');
     const dot = document.getElementById('tracked-status-dot');
-    if (count && panel?.dataset.totalJobs) count.textContent = panel.dataset.totalJobs;
-    if (dot && panel) dot.classList.toggle('active', panel.dataset.hasActiveJob === 'true');
+    const dashboardDot = document.getElementById('dashboard-status-dot');
+    const label = document.getElementById('tracked-status-label');
+    const running = document.getElementById('tracked-running-count');
+    const pending = document.getElementById('tracked-pending-count');
+    const attention = document.getElementById('tracked-attention-count');
+    const hasActive = panel?.dataset.hasActiveJob === 'true';
+    if (dot && panel) dot.classList.toggle('active', hasActive);
+    if (dashboardDot && panel) dashboardDot.classList.toggle('active', hasActive);
+    if (label && panel) label.textContent = hasActive ? 'Active job' : 'Idle';
+    if (running && panel?.dataset.runningJobs) running.textContent = panel.dataset.runningJobs;
+    if (pending && panel?.dataset.pendingJobs) pending.textContent = panel.dataset.pendingJobs;
+    if (attention && panel?.dataset.needsAttention) attention.textContent = panel.dataset.needsAttention;
   }
 
   async function refreshSelectedJobLog(options) {
     options = options || {};
     let jobID = selectedLogJobID;
     if (!jobID) {
-      const activeRow = document.querySelector('#jobs-panel tr.active-row[data-job-id]');
+      const activeRow = document.querySelector('#jobs-panel .active-row[data-job-id]');
       if (activeRow) jobID = activeRow.dataset.jobId || '';
     }
     if (!jobID) {
-      hideLogRows();
       return;
     }
-    const row = document.querySelector('[data-log-row="' + cssEscape(jobID) + '"]');
+    selectedJobID = jobID;
+    syncJobInspector(jobID);
+    const row = document.querySelector('[data-inspector-job="' + cssEscape(jobID) + '"]');
     const viewer = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
     const meta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
     if (!row || !viewer || !meta) return;
-    hideLogRows();
     if (options.restore) row.classList.add('restore-log');
     row.hidden = false;
     if (pendingLogSnapshot && pendingLogSnapshot.jobID === jobID) {
@@ -2573,10 +2955,6 @@
   loadTemplates();
   updateStrategyOrder();
   refreshActiveLog();
-  setInterval(function() {
-    refreshPartials({ preserveOpenLog: true });
-  }, 5000);
-
   function bulkLangUpdatesExisting() {
     return document.querySelector('input[name="bulk-lang-mode"]:checked')?.value === 'update';
   }
