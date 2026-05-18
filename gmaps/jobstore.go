@@ -697,7 +697,14 @@ func (s *JobStore) GetJob(ctx context.Context, jobID string) (*Job, error) {
 }
 
 func (s *JobStore) ListJobs(ctx context.Context) ([]Job, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs ORDER BY created_at DESC`)
+	return s.loadJobsByQuery(ctx, `SELECT id FROM jobs ORDER BY created_at DESC`)
+}
+
+// loadJobsByQuery executes the given id-selection query and returns fully
+// hydrated Job records (metadata + stats + execution stats) using a constant
+// number of database round-trips instead of one round-trip per job.
+func (s *JobStore) loadJobsByQuery(ctx context.Context, query string, args ...any) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -716,15 +723,129 @@ func (s *JobStore) ListJobs(ctx context.Context) ([]Job, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	jobs := make([]Job, 0, len(ids))
+	return s.loadJobsBatch(ctx, ids)
+}
+
+func (s *JobStore) loadJobsBatch(ctx context.Context, ids []string) ([]Job, error) {
+	if len(ids) == 0 {
+		return []Job{}, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, 0, len(ids))
 	for _, id := range ids {
-		j, err := s.GetJob(ctx, id)
-		if err != nil {
+		args = append(args, id)
+	}
+
+	jobRows, err := s.db.QueryContext(ctx, `SELECT jobs.id, jobs.queries_json, jobs.config_json, jobs.status, jobs.pause_requested,
+		jobs.template_id, jobs.strategy_id, jobs.strategy_run_id,
+		job_templates.name,
+		jobs.created_at, jobs.started_at, jobs.updated_at, jobs.finished_at, jobs.last_error
+		FROM jobs
+		LEFT JOIN job_templates ON job_templates.id = jobs.template_id
+		WHERE jobs.id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Job, len(ids))
+	for jobRows.Next() {
+		var j Job
+		var queriesJSON string
+		var pause int
+		if err := jobRows.Scan(&j.ID, &queriesJSON, &j.ConfigJSON, &j.Status, &pause,
+			&j.TemplateID, &j.StrategyID, &j.StrategyRunID,
+			&j.TemplateName,
+			&j.CreatedAt, &j.StartedAt, &j.UpdatedAt, &j.FinishedAt, &j.LastError); err != nil {
+			_ = jobRows.Close()
 			return nil, err
 		}
-		jobs = append(jobs, *j)
+		j.PauseRequested = pause != 0
+		if err := json.Unmarshal([]byte(queriesJSON), &j.Queries); err != nil {
+			_ = jobRows.Close()
+			return nil, err
+		}
+		byID[j.ID] = j
 	}
-	return jobs, nil
+	if err := jobRows.Close(); err != nil {
+		return nil, err
+	}
+	if err := jobRows.Err(); err != nil {
+		return nil, err
+	}
+
+	statsRows, err := s.db.QueryContext(ctx, `SELECT job_id, status, COUNT(*) FROM job_urls WHERE job_id IN (`+placeholders+`) GROUP BY job_id, status`, args...)
+	if err != nil {
+		return nil, err
+	}
+	for statsRows.Next() {
+		var jobID, status string
+		var n int
+		if err := statsRows.Scan(&jobID, &status, &n); err != nil {
+			_ = statsRows.Close()
+			return nil, err
+		}
+		j, ok := byID[jobID]
+		if !ok {
+			continue
+		}
+		j.Stats.Total += n
+		switch status {
+		case URLStatusPending:
+			j.Stats.Pending = n
+		case URLStatusInProgress:
+			j.Stats.InProgress = n
+		case URLStatusDone:
+			j.Stats.Done = n
+		case URLStatusFailed:
+			j.Stats.Failed = n
+		}
+		byID[jobID] = j
+	}
+	if err := statsRows.Close(); err != nil {
+		return nil, err
+	}
+	if err := statsRows.Err(); err != nil {
+		return nil, err
+	}
+
+	execRows, err := s.db.QueryContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, queued_urls,
+		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events, updated_at
+		FROM job_execution_stats WHERE job_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	for execRows.Next() {
+		var es JobExecutionStats
+		if err := execRows.Scan(&es.JobID, &es.FeedURLsFound, &es.FeedDuplicateURLs,
+			&es.QueuedURLs, &es.ScrapedURLs, &es.DuplicatePlaces, &es.ScrapeErrors, &es.WriteErrors,
+			&es.RetryEvents, &es.UpdatedAt); err != nil {
+			_ = execRows.Close()
+			return nil, err
+		}
+		j, ok := byID[es.JobID]
+		if !ok {
+			continue
+		}
+		j.ExecutionStats = es
+		byID[es.JobID] = j
+	}
+	if err := execRows.Close(); err != nil {
+		return nil, err
+	}
+	if err := execRows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		if j, ok := byID[id]; ok {
+			if j.ExecutionStats.JobID == "" {
+				j.ExecutionStats.JobID = id
+			}
+			out = append(out, j)
+		}
+	}
+	return out, nil
 }
 
 func (s *JobStore) CountJobs(ctx context.Context) (int, error) {
@@ -754,34 +875,7 @@ func (s *JobStore) ListJobsPageFiltered(ctx context.Context, filter string, limi
 	}
 	where, args := jobsFilterWhere(filter)
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	jobs := make([]Job, 0, len(ids))
-	for _, id := range ids {
-		j, err := s.GetJob(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, *j)
-	}
-	return jobs, nil
+	return s.loadJobsByQuery(ctx, `SELECT id FROM jobs`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args...)
 }
 
 func jobsFilterWhere(filter string) (string, []any) {

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{.CSRFToken}}">
   <title>{{.PageTitle}} - Scraper Control</title>
   <style>
     :root {
@@ -1995,6 +1996,27 @@
 
 {{define "control-script"}}
 <script>
+  (function() {
+    const tokenEl = document.querySelector('meta[name="csrf-token"]');
+    const csrfToken = tokenEl ? tokenEl.getAttribute('content') : '';
+    const origFetch = window.fetch.bind(window);
+    window.fetch = function(input, init) {
+      init = init || {};
+      const method = (init.method || (input && input.method) || 'GET').toUpperCase();
+      let urlStr = '';
+      if (typeof input === 'string') urlStr = input;
+      else if (input && input.url) urlStr = input.url;
+      const isApi = urlStr.startsWith('/api/') || urlStr.indexOf('://') === -1 && urlStr.indexOf('/api/') === 0;
+      const mutating = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+      if (mutating && isApi && csrfToken) {
+        const headers = new Headers(init.headers || {});
+        headers.set('X-CSRF-Token', csrfToken);
+        init.headers = headers;
+      }
+      return origFetch(input, init);
+    };
+  })();
+
   async function post(path) {
     const res = await fetch(path, { method: 'POST' });
     if (!res.ok) {

@@ -1,6 +1,24 @@
 package output
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestValidatePostgresIdentifier(t *testing.T) {
+	valid := []string{"restaurants", "_x", "Foo_Bar9", "a", strings.Repeat("a", 63)}
+	for _, s := range valid {
+		if err := validatePostgresIdentifier(s); err != nil {
+			t.Fatalf("expected %q valid, got %v", s, err)
+		}
+	}
+	invalid := []string{"", "1abc", "foo;DROP TABLE x", "foo bar", "foo\"bar", "foo-bar", "foo.bar", strings.Repeat("a", 64)}
+	for _, s := range invalid {
+		if err := validatePostgresIdentifier(s); err == nil {
+			t.Fatalf("expected %q invalid, got nil", s)
+		}
+	}
+}
 
 func TestPostgresIndexName(t *testing.T) {
 	tests := []struct {

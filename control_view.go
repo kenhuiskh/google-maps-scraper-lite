@@ -20,6 +20,12 @@ type controlPageData struct {
 	LastRefreshed  string
 	ActivePage     string
 	PageTitle      string
+	CSRFToken      string
+}
+
+func (d controlPageData) WithCSRFToken(token string) controlPageData {
+	d.CSRFToken = token
+	return d
 }
 
 type templateEditorView struct {

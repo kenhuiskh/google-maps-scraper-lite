@@ -2,21 +2,90 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gosom/google-maps-scraper-lite/gmaps"
 )
+
+const csrfCookieName = "csrf_token"
+const csrfHeaderName = "X-CSRF-Token"
+
+var csrfTokenRe = regexp.MustCompile(`^[0-9a-f]{32,128}$`)
+
+func generateCSRFToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// ensureCSRFToken returns the request's existing csrf_token cookie if valid,
+// otherwise generates a new one and writes it as a cookie on w. The token is
+// readable by JS (HttpOnly=false) so the page can echo it in X-CSRF-Token.
+func ensureCSRFToken(w http.ResponseWriter, r *http.Request) string {
+	if c, err := r.Cookie(csrfCookieName); err == nil && csrfTokenRe.MatchString(c.Value) {
+		return c.Value
+	}
+	token, err := generateCSRFToken()
+	if err != nil {
+		return ""
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+	})
+	return token
+}
+
+// csrfMiddleware enforces double-submit cookie CSRF protection for non-GET
+// /api/* requests, and rejects cross-origin POSTs by comparing Origin to Host.
+// It must run AFTER basic auth so unauthenticated requests get 401 first.
+func csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method := r.Method
+		isStateChanging := method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
+		if isStateChanging && strings.HasPrefix(r.URL.Path, "/api/") {
+			if origin := r.Header.Get("Origin"); origin != "" {
+				if ou, err := url.Parse(origin); err != nil || ou.Host == "" || ou.Host != r.Host {
+					http.Error(w, "cross-origin request blocked", http.StatusForbidden)
+					return
+				}
+			}
+			cookie, err := r.Cookie(csrfCookieName)
+			if err != nil || !csrfTokenRe.MatchString(cookie.Value) {
+				http.Error(w, "missing CSRF cookie", http.StatusForbidden)
+				return
+			}
+			header := r.Header.Get(csrfHeaderName)
+			if header == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
+				http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func startControlServer(ctx context.Context, addr string, store *gmaps.JobStore, stateDB string, launchResume resumeLauncher, launchStart startLauncher) (*http.Server, error) {
 	username := os.Getenv("CONTROL_USERNAME")
@@ -34,7 +103,7 @@ func startControlServer(ctx context.Context, addr string, store *gmaps.JobStore,
 			http.Error(w, "control UI is not configured: CONTROL_USERNAME and CONTROL_PASSWORD must both be set", http.StatusServiceUnavailable)
 		})
 	} else {
-		handler = basicAuthMiddleware(username, password, mux)
+		handler = basicAuthMiddleware(username, password, csrfMiddleware(mux))
 	}
 
 	srv := &http.Server{Addr: addr, Handler: handler}
@@ -182,6 +251,7 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 		if mode == "" {
 			mode = gmaps.ConfigImportRename
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 		var cfg gmaps.ReusableConfigExport
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
@@ -615,12 +685,38 @@ func parseLogTail(r *http.Request) int {
 	return tail
 }
 
+// maxLogTailBytes caps how far back readTailLines scans from EOF. Prevents
+// /api/jobs/{id}/logs from loading multi-GB log files into memory.
+const maxLogTailBytes int64 = 2 << 20
+
 func readTailLines(path string, tail int) ([]string, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := info.Size()
+	readSize := size
+	if readSize > maxLogTailBytes {
+		readSize = maxLogTailBytes
+	}
+	buf := make([]byte, readSize)
+	if readSize > 0 {
+		if _, err := f.ReadAt(buf, size-readSize); err != nil && err != io.EOF {
+			return nil, err
+		}
+	}
+	text := strings.ReplaceAll(string(buf), "\r\n", "\n")
+	if size > maxLogTailBytes {
+		// Drop the partial leading line that may have been cut mid-line.
+		if idx := strings.IndexByte(text, '\n'); idx >= 0 {
+			text = text[idx+1:]
+		}
+	}
 	text = strings.TrimRight(text, "\n")
 	if text == "" {
 		return []string{}, nil
@@ -684,8 +780,9 @@ func renderControlPage(w http.ResponseWriter, r *http.Request, store *gmaps.JobS
 		page = "jobs"
 	}
 
+	token := ensureCSRFToken(w, r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title).WithTemplateEditor(editor)
+	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title).WithTemplateEditor(editor).WithCSRFToken(token)
 	if err := controlTemplate.ExecuteTemplate(w, "control", data); err != nil {
 		log.Printf("template render error (control): %v", err)
 	}

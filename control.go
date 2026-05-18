@@ -74,6 +74,47 @@ func defaultControlOutDir(stateDB string) string {
 	return filepath.Join(dir, "output")
 }
 
+// Caps prevent operator-supplied or template-supplied parameters from
+// exhausting local browser/page-pool/review buffers via the control UI.
+const (
+	maxConcurrencyValue = 32
+	maxExtraReviews     = 1000
+	maxLimitURLs        = 100000
+	maxQueueWaitMinutes = 24 * 60
+	maxRadiusKm         = 2000
+	maxDepthPages       = 100
+)
+
+func validateStartParamsRanges(p *startParams) error {
+	if p.ConcurrencyValue < 0 || p.ConcurrencyValue > maxConcurrencyValue {
+		return fmt.Errorf("concurrency must be between 0 and %d", maxConcurrencyValue)
+	}
+	if p.Reviews < 0 || p.Reviews > maxExtraReviews {
+		return fmt.Errorf("reviews must be between 0 and %d", maxExtraReviews)
+	}
+	if p.Limit < 0 || p.Limit > maxLimitURLs {
+		return fmt.Errorf("limit must be between 0 and %d", maxLimitURLs)
+	}
+	if p.QueueWaitMinutes < 0 || p.QueueWaitMinutes > maxQueueWaitMinutes {
+		return fmt.Errorf("queue wait must be between 0 and %d minutes", maxQueueWaitMinutes)
+	}
+	if p.Radius < 0 || p.Radius > maxRadiusKm {
+		return fmt.Errorf("radius must be between 0 and %d km", maxRadiusKm)
+	}
+	if p.Depth < 0 || p.Depth > maxDepthPages {
+		return fmt.Errorf("depth must be between 0 and %d", maxDepthPages)
+	}
+	if p.Geo != "" {
+		if _, _, err := gmaps.ParseGeoCenter(p.Geo); err != nil {
+			return errors.New("invalid geo center")
+		}
+	}
+	if p.Radius > 0 && p.Geo == "" {
+		return errors.New("radius requires geo center")
+	}
+	return nil
+}
+
 func parseStartParams(r *http.Request) (startParams, string) {
 	if err := r.ParseForm(); err != nil {
 		return startParams{}, "invalid form data"
@@ -202,6 +243,10 @@ func parseStartParams(r *http.Request) (startParams, string) {
 		p.QueueWaitMinutes = n
 	}
 
+	if err := validateStartParamsRanges(&p); err != nil {
+		return startParams{}, err.Error()
+	}
+
 	return p, ""
 }
 
@@ -271,7 +316,6 @@ func templateParamsFromForm(r *http.Request, p startParams) templateParams {
 		Email:           p.Email,
 		OutputMode:      p.OutputMode,
 		JSONOut:         p.JSONOut,
-		OutDir:          p.OutDir,
 	}
 	if strings.TrimSpace(r.FormValue("radius")) != "" {
 		t.Radius = &p.Radius
@@ -385,7 +429,6 @@ func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams
 		Email:            t.Email,
 		OutputMode:       t.OutputMode,
 		JSONOut:          t.JSONOut,
-		OutDir:           t.OutDir,
 		QueueWaitMinutes: 20,
 	}
 	if p.Lang == "" {
@@ -420,11 +463,16 @@ func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams
 		if p.DSN == "" {
 			return startParams{}, errors.New("database output mode requires DSN environment variable to be set")
 		}
-	} else if p.OutDir == "" {
+	} else {
+		// Always derive OutDir from stateDB to prevent templated payloads from
+		// writing outside the configured output tree.
 		p.OutDir = defaultControlOutDir(stateDB)
 	}
 	if len(p.Queries) == 0 && len(p.PlaceIDs) == 0 {
 		return startParams{}, errors.New("template has no queries or place IDs")
+	}
+	if err := validateStartParamsRanges(&p); err != nil {
+		return startParams{}, err
 	}
 	return p, nil
 }
