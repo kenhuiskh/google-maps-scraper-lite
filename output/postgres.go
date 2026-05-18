@@ -89,7 +89,35 @@ type PostgresWriter struct {
 	tableReview     string
 }
 
+// validatePostgresIdentifier enforces a strict allow-list for table identifiers
+// before they are interpolated into DDL/DML, blocking SQL injection via CLI flags.
+var validPostgresIdentifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validatePostgresIdentifier(name string) error {
+	if name == "" {
+		return errors.New("identifier is empty")
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("identifier %q exceeds 63 characters", name)
+	}
+	if !validPostgresIdentifierRe.MatchString(name) {
+		return fmt.Errorf("invalid postgres identifier %q (allowed: ^[A-Za-z_][A-Za-z0-9_]*$)", name)
+	}
+	return nil
+}
+
+func quotePostgresIdent(name string) string {
+	return pgx.Identifier{name}.Sanitize()
+}
+
 func NewPostgresWriter(ctx context.Context, dsn, tableRestaurant, tableReview string) (*PostgresWriter, error) {
+	if err := validatePostgresIdentifier(tableRestaurant); err != nil {
+		return nil, fmt.Errorf("invalid restaurant table name: %w", err)
+	}
+	if err := validatePostgresIdentifier(tableReview); err != nil {
+		return nil, fmt.Errorf("invalid review table name: %w", err)
+	}
+
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
@@ -100,23 +128,27 @@ func NewPostgresWriter(ctx context.Context, dsn, tableRestaurant, tableReview st
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantsSQLFmt, tableRestaurant)); err != nil {
+	qRestaurant := quotePostgresIdent(tableRestaurant)
+	qReview := quotePostgresIdent(tableReview)
+
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantsSQLFmt, qRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s table: %w", tableRestaurant, err)
 	}
 
 	indexPrefix := postgresIndexName(tableRestaurant)
-	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantPlaceIDIndexSQLFmt, indexPrefix, tableRestaurant)); err != nil {
+	qIndexPrefix := quotePostgresIdent(indexPrefix)
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantPlaceIDIndexSQLFmt, qIndexPrefix, qRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s place_id unique index: %w", tableRestaurant, err)
 	}
 
-	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantDataIDIndexSQLFmt, indexPrefix, tableRestaurant)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantDataIDIndexSQLFmt, qIndexPrefix, qRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s data_id unique index: %w", tableRestaurant, err)
 	}
 
-	if _, err := pool.Exec(ctx, fmt.Sprintf(createReviewsSQLFmt, tableReview, tableRestaurant)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createReviewsSQLFmt, qReview, qRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s table: %w", tableReview, err)
 	}
@@ -154,6 +186,7 @@ func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
 		return fmt.Errorf("canonical restaurant lookup %q: %w", entry.Cid, err)
 	}
 
+	qRestaurant := quotePostgresIdent(p.tableRestaurant)
 	upsertSQL := fmt.Sprintf(`
 INSERT INTO %s (
 	cid, input_id, link, title, categories, category, address,
@@ -208,7 +241,7 @@ INSERT INTO %s (
 		WHEN EXCLUDED.status ILIKE '%%permanently closed%%'
 		THEN COALESCE(%s.closed_at, NOW())
 		ELSE %s.closed_at
-	END`, p.tableRestaurant, p.tableRestaurant, p.tableRestaurant)
+	END`, qRestaurant, qRestaurant, qRestaurant)
 
 	_, err = p.pool.Exec(ctx, upsertSQL,
 		canonicalCID,
@@ -256,7 +289,7 @@ INSERT INTO %s (
 INSERT INTO %s (
 	cid, reviewer_name, profile_picture, rating, description, images, reviewed_at
 ) VALUES ($1,$2,$3,$4,$5,$6,$7)
-ON CONFLICT (cid, reviewer_name) DO NOTHING`, p.tableReview)
+ON CONFLICT (cid, reviewer_name) DO NOTHING`, quotePostgresIdent(p.tableReview))
 
 	for _, r := range entry.UserReviews {
 		reviewedAt := parseReviewDate(r.When)
@@ -297,7 +330,7 @@ ORDER BY CASE
 	WHEN $3 <> '' AND data_id = $3 THEN 3
 	ELSE 4
 END
-LIMIT 1`, p.tableRestaurant)
+LIMIT 1`, quotePostgresIdent(p.tableRestaurant))
 
 	var cid string
 	if err := p.pool.QueryRow(ctx, query, entry.Cid, entry.PlaceID, entry.DataID).Scan(&cid); err != nil {

@@ -102,8 +102,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	var consecFails int64
 	recovery := newRecoveryCoordinator(s.Store, jobID, s.Config)
 
-	var g errgroup.Group
-	gctx := ctx
+	g, gctx := errgroup.WithContext(ctx)
 	for i := 0; i < conc; i++ {
 		workerID := i
 		g.Go(func() error {
@@ -183,12 +182,13 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 
 				result := PlaceResult{URLID: claimed.ID, URL: claimed.URL, Entry: entry}
 				if useRadiusFilter {
+					// Defer MarkURLDone until after the radius filter: filtered-out
+					// entries are marked done here (no write needed); kept entries
+					// keep their URLID so the writer can mark done after write
+					// succeeds or failed if the write errors.
 					mu.Lock()
 					entries = append(entries, result)
 					mu.Unlock()
-					if err := s.Store.MarkURLDone(gctx, claimed.ID); err != nil {
-						return err
-					}
 				} else {
 					select {
 					case out <- result:
@@ -206,13 +206,30 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	if useRadiusFilter && (err == nil || errors.Is(err, context.Canceled) || errors.Is(err, ErrSessionBlocked) || errors.Is(err, ErrJobPaused)) {
 		lat, lon, _ := ParseGeoCenter(s.Config.Geo) // already validated by caller
 		rawEntries := make([]*Entry, 0, len(entries))
+		entryURLID := make(map[*Entry]int64, len(entries))
+		entryURL := make(map[*Entry]string, len(entries))
 		for _, result := range entries {
 			rawEntries = append(rawEntries, result.Entry)
+			entryURLID[result.Entry] = result.URLID
+			entryURL[result.Entry] = result.URL
 		}
 		filtered := filterAndSortEntriesWithinRadius(rawEntries, lat, lon, s.Config.Radius)
+		keep := make(map[*Entry]struct{}, len(filtered))
+		for _, e := range filtered {
+			keep[e] = struct{}{}
+		}
+		// Mark filtered-out URLs done now; writer will never see them.
+		for _, result := range entries {
+			if _, ok := keep[result.Entry]; ok {
+				continue
+			}
+			if result.URLID != 0 {
+				_ = s.Store.MarkURLDone(context.Background(), result.URLID)
+			}
+		}
 		for _, e := range filtered {
 			select {
-			case out <- PlaceResult{Entry: e}:
+			case out <- PlaceResult{URLID: entryURLID[e], URL: entryURL[e], Entry: e}:
 			case <-ctx.Done():
 				break
 			}

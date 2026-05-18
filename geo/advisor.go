@@ -31,7 +31,13 @@ func SuggestZoom(ctx context.Context, idx *BIAIndex, counter FoodPOICounter, poi
 	results := make([]Suggestion, 0, len(points))
 	for i, p := range points {
 		if i > 0 {
-			time.Sleep(1100 * time.Millisecond)
+			timer := time.NewTimer(1100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
 		}
 		s := Suggestion{Point: p}
 

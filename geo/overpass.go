@@ -68,7 +68,7 @@ func (c *OverpassClient) FoodPOICount(ctx context.Context, lat, lng float64, rad
 		}
 
 		if resp.StatusCode == http.StatusOK {
-			body, err := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
 			if err != nil {
 				return 0, err
