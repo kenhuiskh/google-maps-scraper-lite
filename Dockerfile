@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN CGO_ENABLED=1 GOOS=linux go build -o google-maps-scraper-lite .
+ENV GOMEMLIMIT=1500MiB GOGC=50
+RUN CGO_ENABLED=1 GOOS=linux go build -p 2 -ldflags='-s -w' -o google-maps-scraper-lite .
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
