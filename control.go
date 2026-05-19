@@ -497,6 +497,13 @@ func runJobQueue(ctx context.Context, store *gmaps.JobStore, stateDB string, lau
 }
 
 func runJobQueueOnce(ctx context.Context, store *gmaps.JobStore, stateDB string, launchStart startLauncher) error {
+	paused, err := store.SchedulerPaused(ctx)
+	if err != nil {
+		return err
+	}
+	if paused {
+		return nil
+	}
 	job, err := store.NextPendingJobAfterDone(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil

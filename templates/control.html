@@ -1804,6 +1804,15 @@
         <button type="button" class="icon-button" onclick="refreshPartials()" title="Refresh dashboard and job table." aria-label="Refresh dashboard and job table">
           {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
         </button>
+        {{if .Summary.SchedulerPaused}}
+          <button type="button" class="icon-button action-warning" onclick="resumeScheduler()" title="Resume the queue scheduler. Pending jobs will be claimed again." aria-label="Resume scheduler">
+            Resume Scheduler
+          </button>
+        {{else}}
+          <button type="button" class="icon-button" onclick="pauseScheduler()" title="Pause the queue scheduler. Queued runs stay queued; the active job continues." aria-label="Pause scheduler">
+            Pause Scheduler
+          </button>
+        {{end}}
       </div>
       <div class="pager" aria-label="Job queue pagination">
         <div class="muted tiny">
@@ -2032,6 +2041,17 @@
       alert('Error: ' + msg);
     }
     await refreshPartials();
+  }
+
+  async function pauseScheduler() {
+    if (!confirm('Pause the queue scheduler? Queued runs stop being claimed. The currently running job continues until it finishes.')) {
+      return;
+    }
+    await post('/api/scheduler/pause');
+  }
+
+  async function resumeScheduler() {
+    await post('/api/scheduler/resume');
   }
 
   async function deleteJob(jobID, path) {

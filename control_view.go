@@ -28,6 +28,11 @@ func (d controlPageData) WithCSRFToken(token string) controlPageData {
 	return d
 }
 
+func (d controlPageData) WithSchedulerPaused(paused bool) controlPageData {
+	d.Summary.SchedulerPaused = paused
+	return d
+}
+
 type templateEditorView struct {
 	Mode               string
 	Title              string
@@ -143,6 +148,7 @@ type controlSummaryView struct {
 	TotalJobs         int
 	PendingURLs       int
 	ActiveURLs        int
+	SchedulerPaused   bool
 }
 
 func newControlPageData(jobs []gmaps.Job, templates []gmaps.JobTemplate, strategies []gmaps.Strategy) controlPageData {
@@ -338,7 +344,9 @@ func newJobViewWithQueueState(job gmaps.Job, hasActiveJob bool) jobView {
 }
 
 func jobDeleteAction(job gmaps.Job) (path, help string) {
-	if job.Status != gmaps.JobStatusDone && job.Status != gmaps.JobStatusFailed {
+	switch job.Status {
+	case gmaps.JobStatusPending, gmaps.JobStatusPaused, gmaps.JobStatusBlocked, gmaps.JobStatusDone, gmaps.JobStatusFailed:
+	default:
 		return "", ""
 	}
 	return "/api/jobs/" + job.ID, "Delete this job and remove its scraped URL records. This cannot be undone."

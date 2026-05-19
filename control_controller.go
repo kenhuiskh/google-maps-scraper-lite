@@ -179,8 +179,13 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		paused, err := store.SchedulerPaused(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := controlTemplate.ExecuteTemplate(w, "summary", newControlPageData(jobs, nil, nil)); err != nil {
+		if err := controlTemplate.ExecuteTemplate(w, "summary", newControlPageData(jobs, nil, nil).WithSchedulerPaused(paused)); err != nil {
 			log.Printf("template render error (summary): %v", err)
 		}
 	})
@@ -206,8 +211,13 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		paused, err := store.SchedulerPaused(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := controlTemplate.ExecuteTemplate(w, "jobs-panel", newControlPageDataWithPagination(jobs, pageJobs, nil, nil, pagination)); err != nil {
+		if err := controlTemplate.ExecuteTemplate(w, "jobs-panel", newControlPageDataWithPagination(jobs, pageJobs, nil, nil, pagination).WithSchedulerPaused(paused)); err != nil {
 			log.Printf("template render error (jobs-panel): %v", err)
 		}
 	})
@@ -525,6 +535,40 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 		}
 		writeJSON(w, map[string]string{"status": status, "job_id": jobID})
 	})
+	mux.HandleFunc("/api/scheduler/state", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		paused, err := store.SchedulerPaused(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]bool{"paused": paused})
+	})
+	mux.HandleFunc("/api/scheduler/pause", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := store.SetSchedulerPaused(r.Context(), true); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "paused"})
+	})
+	mux.HandleFunc("/api/scheduler/resume", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := store.SetSchedulerPaused(r.Context(), false); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "resumed"})
+	})
 	mux.HandleFunc("/api/jobs/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
 		parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -799,9 +843,14 @@ func renderControlPage(w http.ResponseWriter, r *http.Request, store *gmaps.JobS
 		page = "jobs"
 	}
 
+	paused, err := store.SchedulerPaused(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	token := ensureCSRFToken(w, r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title).WithTemplateEditor(editor).WithCSRFToken(token)
+	data := newControlPageDataWithPagination(jobs, pageJobs, templates, strategies, pagination).WithPage(page, title).WithTemplateEditor(editor).WithCSRFToken(token).WithSchedulerPaused(paused)
 	if err := controlTemplate.ExecuteTemplate(w, "control", data); err != nil {
 		log.Printf("template render error (control): %v", err)
 	}

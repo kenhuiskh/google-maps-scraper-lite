@@ -37,7 +37,7 @@ var (
 	ErrActiveJobExists = errors.New("scraper: a job is already starting or running")
 	ErrJobNotPending    = errors.New("scraper: job is not pending")
 	ErrJobNotStale      = errors.New("scraper: job is not starting or running")
-	ErrJobNotDeletable  = errors.New("scraper: job is not in a terminal state")
+	ErrJobNotDeletable  = errors.New("scraper: job must be pending, paused, blocked, done, or failed to delete")
 
 	ErrConfigExportInvalid  = errors.New("config export: invalid selection")
 	ErrConfigImportInvalid  = errors.New("config import: invalid payload")
@@ -286,6 +286,11 @@ func (s *JobStore) migrate(ctx context.Context) error {
 			UNIQUE(strategy_id, position)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_strategy_templates_position ON strategy_templates(strategy_id, position)`,
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS job_execution_stats (
 			job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
 			feed_urls_found INTEGER NOT NULL DEFAULT 0,
@@ -698,18 +703,19 @@ func (s *JobStore) GetJob(ctx context.Context, jobID string) (*Job, error) {
 }
 
 // DeleteJob removes a job and its dependent rows (job_urls, job_events,
-// job_execution_stats cascade via foreign keys). Allowed only when the job is
-// in a terminal state (done or failed); otherwise returns ErrJobNotDeletable.
+// job_execution_stats cascade via foreign keys). Allowed when the job is
+// pending, paused, blocked, or in a terminal state (done or failed);
+// otherwise returns ErrJobNotDeletable.
 func (s *JobStore) DeleteJob(ctx context.Context, jobID string) error {
 	var status string
 	if err := s.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, jobID).Scan(&status); err != nil {
 		return err
 	}
-	if status != JobStatusDone && status != JobStatusFailed {
+	if status != JobStatusPending && status != JobStatusPaused && status != JobStatusBlocked && status != JobStatusDone && status != JobStatusFailed {
 		return ErrJobNotDeletable
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM jobs WHERE id = ? AND status IN (?, ?)`,
-		jobID, JobStatusDone, JobStatusFailed)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM jobs WHERE id = ? AND status IN (?, ?, ?, ?, ?)`,
+		jobID, JobStatusPending, JobStatusPaused, JobStatusBlocked, JobStatusDone, JobStatusFailed)
 	if err != nil {
 		return err
 	}
@@ -721,6 +727,36 @@ func (s *JobStore) DeleteJob(ctx context.Context, jobID string) error {
 		return ErrJobNotDeletable
 	}
 	return nil
+}
+
+const schedulerPausedKey = "scheduler_paused"
+
+// SchedulerPaused returns true when the job queue scheduler has been paused
+// via the control UI. Defaults to false when no setting row exists.
+func (s *JobStore) SchedulerPaused(ctx context.Context) (bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = ?`, schedulerPausedKey).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return value == "1", nil
+}
+
+// SetSchedulerPaused persists the scheduler pause flag. When true, the queue
+// loop skips claiming new pending jobs; jobs already running continue.
+func (s *JobStore) SetSchedulerPaused(ctx context.Context, paused bool) error {
+	value := "0"
+	if paused {
+		value = "1"
+	}
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		schedulerPausedKey, value, now)
+	return err
 }
 
 func (s *JobStore) ListJobs(ctx context.Context) ([]Job, error) {
