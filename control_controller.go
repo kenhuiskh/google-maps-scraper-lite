@@ -542,6 +542,25 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			writeJSON(w, job)
 			return
 		}
+		if len(parts) == 1 && r.Method == http.MethodDelete {
+			if err := store.DeleteJob(r.Context(), jobID); err != nil {
+				if errors.Is(err, gmaps.ErrJobNotDeletable) {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if path := jobLogPath(stateDB, jobID); path != "" {
+				_ = os.Remove(path)
+			}
+			writeJSON(w, map[string]string{"status": "deleted"})
+			return
+		}
 		if len(parts) == 2 && parts[1] == "logs" && r.Method == http.MethodGet {
 			logs, err := jobLogsResponseFromRequest(r, store, stateDB, jobID)
 			if err != nil {

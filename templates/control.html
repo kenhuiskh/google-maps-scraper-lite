@@ -628,6 +628,8 @@
     }
     .actions .action-warning { background: var(--warning-soft); border-color: #fcd34d; color: #92400e; font-weight: 800; }
     .actions .action-muted { color: #94a3b8; background: #f8fafc; }
+    .action-danger { color: var(--danger); }
+    .action-danger:hover:not([disabled]) { background: rgba(220, 38, 38, 0.08); }
     .empty-row td, .empty-state {
       padding: 24px 14px;
       color: var(--muted);
@@ -1976,6 +1978,11 @@
           </button>
         {{end}}
       {{end}}
+      {{if .DeletePath}}
+        <button class="icon-button action-danger" onclick="deleteJob('{{.ID}}', '{{.DeletePath}}')" title="{{.DeleteHelp}}" aria-label="Delete job {{.ID}}">
+          {{template "icon-trash" .}}<span class="sr-only">Delete</span>
+        </button>
+      {{end}}
     </span>
   </div>
 {{else}}
@@ -1987,11 +1994,12 @@
 {{define "icon-log"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M8 13h8"></path><path d="M8 17h6"></path></svg>{{end}}
 {{define "icon-play"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"></path></svg>{{end}}
 {{define "icon-pause"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H6v16h4z"></path><path d="M18 4h-4v16h4z"></path></svg>{{end}}
+{{define "icon-trash"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6 18 20H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>{{end}}
 {{define "icon-recover"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 3v6h6"></path></svg>{{end}}
 {{define "icon-close"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>{{end}}
 {{define "icon-prev"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{end}}
 {{define "icon-next"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>{{end}}
-{{define "icon-status"}}{{if or (eq . "Running") (eq . "Done")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "Pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if or (eq . "Blocked") (eq . "Failed")}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else if or (eq . "Paused") (eq . "Pausing")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H7v14h3z"></path><path d="M17 5h-3v14h3z"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle></svg>{{end}}{{end}}
+{{define "icon-status"}}{{if eq . "Running"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "Done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "Pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if or (eq . "Blocked") (eq . "Failed")}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else if or (eq . "Paused") (eq . "Pausing")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H7v14h3z"></path><path d="M17 5h-3v14h3z"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle></svg>{{end}}{{end}}
 {{define "icon-filter-status"}}{{if eq . "active"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if eq . "done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "attention"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M7 12h10"></path><path d="M10 17h4"></path></svg>{{end}}{{end}}
 
 {{define "control-script"}}
@@ -2024,6 +2032,29 @@
       alert('Error: ' + msg);
     }
     await refreshPartials();
+  }
+
+  async function deleteJob(jobID, path) {
+    if (!confirm('Delete this job and its scraped URL records? This cannot be undone.')) {
+      return;
+    }
+    try {
+      const res = await fetch(path, { method: 'DELETE' });
+      if (!res.ok) {
+        const msg = await res.text();
+        alert('Error: ' + msg);
+        return;
+      }
+      if (selectedJobID === jobID) {
+        selectedJobID = '';
+      }
+      if (selectedLogJobID === jobID) {
+        selectedLogJobID = '';
+      }
+      await refreshPartials();
+    } catch (err) {
+      alert('Error: ' + err);
+    }
   }
 
   async function refreshJob(jobID) {

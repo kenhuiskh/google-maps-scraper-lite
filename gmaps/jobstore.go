@@ -35,8 +35,9 @@ var (
 	ErrNoPendingURL    = errors.New("scraper: no pending URLs")
 	ErrJobNotResumable = errors.New("scraper: job is already running or done")
 	ErrActiveJobExists = errors.New("scraper: a job is already starting or running")
-	ErrJobNotPending   = errors.New("scraper: job is not pending")
-	ErrJobNotStale     = errors.New("scraper: job is not starting or running")
+	ErrJobNotPending    = errors.New("scraper: job is not pending")
+	ErrJobNotStale      = errors.New("scraper: job is not starting or running")
+	ErrJobNotDeletable  = errors.New("scraper: job is not in a terminal state")
 
 	ErrConfigExportInvalid  = errors.New("config export: invalid selection")
 	ErrConfigImportInvalid  = errors.New("config import: invalid payload")
@@ -694,6 +695,32 @@ func (s *JobStore) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	j.Stats = stats
 	j.ExecutionStats, _ = s.JobExecutionStats(ctx, jobID)
 	return &j, nil
+}
+
+// DeleteJob removes a job and its dependent rows (job_urls, job_events,
+// job_execution_stats cascade via foreign keys). Allowed only when the job is
+// in a terminal state (done or failed); otherwise returns ErrJobNotDeletable.
+func (s *JobStore) DeleteJob(ctx context.Context, jobID string) error {
+	var status string
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, jobID).Scan(&status); err != nil {
+		return err
+	}
+	if status != JobStatusDone && status != JobStatusFailed {
+		return ErrJobNotDeletable
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM jobs WHERE id = ? AND status IN (?, ?)`,
+		jobID, JobStatusDone, JobStatusFailed)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrJobNotDeletable
+	}
+	return nil
 }
 
 func (s *JobStore) ListJobs(ctx context.Context) ([]Job, error) {

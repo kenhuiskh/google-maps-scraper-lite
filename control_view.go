@@ -94,6 +94,8 @@ type jobView struct {
 	RecoverPath     string
 	RecoverDisabled bool
 	RecoverHelp     string
+	DeletePath      string
+	DeleteHelp      string
 	RawStatus       string
 	PauseRequested  bool
 	OutputMode      string
@@ -331,7 +333,15 @@ func newJobViewWithQueueState(job gmaps.Job, hasActiveJob bool) jobView {
 		view.LastError = job.LastError.String
 	}
 	view.RecoverPath, view.RecoverDisabled, view.RecoverHelp = jobRecoverAction(job)
+	view.DeletePath, view.DeleteHelp = jobDeleteAction(job)
 	return view
+}
+
+func jobDeleteAction(job gmaps.Job) (path, help string) {
+	if job.Status != gmaps.JobStatusDone && job.Status != gmaps.JobStatusFailed {
+		return "", ""
+	}
+	return "/api/jobs/" + job.ID, "Delete this job and remove its scraped URL records. This cannot be undone."
 }
 
 func jobLifecycleAction(job gmaps.Job, hasActiveJob bool) (label, path string, disabled bool, class, help string) {
