@@ -72,12 +72,12 @@ CREATE TABLE IF NOT EXISTS %s (
 )`
 
 const createRestaurantPlaceIDIndexSQLFmt = `
-CREATE UNIQUE INDEX IF NOT EXISTS %s_place_id_unique
+CREATE UNIQUE INDEX IF NOT EXISTS %s
 ON %s (place_id)
 WHERE place_id IS NOT NULL AND place_id <> ''`
 
 const createRestaurantDataIDIndexSQLFmt = `
-CREATE UNIQUE INDEX IF NOT EXISTS %s_data_id_unique
+CREATE UNIQUE INDEX IF NOT EXISTS %s
 ON %s (data_id)
 WHERE data_id IS NOT NULL AND data_id <> ''`
 
@@ -137,13 +137,14 @@ func NewPostgresWriter(ctx context.Context, dsn, tableRestaurant, tableReview st
 	}
 
 	indexPrefix := postgresIndexName(tableRestaurant)
-	qIndexPrefix := quotePostgresIdent(indexPrefix)
-	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantPlaceIDIndexSQLFmt, qIndexPrefix, qRestaurant)); err != nil {
+	qPlaceIDIndex := quotePostgresIdent(indexPrefix + "_place_id_unique")
+	qDataIDIndex := quotePostgresIdent(indexPrefix + "_data_id_unique")
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantPlaceIDIndexSQLFmt, qPlaceIDIndex, qRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s place_id unique index: %w", tableRestaurant, err)
 	}
 
-	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantDataIDIndexSQLFmt, qIndexPrefix, qRestaurant)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf(createRestaurantDataIDIndexSQLFmt, qDataIDIndex, qRestaurant)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("create %s data_id unique index: %w", tableRestaurant, err)
 	}
