@@ -63,6 +63,27 @@ func TestOverpassClient_Count6(t *testing.T) {
 	assert.Equal(t, 6, n)
 }
 
+func TestOverpassClient_SendsRequiredHeaders(t *testing.T) {
+	data, err := os.ReadFile("testdata/overpass_count_42.json")
+	require.NoError(t, err)
+
+	var userAgent, contentType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		userAgent = req.Header.Get("User-Agent")
+		contentType = req.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	c := geo.NewOverpassClient(srv.URL)
+	n, err := c.FoodPOICount(context.Background(), 43.6488, -79.3773, 500)
+	require.NoError(t, err)
+	assert.Equal(t, 42, n)
+	assert.Equal(t, "google-maps-scraper-lite (+https://github.com/gosom/google-maps-scraper-lite)", userAgent)
+	assert.Equal(t, "application/x-www-form-urlencoded", contentType)
+}
+
 func TestOverpassClient_NonOKStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)

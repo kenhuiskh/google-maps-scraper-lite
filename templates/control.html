@@ -85,7 +85,7 @@
       backdrop-filter: blur(14px);
     }
     .topbar-inner {
-      max-width: 1440px;
+      max-width: 1520px;
       margin: 0 auto;
       padding: 12px 24px;
       display: grid;
@@ -138,7 +138,7 @@
       background: #16a34a;
       box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.16);
     }
-    .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px 28px; }
+    .container { max-width: 1520px; margin: 0 auto; padding: 20px 24px 28px; }
     .page-head {
       display: flex;
       justify-content: space-between;
@@ -165,7 +165,7 @@
     .dashboard-grid { display: grid; gap: 10px; }
     .jobs-workspace {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(420px, 0.56fr);
+      grid-template-columns: minmax(0, 1fr) minmax(520px, 0.72fr);
       gap: 12px;
       align-items: start;
     }
@@ -195,7 +195,7 @@
     .jobs-list-head,
     .job-row {
       display: grid;
-      grid-template-columns: minmax(260px, 0.95fr) minmax(180px, 0.7fr) 76px;
+      grid-template-columns: minmax(220px, 0.85fr) minmax(190px, 0.65fr) 116px;
       gap: 12px;
       align-items: center;
     }
@@ -224,7 +224,7 @@
     .job-row:focus-visible { outline: 3px solid #c9d9e8; outline-offset: -3px; }
     .job-row.active-row {
       background: var(--primary-soft);
-      box-shadow: inset 3px 0 0 var(--primary);
+      box-shadow: inset 0 0 0 1px #b7c8e1;
     }
     .job-row:last-child { border-bottom: 0; }
     .job-main { min-width: 0; display: grid; gap: 6px; }
@@ -260,10 +260,12 @@
     .jobs-inspector {
       position: sticky;
       top: 82px;
-      max-height: calc(100vh - 104px);
+      height: min(720px, calc(100vh - 292px));
+      max-height: calc(100vh - 292px);
       display: flex;
       flex-direction: column;
       min-width: 0;
+      overflow: hidden;
     }
     .inspector-empty,
     .inspector-card {
@@ -274,7 +276,14 @@
     }
     .inspector-empty { padding: 18px; color: var(--muted); }
     .inspector-card { display: none; min-height: 0; overflow: hidden; }
-    .inspector-card.active { display: flex; flex-direction: column; }
+    .inspector-card.active {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      height: 100%;
+      max-height: 100%;
+      min-height: 0;
+    }
     .inspector-header {
       padding: 13px 14px;
       border-bottom: 1px solid var(--border);
@@ -283,8 +292,17 @@
       justify-content: space-between;
       gap: 10px;
     }
-    .inspector-body { padding: 12px 14px 14px; overflow: auto; display: grid; gap: 12px; }
-    .inspector-section { display: grid; gap: 8px; }
+    .inspector-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 10px 12px 12px;
+      overflow: auto;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      scrollbar-gutter: stable;
+    }
+    .inspector-section { display: grid; gap: 7px; }
     .inspector-grid .inspector-ratio {
       display: grid;
       gap: 6px;
@@ -325,35 +343,61 @@
       border-radius: 999px;
       display: inline-block;
     }
-    .inspector-grid { display: grid; gap: 0; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .inspector-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+    }
+    .inspector-grid .inspector-ratio { grid-column: 1 / -1; }
     .inspector-metric {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
-      align-items: baseline;
-      padding: 6px 8px;
+      gap: 2px;
+      align-items: start;
+      padding: 7px 8px;
       border: 0;
       border-bottom: 1px solid var(--border);
+      border-right: 1px solid var(--border);
       border-radius: 0;
       background: #fff;
     }
-    .inspector-metric:nth-child(even) { background: #f8fafc; }
-    .inspector-metric:last-child { border-bottom: 0; }
-    .inspector-metric strong { color: var(--text); font-size: 0.86rem; }
-    .inspector-meta { display: grid; gap: 6px; }
+    .inspector-metric:nth-child(4n + 1) { border-right: 0; }
+    .inspector-metric:nth-last-child(-n + 4) { border-bottom: 0; }
+    .inspector-metric strong { color: var(--text); font-size: 0.92rem; line-height: 1.15; }
+    .inspector-meta { display: grid; gap: 4px; }
     .inspector-meta-row {
       display: grid;
       grid-template-columns: 76px minmax(0, 1fr);
       gap: 8px;
       color: var(--muted);
-      font-size: 0.8rem;
+      font-size: 0.78rem;
     }
     .inspector-meta-row code,
     .inspector-meta-row span:last-child { color: #334155; overflow-wrap: anywhere; }
     .inspector-actions { display: flex; gap: 7px; flex-wrap: wrap; }
-    .inspector-log { border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .inspector-log {
+      min-height: 0;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+      background: #0f172a;
+    }
     .inspector-log .panel-header { min-height: 0; padding: 9px 10px; }
-    .inspector-log .log-viewer { min-height: 180px; max-height: 260px; }
+    .inspector-log-console .panel-header {
+      border-bottom-color: rgba(255, 255, 255, 0.12);
+      background: #111827;
+    }
+    .inspector-log-console .panel-title { color: #e2e8f0; }
+    .inspector-log-console .muted { color: #94a3b8; }
+    .inspector-log .log-viewer {
+      height: clamp(240px, 32vh, 320px);
+      min-height: 0;
+      max-height: none;
+      border-top: 0;
+      line-height: 1.5;
+    }
     .management-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 14px; align-items: start; }
     .templates-workspace { display: grid; grid-template-columns: minmax(300px, 0.78fr) minmax(360px, 1fr); gap: 12px; align-items: start; }
     .template-editor-workspace { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(380px, 1fr); gap: 12px; align-items: stretch; }
@@ -578,8 +622,10 @@
     .log-viewer {
       min-height: 260px;
       max-height: 420px;
-      overflow: auto;
-      padding: 10px 12px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-gutter: stable;
+      padding: 10px 12px 22px;
       border-top: 1px solid var(--border);
       background: #0f172a;
       color: #dbeafe;
@@ -588,6 +634,7 @@
       line-height: 1.45;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.8rem; overflow-wrap: anywhere; }
     .actions, .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -800,6 +847,13 @@
       box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
     }
     .run-modal::backdrop { background: rgba(15, 23, 42, 0.46); }
+    .job-log-modal { width: min(960px, calc(100vw - 48px)); }
+    .job-log-modal .run-modal-shell { grid-template-rows: auto minmax(0, 1fr); }
+    .job-log-modal .run-modal-header { background: #111827; border-bottom-color: rgba(255, 255, 255, 0.12); }
+    .job-log-modal .run-modal-header .panel-title { color: #e2e8f0; }
+    .job-log-modal .run-modal-header .muted { color: #94a3b8; }
+    .job-log-modal .run-modal-body { display: block; padding: 0; overflow: hidden; }
+    .job-log-modal .log-viewer { height: 100%; min-height: 0; max-height: none; margin: 0; border: 0; border-radius: 0; }
     .run-modal-shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100vh - 48px); }
     .run-modal-header,
     .run-modal-actions {
@@ -1042,7 +1096,8 @@
       .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
       .topbar-meta { text-align: left; }
       .dashboard-grid, .jobs-workspace, .management-grid, .templates-workspace, .template-editor-workspace { grid-template-columns: 1fr; }
-      .jobs-inspector { position: static; max-height: none; }
+      .jobs-inspector { position: static; max-height: none; overflow: visible; }
+      .inspector-card.active { max-height: none; }
       .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 640px) {
@@ -1069,11 +1124,21 @@
         background: rgba(15, 23, 42, 0.24);
       }
       .inspector-card.active { box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24); }
+      .jobs-inspector.has-selection .inspector-card.active { max-height: calc(82vh - 24px); }
+      .inspector-body { max-height: calc(82vh - 24px); }
+      .inspector-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .inspector-metric:nth-child(even) { border-right: 1px solid var(--border); }
+      .inspector-metric:nth-child(odd) { border-right: 0; }
+      .inspector-metric:nth-last-child(-n + 4) { border-bottom: 1px solid var(--border); }
+      .inspector-metric:nth-last-child(-n + 2) { border-bottom: 0; }
+      .inspector-log .log-viewer { height: 220px; }
       .field-row, .item-grid, .template-row, .compact-row, .config-transfer-actions { grid-template-columns: 1fr; }
       .template-actions { justify-content: flex-start; }
       .panel-header { align-items: flex-start; flex-direction: column; }
       .pager { align-items: flex-start; flex-direction: column; }
       .run-modal-body, .export-modal-body { grid-template-columns: 1fr; overflow: auto; }
+      .job-log-modal { width: calc(100vw - 24px); }
+      .job-log-modal .run-modal-shell { max-height: calc(100vh - 24px); }
       .modal-template-list { max-height: 220px; }
       .export-list, .export-selected-groups { max-height: 260px; }
       .template-preview pre { min-height: 180px; }
@@ -1217,6 +1282,28 @@
 	        <div id="strategy-run-status" class="muted tiny" role="status" aria-live="polite"></div>
 	        <button type="button" onclick="closeStrategyRunModal()">Cancel</button>
 	        <button id="strategy-run-confirm" type="button" class="action-primary" onclick="confirmStrategyRun()" data-idle-label="Run Strategy">Run Strategy</button>
+	      </div>
+	    </div>
+	  </dialog>
+
+	  <dialog id="job-log-modal" class="run-modal job-log-modal" aria-labelledby="job-log-modal-title">
+	    <div class="run-modal-shell">
+	      <div class="run-modal-header">
+	        <div>
+	          <h2 id="job-log-modal-title" class="panel-title">Job Logs</h2>
+	          <div id="job-log-modal-meta" class="muted tiny">No log lines yet.</div>
+	        </div>
+	        <div class="actions">
+	          <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
+	            {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
+	          </button>
+	          <button type="button" class="icon-button" onclick="closeJobLogModal()" title="Close logs" aria-label="Close logs">
+	            {{template "icon-close" .}}<span class="sr-only">Close</span>
+	          </button>
+	        </div>
+	      </div>
+	      <div class="run-modal-body">
+	        <pre id="job-log-modal-viewer" class="log-viewer">No log lines yet.</pre>
 	      </div>
 	    </div>
 	  </dialog>
@@ -1806,11 +1893,11 @@
         </button>
         {{if .Summary.SchedulerPaused}}
           <button type="button" class="icon-button action-warning" onclick="resumeScheduler()" title="Resume the queue scheduler. Pending jobs will be claimed again." aria-label="Resume scheduler">
-            Resume Scheduler
+            {{template "icon-play" .}}<span class="sr-only">Resume Scheduler</span>
           </button>
         {{else}}
           <button type="button" class="icon-button" onclick="pauseScheduler()" title="Pause the queue scheduler. Queued runs stay queued; the active job continues." aria-label="Pause scheduler">
-            Pause Scheduler
+            {{template "icon-pause" .}}<span class="sr-only">Pause Scheduler</span>
           </button>
         {{end}}
       </div>
@@ -1929,13 +2016,16 @@
                 {{if not .RecoverDisabled}}<button class="action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}">Recover</button>{{end}}
               </div>
             </div>
-            <section class="inspector-log" aria-labelledby="log-title-{{.ID}}">
+            <section class="inspector-log inspector-log-console" aria-labelledby="log-title-{{.ID}}">
               <div class="panel-header">
                 <div>
                   <h2 id="log-title-{{.ID}}" class="panel-title">Job Logs</h2>
                   <div class="muted tiny" data-log-meta="{{.ID}}">Open logs to load recent lines.</div>
                 </div>
                 <div class="actions">
+                  <button type="button" class="icon-button action-refresh" onclick="openJobLogModal()" title="Expand logs" aria-label="Expand logs">
+                    {{template "icon-expand" .}}<span class="sr-only">Expand Logs</span>
+                  </button>
                   <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
                     {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
                   </button>
@@ -2008,6 +2098,7 @@
 {{define "icon-close"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>{{end}}
 {{define "icon-prev"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{end}}
 {{define "icon-next"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>{{end}}
+{{define "icon-expand"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>{{end}}
 {{define "icon-status"}}{{if eq . "Running"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "Done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "Pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if or (eq . "Blocked") (eq . "Failed")}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else if or (eq . "Paused") (eq . "Pausing")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H7v14h3z"></path><path d="M17 5h-3v14h3z"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle></svg>{{end}}{{end}}
 {{define "icon-filter-status"}}{{if eq . "active"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if eq . "done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "attention"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M7 12h10"></path><path d="M10 17h4"></path></svg>{{end}}{{end}}
 
@@ -2232,15 +2323,68 @@
       if (!res.ok) {
         meta.textContent = 'Unable to load logs for ' + jobID;
         viewer.textContent = await res.text();
+        syncJobLogModalView(jobID);
         return;
       }
       const payload = await res.json();
       meta.textContent = jobID + (payload.message ? ' - ' + payload.message : '');
       viewer.textContent = (payload.lines || []).length ? payload.lines.join('\n') : 'No log lines yet.';
       viewer.scrollTop = viewer.scrollHeight;
+      syncJobLogModalView(jobID);
     } catch (err) {
       meta.textContent = 'Unable to load logs for ' + jobID;
       viewer.textContent = String(err);
+      syncJobLogModalView(jobID);
+    }
+  }
+
+  function syncJobLogModalView(jobID) {
+    const modal = document.getElementById('job-log-modal');
+    if (!modal || !modal.open) return;
+    if (jobID && jobID !== selectedLogJobID) return;
+    const source = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const sourceMeta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    const modalViewer = document.getElementById('job-log-modal-viewer');
+    const modalMeta = document.getElementById('job-log-modal-meta');
+    if (!source || !modalViewer) return;
+    if (modalMeta && sourceMeta) modalMeta.textContent = sourceMeta.textContent;
+    const atBottom = modalViewer.scrollTop >= modalViewer.scrollHeight - modalViewer.clientHeight - 12;
+    modalViewer.textContent = source.textContent;
+    if (atBottom) modalViewer.scrollTop = modalViewer.scrollHeight;
+  }
+
+  function openJobLogModal() {
+    const modal = document.getElementById('job-log-modal');
+    if (!modal) return;
+    let jobID = selectedLogJobID;
+    if (!jobID) {
+      const card = document.querySelector('[data-inspector-job].active');
+      if (card) jobID = card.dataset.inspectorJob || '';
+    }
+    if (!jobID) return;
+    selectedLogJobID = jobID;
+    const source = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const sourceMeta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    const modalViewer = document.getElementById('job-log-modal-viewer');
+    const modalMeta = document.getElementById('job-log-modal-meta');
+    if (modalViewer) modalViewer.textContent = source ? source.textContent : 'No log lines yet.';
+    if (modalMeta) modalMeta.textContent = sourceMeta ? sourceMeta.textContent : '';
+    if (typeof modal.showModal === 'function') {
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', 'open');
+    }
+    if (modalViewer) modalViewer.scrollTop = modalViewer.scrollHeight;
+    refreshSelectedJobLog();
+  }
+
+  function closeJobLogModal() {
+    const modal = document.getElementById('job-log-modal');
+    if (!modal) return;
+    if (typeof modal.close === 'function') {
+      modal.close();
+    } else {
+      modal.removeAttribute('open');
     }
   }
 

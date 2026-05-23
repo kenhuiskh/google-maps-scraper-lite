@@ -184,6 +184,27 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `data-log-row="`+jobID+`"`) {
 		t.Fatalf("index did not include inline log row for job ID %s: %s", jobID, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `data-inspector-job="`+jobID+`"`) {
+		t.Fatalf("index did not include inspector card for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `data-log-viewer="`+jobID+`"`) {
+		t.Fatalf("index did not include inspector log viewer for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `class="inspector-log inspector-log-console"`) {
+		t.Fatalf("index did not include inspector log console structure: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "inset 3px 0 0") {
+		t.Fatalf("index should not use active row side-stripe styling: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `grid-template-columns: minmax(220px, 0.85fr) minmax(190px, 0.65fr) 116px;`) {
+		t.Fatalf("index should reserve enough job action column width: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "overflow-x: hidden;") || !strings.Contains(rec.Body.String(), "scrollbar-gutter: stable;") {
+		t.Fatalf("index should keep job log scrollbar from covering final lines: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "height: min(720px, calc(100vh - 292px));") || !strings.Contains(rec.Body.String(), "flex: 1 1 auto;") {
+		t.Fatalf("index should constrain inspector card to viewport height: %s", rec.Body.String())
+	}
 	if !strings.Contains(rec.Body.String(), `id="tracked-status-dot"`) {
 		t.Fatalf("index did not include tracked status dot: %s", rec.Body.String())
 	}
@@ -515,6 +536,12 @@ func TestControlUIPartialsRenderSummaryAndJobs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `data-job-id="`+jobID+`"`) {
 		t.Fatalf("jobs partial missing job row: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `data-inspector-job="`+jobID+`"`) || !strings.Contains(rec.Body.String(), `data-log-viewer="`+jobID+`"`) {
+		t.Fatalf("jobs partial missing inspector log details: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `class="inspector-log inspector-log-console"`) {
+		t.Fatalf("jobs partial missing inspector log console: %s", rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), "pause-action") || strings.Contains(rec.Body.String(), "resume-action") {
 		t.Fatalf("jobs partial should render one lifecycle action, not separate pause/resume buttons: %s", rec.Body.String())

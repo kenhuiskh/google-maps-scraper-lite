@@ -13,6 +13,7 @@ import (
 )
 
 const foodAmenityPattern = `^(restaurant|fast_food|cafe|bar|pub|food_court|ice_cream)$`
+const overpassUserAgent = "google-maps-scraper-lite (+https://github.com/gosom/google-maps-scraper-lite)"
 
 // BuildOverpassFoodCountQuery returns the Overpass QL query for food POIs near a point.
 func BuildOverpassFoodCountQuery(lat, lng float64, radiusMeters int) string {
@@ -61,6 +62,7 @@ func (c *OverpassClient) FoodPOICount(ctx context.Context, lat, lng float64, rad
 			return 0, err
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("User-Agent", overpassUserAgent)
 
 		resp, err := c.http.Do(req)
 		if err != nil {
