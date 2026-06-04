@@ -20,6 +20,28 @@ func PlaceIDToURL(placeID string) string {
 	return "https://www.google.com/maps/search/?" + q.Encode()
 }
 
+// scrapePlaceID navigates the query_place_id URL for a single place ID and
+// returns the canonical /maps/place/ URL once Google redirects to it. Unlike a
+// search-text query, the query_place_id parameter makes Google resolve the place
+// reliably, so this skips the feed-selector wait entirely.
+func scrapePlaceID(ctx context.Context, page playwright.Page, id string) ([]string, error) {
+	target := PlaceIDToURL(id)
+
+	if _, err := page.Goto(target, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+	}); err != nil {
+		return nil, fmt.Errorf("goto place-ID URL: %w", err)
+	}
+
+	clickRejectCookiesPlaywright(page)
+
+	if waitUntilURLContainsPlaywright(ctx, page, "/maps/place/", 15*time.Second) {
+		return []string{page.URL()}, nil
+	}
+
+	return nil, fmt.Errorf("place-ID did not redirect to a place page within timeout")
+}
+
 // FeedOptions configures the feed scrape behaviour.
 type FeedOptions struct {
 	// MaxDepth controls how many scroll iterations are attempted.
@@ -35,6 +57,10 @@ type FeedOptions struct {
 // the configured depth, and returns a deduplicated slice of place URLs found in
 // the feed.
 func ScrapeFeed(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+	if id, ok := strings.CutPrefix(query, "place_id:"); ok {
+		return scrapePlaceID(ctx, page, id)
+	}
+
 	fullURL := buildFeedURL(query, opts)
 
 	if _, err := page.Goto(fullURL, playwright.PageGotoOptions{
