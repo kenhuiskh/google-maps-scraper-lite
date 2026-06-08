@@ -1670,6 +1670,15 @@
           <input id="email" name="email" type="checkbox" value="on">
           <span>Extract emails from business websites</span>
         </label>
+        <div class="field">
+          <label for="dedup_scraped">Skip already-scraped URLs</label>
+          <select id="dedup_scraped" name="dedup_scraped">
+            <option value="">Off</option>
+            <option value="run">This strategy run</option>
+            <option value="all">All past jobs</option>
+          </select>
+          <div class="muted tiny">"This strategy run" only applies when run as part of a strategy.</div>
+        </div>
       </fieldset>
 
       <fieldset class="form-section">
@@ -1834,6 +1843,33 @@
       </div>
       <div id="bulk-lang-result" role="status" aria-live="polite"></div>
     </div>
+
+    <hr class="panel-divider">
+
+    <div class="bulk-dedup-section form-section">
+      <div>
+        <strong>Bulk Dedup Update</strong>
+        <div class="muted tiny">Apply the already-scraped URL skip setting to all templates in the loaded strategy.</div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="bulk-dedup-select">Skip already-scraped URLs</label>
+          <select id="bulk-dedup-select">
+            <option value="off">Off</option>
+            <option value="run">This strategy run</option>
+            <option value="all">All past jobs</option>
+          </select>
+          <div class="muted tiny">"This strategy run" only applies when run as part of a strategy.</div>
+        </div>
+      </div>
+      <div class="warning-note">
+        Warning: This will modify the original templates. Any other strategy sharing these templates will also be affected.
+      </div>
+      <div>
+        <button type="button" onclick="applyBulkDedup()">Apply Dedup Scope</button>
+      </div>
+      <div id="bulk-dedup-result" role="status" aria-live="polite"></div>
+    </div>
   </div>
 </section>
 {{end}}
@@ -1843,7 +1879,7 @@
   <div class="stat-cell">
     <div class="metric-label">Feed URLs</div>
     <div class="stat-value">{{.Analytics.FeedURLsFound}}</div>
-    <div class="muted tiny">{{.Analytics.FeedDuplicates}} duplicate URLs</div>
+    <div class="muted tiny">{{.Analytics.FeedDuplicates}} duplicate URLs, {{.Analytics.CrossJobDuplicates}} already scraped</div>
   </div>
   <div class="stat-cell">
     <div class="metric-label">Queued</div>
@@ -1986,6 +2022,7 @@
               <div class="inspector-metric"><span class="metric-label">Active</span><strong>{{.InProgress}}</strong></div>
               <div class="inspector-metric"><span class="metric-label">Failed</span><strong>{{.Failed}}</strong></div>
               <div class="inspector-metric"><span class="metric-label">Feed URLs</span><strong>{{.FeedURLsFound}}</strong></div>
+              <div class="inspector-metric"><span class="metric-label">Already scraped</span><strong>{{.CrossJobDuplicates}}</strong></div>
               <div class="inspector-metric"><span class="metric-label">Queued</span><strong>{{.QueuedURLs}}</strong></div>
               <div class="inspector-metric"><span class="metric-label">Scraped</span><strong>{{.ScrapedURLs}}</strong></div>
               <div class="inspector-metric"><span class="metric-label">Errors</span><strong>{{add .ScrapeErrors .WriteErrors}}</strong></div>
@@ -2538,6 +2575,7 @@
     setValue('lang', p.Lang);
     setValue('queue_wait_minutes', p.QueueWaitMinutes === undefined || p.QueueWaitMinutes === null ? 20 : p.QueueWaitMinutes);
     setChecked('email', p.Email);
+    setValue('dedup_scraped', p.DedupScope || '');
     const templateID = document.getElementById('template_id');
     const editID = document.getElementById('template-edit-id');
     if (templateID && editID) templateID.value = editID.value || '';
@@ -2581,6 +2619,13 @@
       data.Email = true;
     } else {
       delete data.Email;
+    }
+    const dedupScraped = document.getElementById('dedup_scraped');
+    const dedupScope = dedupScraped ? dedupScraped.value : '';
+    if (dedupScope === 'run' || dedupScope === 'all') {
+      data.DedupScope = dedupScope;
+    } else {
+      delete data.DedupScope;
     }
     writeTemplateJSON(data);
     setTemplateSyncMessage('', false);
@@ -3238,9 +3283,9 @@
   });
   syncBulkLangMode();
 
-  async function applyBulkLang() {
-    const strategyID = formValue('strategy-edit-id');
-    if (!strategyID) {
+	  async function applyBulkLang() {
+	    const strategyID = formValue('strategy-edit-id');
+	    if (!strategyID) {
       alert('Please load or save a strategy first.');
       return;
     }
@@ -3270,6 +3315,36 @@
       if (result) {
         result.style.color = '#027a48';
         result.textContent = payload.message || 'Language updated.';
+      }
+    } catch (err) {
+      if (result) {
+        result.style.color = '#b42318';
+        result.textContent = 'Error: ' + err.message;
+      }
+    }
+  }
+
+  async function applyBulkDedup() {
+    const strategyID = formValue('strategy-edit-id');
+    if (!strategyID) {
+      alert('Please load or save a strategy first.');
+      return;
+    }
+    const scope = formValue('bulk-dedup-select') || 'off';
+    const result = document.getElementById('bulk-dedup-result');
+    if (result) { result.style.color = ''; result.textContent = 'Applying...'; }
+    try {
+      const payload = await fetchJSON(
+        '/api/strategies/' + encodeURIComponent(strategyID) + '/bulk-update-dedup',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope })
+        }
+      );
+      if (result) {
+        result.style.color = '#027a48';
+        result.textContent = payload.message || 'Dedup scope updated.';
       }
     } catch (err) {
       if (result) {

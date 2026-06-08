@@ -49,6 +49,7 @@ func main() {
 	errorLog := flag.String("error-log", "", "path to error log file (appended; default: stderr only)")
 	urlsOnly := flag.String("urls-only", "", "debug: collect feed URLs only and write to this file (no place scraping)")
 	limit := flag.Int("limit", 0, "max number of places to scrape (0 = no limit)")
+	dedupScraped := flag.String("dedup-scraped", "", "skip already-scraped place URLs: \"run\" (same strategy run) or \"all\" (any prior job)")
 	flag.Parse()
 
 	explicitTables := map[string]bool{}
@@ -248,6 +249,11 @@ func main() {
 	}
 
 	out := make(chan gmaps.PlaceResult, *concurrency*2)
+	dedupScope := *dedupScraped
+	if dedupScope != "" && dedupScope != "run" && dedupScope != "all" {
+		log.Printf("invalid -dedup-scraped=%q (want \"run\" or \"all\"); disabling dedup", dedupScope)
+		dedupScope = ""
+	}
 
 	s := gmaps.Scraper{
 		Config: gmaps.Config{
@@ -268,6 +274,7 @@ func main() {
 			RecoveryMinDelay: 10 * time.Minute,
 			RecoveryMaxDelay: 60 * time.Minute,
 			BrowseStartDelay: 500 * time.Millisecond,
+			DedupScope:       dedupScope,
 		},
 		Pool:       br,
 		Store:      store,

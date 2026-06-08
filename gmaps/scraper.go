@@ -36,6 +36,7 @@ type Config struct {
 	RecoveryMinDelay time.Duration
 	RecoveryMaxDelay time.Duration
 	BrowseStartDelay time.Duration
+	DedupScope       string // "" (off) | "run" (same strategy run) | "all" (any prior job)
 }
 
 // PagePool provides playwright pages to workers.
@@ -396,11 +397,14 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 			return "", err
 		}
 		if job.Status == JobStatusStarting {
-			collected := s.collectPlaceURLs(ctx, queries, feedOpts)
+			collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, job.StrategyRunID.String)
+			if err != nil {
+				return "", err
+			}
 			if err := s.Store.QueueStartingJobURLs(ctx, s.Config.JobID, collected.URLs); err != nil {
 				return "", err
 			}
-			_ = s.Store.SetJobDiscoveryStats(ctx, s.Config.JobID, collected.FeedURLsFound, collected.FeedDuplicateURLs, len(collected.URLs))
+			_ = s.Store.SetJobDiscoveryStats(ctx, s.Config.JobID, collected.FeedURLsFound, collected.FeedDuplicateURLs, collected.CrossJobDuplicateURLs, len(collected.URLs))
 			if err := s.Store.StartJob(ctx, s.Config.JobID); err != nil {
 				return "", err
 			}
@@ -424,12 +428,15 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 		return s.Config.JobID, nil
 	}
 
-	collected := s.collectPlaceURLs(ctx, queries, feedOpts)
+	collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, "")
+	if err != nil {
+		return "", err
+	}
 	jobID, err := s.Store.CreateJob(ctx, queries, s.Config, collected.URLs)
 	if err != nil {
 		return "", err
 	}
-	_ = s.Store.SetJobDiscoveryStats(ctx, jobID, collected.FeedURLsFound, collected.FeedDuplicateURLs, len(collected.URLs))
+	_ = s.Store.SetJobDiscoveryStats(ctx, jobID, collected.FeedURLsFound, collected.FeedDuplicateURLs, collected.CrossJobDuplicateURLs, len(collected.URLs))
 	log.Printf("Created job %s", jobID)
 	if err := s.Store.StartJob(ctx, jobID); err != nil {
 		return "", err
@@ -442,12 +449,13 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 }
 
 type feedCollection struct {
-	URLs              []string
-	FeedURLsFound     int
-	FeedDuplicateURLs int
+	URLs                  []string
+	FeedURLsFound         int
+	FeedDuplicateURLs     int
+	CrossJobDuplicateURLs int
 }
 
-func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions) feedCollection {
+func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions, strategyRunID string) (feedCollection, error) {
 	scrapeFeed := s.ScrapeFeed
 	if scrapeFeed == nil {
 		scrapeFeed = ScrapeFeed
@@ -496,15 +504,27 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 	}
 	feedURLs = dedupedURLs
 	duplicatesRemoved := originalCount - len(feedURLs)
+	crossJobDuplicates := 0
+	dedupScraped := s.Config.DedupScope == "run" || s.Config.DedupScope == "all"
+	if dedupScraped {
+		kept, skipped, err := s.Store.FilterAlreadyScrapedURLs(ctx, feedURLs, strategyRunID, s.Config.DedupScope == "all")
+		if err != nil {
+			return feedCollection{}, err
+		}
+		feedURLs = kept
+		crossJobDuplicates = skipped
+	}
 	if s.Config.Limit > 0 && len(feedURLs) > s.Config.Limit {
 		feedURLs = feedURLs[:s.Config.Limit]
 	}
-	if duplicatesRemoved > 0 {
+	if dedupScraped {
+		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed, %d already-scraped skipped)", len(feedURLs), total, duplicatesRemoved, crossJobDuplicates)
+	} else if duplicatesRemoved > 0 {
 		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(feedURLs), total, duplicatesRemoved)
 	} else {
 		log.Printf("Feed collection done: %d URLs queued across %d queries", len(feedURLs), total)
 	}
-	return feedCollection{URLs: feedURLs, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved}
+	return feedCollection{URLs: feedURLs, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved, CrossJobDuplicateURLs: crossJobDuplicates}, nil
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {

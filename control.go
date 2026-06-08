@@ -45,6 +45,7 @@ type startParams struct {
 	DSN              string // only from env
 	JSONOut          bool
 	OutDir           string
+	DedupScope       string
 }
 
 type templateParams struct {
@@ -64,6 +65,7 @@ type templateParams struct {
 	OutputMode       string   `json:"OutputMode,omitempty"`
 	JSONOut          bool     `json:"JSONOut,omitempty"`
 	OutDir           string   `json:"OutDir,omitempty"`
+	DedupScope       string   `json:"DedupScope,omitempty"`
 }
 
 func defaultControlOutDir(stateDB string) string {
@@ -184,6 +186,10 @@ func parseStartParams(r *http.Request) (startParams, string) {
 		OutputMode:       outputMode,
 		DSN:              dsn,
 		JSONOut:          true,
+		DedupScope:       r.FormValue("dedup_scraped"),
+	}
+	if p.DedupScope != "run" && p.DedupScope != "all" {
+		p.DedupScope = ""
 	}
 	if p.Lang == "" {
 		p.Lang = "en"
@@ -266,6 +272,7 @@ func scraperConfigFromStartParams(p startParams) gmaps.Config {
 		OutputMode:       p.OutputMode,
 		JSONOut:          p.JSONOut,
 		OutDir:           p.OutDir,
+		DedupScope:       p.DedupScope,
 	}
 	switch p.ConcurrencyMode {
 	case "c":
@@ -316,6 +323,7 @@ func templateParamsFromForm(r *http.Request, p startParams) templateParams {
 		Email:           p.Email,
 		OutputMode:      p.OutputMode,
 		JSONOut:         p.JSONOut,
+		DedupScope:      p.DedupScope,
 	}
 	if strings.TrimSpace(r.FormValue("radius")) != "" {
 		t.Radius = &p.Radius
@@ -380,6 +388,7 @@ func startParamsFromJob(job *gmaps.Job, stateDB string) (startParams, error) {
 		OutputMode:       cfg.OutputMode,
 		JSONOut:          cfg.JSONOut,
 		OutDir:           cfg.OutDir,
+		DedupScope:       cfg.DedupScope,
 	}
 	if p.Lang == "" {
 		p.Lang = "en"
@@ -429,6 +438,7 @@ func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams
 		Email:            t.Email,
 		OutputMode:       t.OutputMode,
 		JSONOut:          t.JSONOut,
+		DedupScope:       t.DedupScope,
 		QueueWaitMinutes: 20,
 	}
 	if p.Lang == "" {
@@ -680,6 +690,9 @@ func buildResumeArgs(job *gmaps.Job, stateDB string) ([]string, error) {
 	if cfg.ExtractEmail {
 		args = append(args, "-email")
 	}
+	if cfg.DedupScope == "run" || cfg.DedupScope == "all" {
+		args = append(args, "-dedup-scraped="+cfg.DedupScope)
+	}
 	if cfg.ExtraReviews > 0 {
 		args = append(args, "-reviews", strconv.Itoa(cfg.ExtraReviews))
 	}
@@ -748,6 +761,9 @@ func buildStartArgs(p startParams, stateDB string) []string {
 	}
 	if p.Email {
 		args = append(args, "-email")
+	}
+	if p.DedupScope == "run" || p.DedupScope == "all" {
+		args = append(args, "-dedup-scraped="+p.DedupScope)
 	}
 	return args
 }

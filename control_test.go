@@ -316,7 +316,7 @@ func TestControlManagementPagesRenderDedicatedTools(t *testing.T) {
 		t.Fatalf("strategies status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	body = rec.Body.String()
-	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`, `class="strategy-template-list"`, `type="checkbox" name="template_ids"`, `id="strategy-run-modal"`, `id="strategy-run-template-list"`, `id="strategy-run-template-preview"`, `id="strategy-run-confirm"`, `data-idle-label="Run Strategy"`, `button-spinner`} {
+	for _, want := range []string{"Strategy Management", `class="nav-link active" href="/strategies"`, `id="strategy-form"`, `data-strategy-row="` + strategyID + `"`, `class="strategy-template-list"`, `type="checkbox" name="template_ids"`, `id="bulk-dedup-select"`, `onclick="applyBulkDedup()"`, `id="strategy-run-modal"`, `id="strategy-run-template-list"`, `id="strategy-run-template-preview"`, `id="strategy-run-confirm"`, `data-idle-label="Run Strategy"`, `button-spinner`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("strategies page missing %q: %s", want, body)
 		}
@@ -1175,6 +1175,76 @@ func TestStartJobQueuesWhenStarting(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "queued") {
 		t.Fatalf("response should contain queued, got: %s", rec.Body.String())
+	}
+}
+
+func TestControlBulkUpdateStrategyDedupEndpoint(t *testing.T) {
+	store := newStartStore(t)
+	ctx := context.Background()
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee", `{"Queries":["coffee"],"OutputMode":"file","JSONOut":true}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "tea", `{"Queries":["tea"],"DedupScope":"run","OutputMode":"file","JSONOut":true}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "morning", "batch", []string{firstID, secondID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/bulk-update-dedup", strings.NewReader(`{"scope":"all"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "2 template(s) updated") {
+		t.Fatalf("response = %s, want updated count", rec.Body.String())
+	}
+	for _, id := range []string{firstID, secondID} {
+		tpl, err := store.GetJobTemplate(ctx, id)
+		if err != nil {
+			t.Fatalf("get template %s: %v", id, err)
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(tpl.ParamsJSON), &params); err != nil {
+			t.Fatalf("decode template %s: %v", id, err)
+		}
+		if params["DedupScope"] != "all" {
+			t.Fatalf("template %s DedupScope = %#v, want all", id, params["DedupScope"])
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/bulk-update-dedup", strings.NewReader(`{"scope":"off"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("off want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	tpl, err := store.GetJobTemplate(ctx, firstID)
+	if err != nil {
+		t.Fatalf("get first after off: %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(tpl.ParamsJSON), &params); err != nil {
+		t.Fatalf("decode first after off: %v", err)
+	}
+	if _, ok := params["DedupScope"]; ok {
+		t.Fatalf("DedupScope should be removed by off: %#v", params)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/strategies/"+strategyID+"/bulk-update-dedup", strings.NewReader(`{"scope":"bad"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid scope status = %d, want 400: %s", rec.Code, rec.Body)
 	}
 }
 

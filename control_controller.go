@@ -472,6 +472,37 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			})
 			return
 		}
+		if len(parts) == 2 && parts[1] == "bulk-update-dedup" && r.Method == http.MethodPost {
+			var req struct {
+				Scope string `json:"scope"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			req.Scope = strings.TrimSpace(req.Scope)
+			if req.Scope == "off" {
+				req.Scope = ""
+			}
+			if req.Scope != "" && req.Scope != "run" && req.Scope != "all" {
+				http.Error(w, "dedup scope must be off, run, or all", http.StatusBadRequest)
+				return
+			}
+			count, err := store.BulkUpdateStrategyDedupScope(r.Context(), strategyID, req.Scope)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, "strategy not found", http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]string{
+				"status":  "ok",
+				"message": strconv.Itoa(count) + " template(s) updated.",
+			})
+			return
+		}
 		http.NotFound(w, r)
 	})
 	mux.HandleFunc("/api/jobs/start", func(w http.ResponseWriter, r *http.Request) {

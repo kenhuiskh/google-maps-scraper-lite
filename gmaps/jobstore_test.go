@@ -54,6 +54,107 @@ func TestJobStoreClaimOrderingAndDoneSkip(t *testing.T) {
 	}
 }
 
+func TestJobStoreFilterAlreadyScrapedURLs(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	doneURL := "https://maps.google.com/?cid=done"
+	otherRunDoneURL := "https://maps.google.com/?cid=other-run"
+	failedURL := "https://maps.google.com/?cid=failed"
+	newURL := "https://maps.google.com/?cid=new"
+
+	sameRunJobID, err := store.CreateJob(ctx, []string{"same run"}, nil, []string{doneURL, failedURL})
+	if err != nil {
+		t.Fatalf("create same-run job: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET strategy_run_id = ? WHERE id = ?`, "run-1", sameRunJobID); err != nil {
+		t.Fatalf("set same-run strategy_run_id: %v", err)
+	}
+	if err := store.StartJob(ctx, sameRunJobID); err != nil {
+		t.Fatalf("start same-run job: %v", err)
+	}
+	first, err := store.ClaimNextURL(ctx, sameRunJobID)
+	if err != nil {
+		t.Fatalf("claim done url: %v", err)
+	}
+	if err := store.MarkURLDone(ctx, first.ID); err != nil {
+		t.Fatalf("mark done url: %v", err)
+	}
+	second, err := store.ClaimNextURL(ctx, sameRunJobID)
+	if err != nil {
+		t.Fatalf("claim failed url: %v", err)
+	}
+	if err := store.MarkURLFailed(ctx, second.ID, errors.New("boom")); err != nil {
+		t.Fatalf("mark failed url: %v", err)
+	}
+
+	otherRunJobID, err := store.CreateJob(ctx, []string{"other run"}, nil, []string{otherRunDoneURL})
+	if err != nil {
+		t.Fatalf("create other-run job: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET strategy_run_id = ? WHERE id = ?`, "run-2", otherRunJobID); err != nil {
+		t.Fatalf("set other-run strategy_run_id: %v", err)
+	}
+	if err := store.StartJob(ctx, otherRunJobID); err != nil {
+		t.Fatalf("start other-run job: %v", err)
+	}
+	other, err := store.ClaimNextURL(ctx, otherRunJobID)
+	if err != nil {
+		t.Fatalf("claim other-run url: %v", err)
+	}
+	if err := store.MarkURLDone(ctx, other.ID); err != nil {
+		t.Fatalf("mark other-run done: %v", err)
+	}
+
+	urls := []string{doneURL, otherRunDoneURL, failedURL, newURL}
+	kept, skipped, err := store.FilterAlreadyScrapedURLs(ctx, urls, "run-1", false)
+	if err != nil {
+		t.Fatalf("filter same-run: %v", err)
+	}
+	if skipped != 1 {
+		t.Fatalf("same-run skipped = %d, want 1", skipped)
+	}
+	want := []string{otherRunDoneURL, failedURL, newURL}
+	if !slicesEqual(kept, want) {
+		t.Fatalf("same-run kept = %#v, want %#v", kept, want)
+	}
+
+	kept, skipped, err = store.FilterAlreadyScrapedURLs(ctx, urls, "run-1", true)
+	if err != nil {
+		t.Fatalf("filter all-time: %v", err)
+	}
+	if skipped != 2 {
+		t.Fatalf("all-time skipped = %d, want 2", skipped)
+	}
+	want = []string{failedURL, newURL}
+	if !slicesEqual(kept, want) {
+		t.Fatalf("all-time kept = %#v, want %#v", kept, want)
+	}
+
+	kept, skipped, err = store.FilterAlreadyScrapedURLs(ctx, urls, "", false)
+	if err != nil {
+		t.Fatalf("filter empty run: %v", err)
+	}
+	if skipped != 0 {
+		t.Fatalf("empty-run skipped = %d, want 0", skipped)
+	}
+	if !slicesEqual(kept, urls) {
+		t.Fatalf("empty-run kept = %#v, want %#v", kept, urls)
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestJobStoreResetInProgress(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
@@ -710,6 +811,22 @@ func TestJobStoreMigratesExistingSQLiteSchema(t *testing.T) {
 	)`); err != nil {
 		t.Fatalf("create old templates: %v", err)
 	}
+	// Legacy job_execution_stats without cross_job_duplicate_urls so the
+	// ensureColumn migration is exercised (not just fresh table creation).
+	if _, err := db.Exec(`CREATE TABLE job_execution_stats (
+		job_id TEXT PRIMARY KEY,
+		feed_urls_found INTEGER NOT NULL DEFAULT 0,
+		feed_duplicate_urls INTEGER NOT NULL DEFAULT 0,
+		queued_urls INTEGER NOT NULL DEFAULT 0,
+		scraped_urls INTEGER NOT NULL DEFAULT 0,
+		duplicate_places INTEGER NOT NULL DEFAULT 0,
+		scrape_errors INTEGER NOT NULL DEFAULT 0,
+		write_errors INTEGER NOT NULL DEFAULT 0,
+		retry_events INTEGER NOT NULL DEFAULT 0,
+		updated_at DATETIME NOT NULL
+	)`); err != nil {
+		t.Fatalf("create old job_execution_stats: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close raw sqlite: %v", err)
 	}
@@ -729,6 +846,9 @@ func TestJobStoreMigratesExistingSQLiteSchema(t *testing.T) {
 		if !testTableExists(t, store.db, table) {
 			t.Fatalf("%s table was not created", table)
 		}
+	}
+	if !testColumnExists(t, store.db, "job_execution_stats", "cross_job_duplicate_urls") {
+		t.Fatalf("job_execution_stats.cross_job_duplicate_urls was not migrated")
 	}
 }
 
@@ -760,7 +880,7 @@ func TestJobStoreStrategiesAndExecutionStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sourced job: %v", err)
 	}
-	if err := store.SetJobDiscoveryStats(ctx, jobID, 7, 2, 5); err != nil {
+	if err := store.SetJobDiscoveryStats(ctx, jobID, 7, 2, 3, 5); err != nil {
 		t.Fatalf("set discovery stats: %v", err)
 	}
 	if err := store.IncrementJobStat(ctx, jobID, "scraped_urls", 3); err != nil {
@@ -776,11 +896,91 @@ func TestJobStoreStrategiesAndExecutionStats(t *testing.T) {
 	if job.TemplateID.String != tplID || job.StrategyID.String != strategyID || job.StrategyRunID.String != "run_1" {
 		t.Fatalf("job source = %q/%q/%q", job.TemplateID.String, job.StrategyID.String, job.StrategyRunID.String)
 	}
-	if job.ExecutionStats.FeedURLsFound != 7 || job.ExecutionStats.FeedDuplicateURLs != 2 || job.ExecutionStats.QueuedURLs != 5 {
+	if job.ExecutionStats.FeedURLsFound != 7 || job.ExecutionStats.FeedDuplicateURLs != 2 || job.ExecutionStats.CrossJobDuplicateURLs != 3 || job.ExecutionStats.QueuedURLs != 5 {
 		t.Fatalf("discovery stats = %#v", job.ExecutionStats)
 	}
 	if job.ExecutionStats.ScrapedURLs != 3 || job.ExecutionStats.DuplicatePlaces != 1 {
 		t.Fatalf("execution stats = %#v", job.ExecutionStats)
+	}
+}
+
+func TestBulkUpdateStrategyDedupScope(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	firstID, err := store.SaveJobTemplateJSON(ctx, "", "coffee template", `{"Queries":["coffee"],"Lang":"en"}`)
+	if err != nil {
+		t.Fatalf("save first template: %v", err)
+	}
+	secondID, err := store.SaveJobTemplateJSON(ctx, "", "tea template", `{"Queries":["tea"],"DedupScope":"run"}`)
+	if err != nil {
+		t.Fatalf("save second template: %v", err)
+	}
+	otherID, err := store.SaveJobTemplateJSON(ctx, "", "other template", `{"Queries":["other"],"DedupScope":"all"}`)
+	if err != nil {
+		t.Fatalf("save other template: %v", err)
+	}
+	strategyID, err := store.SaveStrategy(ctx, "", "daily scrape", "", []string{firstID, secondID})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+
+	count, err := store.BulkUpdateStrategyDedupScope(ctx, strategyID, "all")
+	if err != nil {
+		t.Fatalf("bulk update dedup all: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	for _, id := range []string{firstID, secondID} {
+		tpl, err := store.GetJobTemplate(ctx, id)
+		if err != nil {
+			t.Fatalf("get template %s: %v", id, err)
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(tpl.ParamsJSON), &params); err != nil {
+			t.Fatalf("decode template %s: %v", id, err)
+		}
+		if params["DedupScope"] != "all" {
+			t.Fatalf("template %s DedupScope = %#v, want all", id, params["DedupScope"])
+		}
+	}
+	other, err := store.GetJobTemplate(ctx, otherID)
+	if err != nil {
+		t.Fatalf("get other template: %v", err)
+	}
+	var otherParams map[string]any
+	if err := json.Unmarshal([]byte(other.ParamsJSON), &otherParams); err != nil {
+		t.Fatalf("decode other template: %v", err)
+	}
+	if otherParams["DedupScope"] != "all" {
+		t.Fatalf("unrelated template DedupScope = %#v, want unchanged all", otherParams["DedupScope"])
+	}
+
+	count, err = store.BulkUpdateStrategyDedupScope(ctx, strategyID, "")
+	if err != nil {
+		t.Fatalf("bulk update dedup off: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("off count = %d, want 2", count)
+	}
+	first, err := store.GetJobTemplate(ctx, firstID)
+	if err != nil {
+		t.Fatalf("get first after off: %v", err)
+	}
+	var firstParams map[string]any
+	if err := json.Unmarshal([]byte(first.ParamsJSON), &firstParams); err != nil {
+		t.Fatalf("decode first after off: %v", err)
+	}
+	if _, ok := firstParams["DedupScope"]; ok {
+		t.Fatalf("DedupScope should be removed when scope is off: %#v", firstParams)
+	}
+
+	if _, err := store.BulkUpdateStrategyDedupScope(ctx, strategyID, "invalid"); err == nil {
+		t.Fatal("invalid dedup scope should fail")
+	}
+	if _, err := store.BulkUpdateStrategyDedupScope(ctx, "str_missing", "run"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing strategy error = %v, want sql.ErrNoRows", err)
 	}
 }
 

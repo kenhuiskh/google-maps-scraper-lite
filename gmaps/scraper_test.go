@@ -34,7 +34,10 @@ func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
 		},
 	}
 
-	collected := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"})
+	collected, err := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"}, "")
+	if err != nil {
+		t.Fatalf("collectPlaceURLs: %v", err)
+	}
 	if len(gotQueries) != 2 || gotQueries[0] != "place_id:ChIJ123" || gotQueries[1] != "coffee" {
 		t.Fatalf("queries = %#v, want place_id then coffee", gotQueries)
 	}
@@ -61,10 +64,57 @@ func TestCollectPlaceURLsFallsBackForPlaceIDFeedError(t *testing.T) {
 		},
 	}
 
-	collected := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"})
+	collected, err := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"}, "")
+	if err != nil {
+		t.Fatalf("collectPlaceURLs: %v", err)
+	}
 	want := PlaceIDToURL("ChIJ123")
 	if len(collected.URLs) != 1 || collected.URLs[0] != want {
 		t.Fatalf("urls = %#v, want only %q", collected.URLs, want)
+	}
+}
+
+func TestCollectPlaceURLsSkipsAlreadyScraped(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	const seededURL = "https://www.google.com/maps/place/Old/data=!4m2!3m1!1s0x1:0x2"
+	const newURL = "https://www.google.com/maps/place/New/data=!4m2!3m1!1s0x3:0x4"
+
+	// Seed seededURL as done in a prior job.
+	jobID, err := store.CreateJob(ctx, []string{"seed"}, nil, []string{seededURL})
+	if err != nil {
+		t.Fatalf("create seed job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start seed job: %v", err)
+	}
+	claimed, err := store.ClaimNextURL(ctx, jobID)
+	if err != nil {
+		t.Fatalf("claim seed url: %v", err)
+	}
+	if err := store.MarkURLDone(ctx, claimed.ID); err != nil {
+		t.Fatalf("mark seed url done: %v", err)
+	}
+
+	s := Scraper{
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapeFeed: func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+			return []string{seededURL, newURL}, nil
+		},
+		Config: Config{DedupScope: "all"},
+	}
+
+	collected, err := s.collectPlaceURLs(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, "")
+	if err != nil {
+		t.Fatalf("collectPlaceURLs: %v", err)
+	}
+	if len(collected.URLs) != 1 || collected.URLs[0] != newURL {
+		t.Fatalf("urls = %#v, want only %q", collected.URLs, newURL)
+	}
+	if collected.CrossJobDuplicateURLs != 1 {
+		t.Fatalf("CrossJobDuplicateURLs = %d, want 1", collected.CrossJobDuplicateURLs)
 	}
 }
 
