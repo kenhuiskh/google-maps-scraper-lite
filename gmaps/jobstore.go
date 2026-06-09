@@ -35,9 +35,9 @@ var (
 	ErrNoPendingURL    = errors.New("scraper: no pending URLs")
 	ErrJobNotResumable = errors.New("scraper: job is already running or done")
 	ErrActiveJobExists = errors.New("scraper: a job is already starting or running")
-	ErrJobNotPending    = errors.New("scraper: job is not pending")
-	ErrJobNotStale      = errors.New("scraper: job is not starting or running")
-	ErrJobNotDeletable  = errors.New("scraper: job must be pending, paused, blocked, done, or failed to delete")
+	ErrJobNotPending   = errors.New("scraper: job is not pending")
+	ErrJobNotStale     = errors.New("scraper: job is not starting or running")
+	ErrJobNotDeletable = errors.New("scraper: job must be pending, paused, blocked, done, or failed to delete")
 
 	ErrConfigExportInvalid  = errors.New("config export: invalid selection")
 	ErrConfigImportInvalid  = errors.New("config import: invalid payload")
@@ -102,16 +102,17 @@ type Strategy struct {
 }
 
 type JobExecutionStats struct {
-	JobID             string
-	FeedURLsFound     int
-	FeedDuplicateURLs int
-	QueuedURLs        int
-	ScrapedURLs       int
-	DuplicatePlaces   int
-	ScrapeErrors      int
-	WriteErrors       int
-	RetryEvents       int
-	UpdatedAt         sql.NullTime
+	JobID                 string
+	FeedURLsFound         int
+	FeedDuplicateURLs     int
+	CrossJobDuplicateURLs int
+	QueuedURLs            int
+	ScrapedURLs           int
+	DuplicatePlaces       int
+	ScrapeErrors          int
+	WriteErrors           int
+	RetryEvents           int
+	UpdatedAt             sql.NullTime
 }
 
 type ClaimedURL struct {
@@ -235,6 +236,7 @@ func (s *JobStore) Init(ctx context.Context) error {
 			UNIQUE(job_id, url)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_job_urls_claim ON job_urls(job_id, status, position)`,
+		`CREATE INDEX IF NOT EXISTS idx_job_urls_url_status ON job_urls(url, status)`,
 		`CREATE TABLE IF NOT EXISTS job_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -295,6 +297,7 @@ func (s *JobStore) migrate(ctx context.Context) error {
 			job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
 			feed_urls_found INTEGER NOT NULL DEFAULT 0,
 			feed_duplicate_urls INTEGER NOT NULL DEFAULT 0,
+			cross_job_duplicate_urls INTEGER NOT NULL DEFAULT 0,
 			queued_urls INTEGER NOT NULL DEFAULT 0,
 			scraped_urls INTEGER NOT NULL DEFAULT 0,
 			duplicate_places INTEGER NOT NULL DEFAULT 0,
@@ -309,6 +312,9 @@ func (s *JobStore) migrate(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	if err := s.ensureColumn(ctx, "job_execution_stats", "cross_job_duplicate_urls", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -871,7 +877,7 @@ func (s *JobStore) loadJobsBatch(ctx context.Context, ids []string) ([]Job, erro
 		return nil, err
 	}
 
-	execRows, err := s.db.QueryContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, queued_urls,
+	execRows, err := s.db.QueryContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, cross_job_duplicate_urls, queued_urls,
 		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events, updated_at
 		FROM job_execution_stats WHERE job_id IN (`+placeholders+`)`, args...)
 	if err != nil {
@@ -880,7 +886,7 @@ func (s *JobStore) loadJobsBatch(ctx context.Context, ids []string) ([]Job, erro
 	for execRows.Next() {
 		var es JobExecutionStats
 		if err := execRows.Scan(&es.JobID, &es.FeedURLsFound, &es.FeedDuplicateURLs,
-			&es.QueuedURLs, &es.ScrapedURLs, &es.DuplicatePlaces, &es.ScrapeErrors, &es.WriteErrors,
+			&es.CrossJobDuplicateURLs, &es.QueuedURLs, &es.ScrapedURLs, &es.DuplicatePlaces, &es.ScrapeErrors, &es.WriteErrors,
 			&es.RetryEvents, &es.UpdatedAt); err != nil {
 			_ = execRows.Close()
 			return nil, err
@@ -1641,6 +1647,73 @@ func (s *JobStore) BulkUpdateStrategyLang(ctx context.Context, strategyID, lang 
 	return len(templateIDs), tx.Commit()
 }
 
+// BulkUpdateStrategyDedupScope updates the DedupScope field in-place for every
+// template belonging to the given strategy. Empty scope disables the option.
+func (s *JobStore) BulkUpdateStrategyDedupScope(ctx context.Context, strategyID, scope string) (int, error) {
+	if scope != "" && scope != "run" && scope != "all" {
+		return 0, fmt.Errorf("invalid dedup scope %q", scope)
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM strategies WHERE id = ?`, strategyID).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if exists == 0 {
+		return 0, sql.ErrNoRows
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT template_id FROM strategy_templates WHERE strategy_id = ?`, strategyID)
+	if err != nil {
+		return 0, err
+	}
+	var templateIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		templateIDs = append(templateIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	for _, tplID := range templateIDs {
+		var paramsJSON string
+		if err := tx.QueryRowContext(ctx, `SELECT params_json FROM job_templates WHERE id = ?`, tplID).Scan(&paramsJSON); err != nil {
+			return 0, err
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return 0, err
+		}
+		if scope == "" {
+			delete(params, "DedupScope")
+		} else {
+			params["DedupScope"] = scope
+		}
+		updated, err := json.Marshal(params)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE job_templates SET params_json = ?, last_used_at = ? WHERE id = ?`,
+			string(updated), now, tplID); err != nil {
+			return 0, err
+		}
+	}
+	return len(templateIDs), tx.Commit()
+}
+
 // BulkDuplicateStrategyTemplatesWithLang clones every template in the strategy
 // with the new lang and nameSuffix appended to each template name, then
 // re-links the strategy to the new copies. Original templates are untouched.
@@ -1962,17 +2035,87 @@ func (s *JobStore) JobStats(ctx context.Context, jobID string) (JobStats, error)
 	return stats, rows.Err()
 }
 
-func (s *JobStore) SetJobDiscoveryStats(ctx context.Context, jobID string, feedURLsFound, feedDuplicateURLs, queuedURLs int) error {
+// FilterAlreadyScrapedURLs removes URLs already marked done in prior job rows.
+// Run-scoped filtering needs a strategy run id; without one it is a no-op so
+// ad-hoc CLI jobs keep their historical behavior unless all-time mode is used.
+func (s *JobStore) FilterAlreadyScrapedURLs(ctx context.Context, urls []string, strategyRunID string, allTime bool) (kept []string, skipped int, err error) {
+	if len(urls) == 0 {
+		return []string{}, 0, nil
+	}
+	if !allTime && strategyRunID == "" {
+		return append([]string(nil), urls...), 0, nil
+	}
+
+	// Query only the candidate URLs (chunked to stay under SQLite's parameter
+	// limit) so startup work scales with the current feed, not the full scrape
+	// history. Matches are collected into a set, then candidates are filtered
+	// in their original order.
+	const chunkSize = 900
+	done := make(map[string]struct{})
+	for start := 0; start < len(urls); start += chunkSize {
+		end := start + chunkSize
+		if end > len(urls) {
+			end = len(urls)
+		}
+		chunk := urls[start:end]
+
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+
+		var query string
+		args := make([]any, 0, len(chunk)+1)
+		if allTime {
+			query = `SELECT DISTINCT url FROM job_urls WHERE status='done' AND url IN (` + placeholders + `)`
+		} else {
+			query = `SELECT DISTINCT ju.url FROM job_urls ju JOIN jobs j ON ju.job_id=j.id WHERE ju.status='done' AND j.strategy_run_id=? AND ju.url IN (` + placeholders + `)`
+			args = append(args, strategyRunID)
+		}
+		for _, u := range chunk {
+			args = append(args, u)
+		}
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, 0, err
+		}
+		for rows.Next() {
+			var u string
+			if err := rows.Scan(&u); err != nil {
+				rows.Close()
+				return nil, 0, err
+			}
+			done[u] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, 0, err
+		}
+		rows.Close()
+	}
+
+	kept = make([]string, 0, len(urls))
+	for _, u := range urls {
+		if _, ok := done[u]; ok {
+			skipped++
+			continue
+		}
+		kept = append(kept, u)
+	}
+	return kept, skipped, nil
+}
+
+func (s *JobStore) SetJobDiscoveryStats(ctx context.Context, jobID string, feedURLsFound, feedDuplicateURLs, crossJobDuplicateURLs, queuedURLs int) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO job_execution_stats
-		(job_id, feed_urls_found, feed_duplicate_urls, queued_urls, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		(job_id, feed_urls_found, feed_duplicate_urls, cross_job_duplicate_urls, queued_urls, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			feed_urls_found = excluded.feed_urls_found,
 			feed_duplicate_urls = excluded.feed_duplicate_urls,
+			cross_job_duplicate_urls = excluded.cross_job_duplicate_urls,
 			queued_urls = excluded.queued_urls,
 			updated_at = excluded.updated_at`,
-		jobID, feedURLsFound, feedDuplicateURLs, queuedURLs, now)
+		jobID, feedURLsFound, feedDuplicateURLs, crossJobDuplicateURLs, queuedURLs, now)
 	return err
 }
 
@@ -1995,10 +2138,10 @@ func (s *JobStore) IncrementJobStat(ctx context.Context, jobID, field string, de
 
 func (s *JobStore) JobExecutionStats(ctx context.Context, jobID string) (JobExecutionStats, error) {
 	var stats JobExecutionStats
-	err := s.db.QueryRowContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, queued_urls,
+	err := s.db.QueryRowContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, cross_job_duplicate_urls, queued_urls,
 		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events, updated_at
 		FROM job_execution_stats WHERE job_id = ?`, jobID).Scan(&stats.JobID, &stats.FeedURLsFound, &stats.FeedDuplicateURLs,
-		&stats.QueuedURLs, &stats.ScrapedURLs, &stats.DuplicatePlaces, &stats.ScrapeErrors, &stats.WriteErrors,
+		&stats.CrossJobDuplicateURLs, &stats.QueuedURLs, &stats.ScrapedURLs, &stats.DuplicatePlaces, &stats.ScrapeErrors, &stats.WriteErrors,
 		&stats.RetryEvents, &stats.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		stats.JobID = jobID
