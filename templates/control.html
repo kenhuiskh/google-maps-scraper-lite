@@ -377,6 +377,27 @@
     .inspector-meta-row code,
     .inspector-meta-row span:last-child { color: #334155; overflow-wrap: anywhere; }
     .inspector-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .detail-tabs {
+      display: none;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+    }
+    .detail-tabs button {
+      min-height: 30px;
+      border-color: transparent;
+      background: transparent;
+      font-weight: 800;
+      color: var(--muted);
+    }
+    .detail-tabs button[aria-pressed="true"] {
+      border-color: var(--border);
+      background: #fff;
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
     .inspector-log {
       min-height: 0;
       border: 1px solid var(--border);
@@ -419,6 +440,20 @@
       border-radius: var(--radius);
       background: var(--surface);
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+    }
+    details.command-strip > summary.command-copy {
+      list-style: none;
+      cursor: pointer;
+    }
+    details.command-strip > summary.command-copy::-webkit-details-marker { display: none; }
+    .disclosure-section > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .disclosure-section > summary::-webkit-details-marker { display: none; }
+    .disclosure-section-body {
+      display: grid;
+      gap: 10px;
     }
     .command-copy { display: grid; gap: 4px; min-width: 0; }
     .command-title-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
@@ -639,6 +674,48 @@
     .error-text { display: block; max-width: 420px; margin-top: 6px; color: var(--danger); font-size: 0.8rem; overflow-wrap: anywhere; }
     .actions, .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .actions button, .item-actions button { min-height: 30px; padding: 5px 9px; }
+    .mobile-row-more { display: none; position: relative; }
+    .mobile-row-more summary {
+      list-style: none;
+      width: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      cursor: pointer;
+    }
+    .mobile-row-more summary::-webkit-details-marker { display: none; }
+    .mobile-row-more-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 5px);
+      z-index: 15;
+      min-width: 148px;
+      display: grid;
+      gap: 5px;
+      padding: 7px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+    }
+    .mobile-row-more-menu button {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+    }
+    .mobile-row-more svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
     .icon-button {
       width: 32px;
       min-width: 32px;
@@ -667,7 +744,7 @@
       border: 0;
     }
     .actions .action-refresh { color: #334155; }
-    .actions .action-primary, .item-actions .action-primary {
+    .actions .action-primary, .item-actions .action-primary, .run-modal-actions .action-primary {
       background: var(--primary);
       border-color: var(--primary);
       color: #fff;
@@ -854,6 +931,81 @@
     .job-log-modal .run-modal-header .muted { color: #94a3b8; }
     .job-log-modal .run-modal-body { display: block; padding: 0; overflow: hidden; }
     .job-log-modal .log-viewer { height: 100%; min-height: 0; max-height: none; margin: 0; border: 0; border-radius: 0; }
+    .mobile-log-reader {
+      width: 100vw;
+      max-width: 100vw;
+      height: 100dvh;
+      max-height: 100dvh;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      color: var(--text);
+      background: #0f172a;
+    }
+    .mobile-log-reader::backdrop { background: rgba(15, 23, 42, 0.62); }
+    .mobile-log-shell {
+      height: 100dvh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      background: #0f172a;
+    }
+    .mobile-log-header,
+    .mobile-log-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      color: #e2e8f0;
+      background: #111827;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .mobile-log-actions {
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+    .mobile-log-title { min-width: 0; }
+    .mobile-log-title .panel-title {
+      color: #e2e8f0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mobile-log-title .muted { color: #94a3b8; }
+    .mobile-log-reader button {
+      border-color: rgba(255, 255, 255, 0.16);
+      background: #182235;
+      color: #e2e8f0;
+    }
+    .mobile-log-reader button:hover:not([disabled]) {
+      border-color: rgba(255, 255, 255, 0.28);
+      background: #202c43;
+      color: #fff;
+    }
+    .mobile-log-viewer {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      margin: 0;
+      overflow: auto;
+      padding: 12px 14px max(24px, env(safe-area-inset-bottom));
+      color: #dbeafe;
+      background: #0f172a;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12.5px;
+      line-height: 1.52;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      scrollbar-gutter: stable;
+    }
+    .mobile-log-viewer.nowrap {
+      white-space: pre;
+      overflow-wrap: normal;
+      word-break: normal;
+    }
     .run-modal-shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100vh - 48px); }
     .run-modal-header,
     .run-modal-actions {
@@ -902,6 +1054,43 @@
     }
     .export-modal {
       width: min(1080px, calc(100vw - 32px));
+    }
+    .strategy-batch-modal {
+      width: min(920px, calc(100vw - 32px));
+    }
+    .strategy-batch-body {
+      grid-template-columns: minmax(280px, 0.85fr) minmax(300px, 1fr);
+    }
+    .strategy-batch-pane {
+      min-width: 0;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+    }
+    .strategy-batch-tab-panel[hidden] { display: none; }
+    .strategy-batch-preview-list {
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .strategy-batch-preview-item {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .strategy-batch-preview-item .item-title,
+    .strategy-batch-preview-item code {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .export-modal-body {
       grid-template-columns: minmax(280px, 0.85fr) minmax(280px, 0.85fr) minmax(320px, 1fr);
@@ -1091,6 +1280,21 @@
       font-size: 0.78rem;
     }
     .split-actions { display: flex; gap: 8px; align-items: center; }
+    .desktop-diagnostics { display: block; }
+    .mobile-diagnostics-toggle { display: none; }
+    .mobile-diagnostics-toggle summary {
+      cursor: pointer;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 850;
+    }
+    .mobile-diagnostics-toggle[open] summary {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+    }
     @media (max-width: 1100px) {
       .topbar-inner { grid-template-columns: 1fr; align-items: start; }
       .main-nav { justify-self: start; overflow-x: auto; max-width: 100%; }
@@ -1126,17 +1330,34 @@
       .inspector-card.active { box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24); }
       .jobs-inspector.has-selection .inspector-card.active { max-height: calc(82vh - 24px); }
       .inspector-body { max-height: calc(82vh - 24px); }
+      .detail-tabs { display: grid; }
+      .inspector-section[data-detail-panel],
+      .inspector-log[data-detail-panel] { display: none; }
+      .inspector-section[data-detail-panel].active,
+      .inspector-log[data-detail-panel].active { display: grid; }
+      .inspector-log[data-detail-panel].active { display: block; }
       .inspector-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .inspector-metric:nth-child(even) { border-right: 1px solid var(--border); }
       .inspector-metric:nth-child(odd) { border-right: 0; }
       .inspector-metric:nth-last-child(-n + 4) { border-bottom: 1px solid var(--border); }
       .inspector-metric:nth-last-child(-n + 2) { border-bottom: 0; }
       .inspector-log .log-viewer { height: 220px; }
+      .desktop-secondary-action { display: none; }
+      .mobile-row-more { display: inline-block; }
+      .desktop-diagnostics { display: none; }
+      .mobile-diagnostics-toggle { display: block; }
+      .mobile-diagnostics-toggle .stat-strip {
+        margin-top: 0;
+        border: 1px solid var(--border);
+        border-top: 0;
+        border-top-left-radius: 0;
+        border-top-right-radius: 0;
+      }
       .field-row, .item-grid, .template-row, .compact-row, .config-transfer-actions { grid-template-columns: 1fr; }
       .template-actions { justify-content: flex-start; }
       .panel-header { align-items: flex-start; flex-direction: column; }
       .pager { align-items: flex-start; flex-direction: column; }
-      .run-modal-body, .export-modal-body { grid-template-columns: 1fr; overflow: auto; }
+      .run-modal-body, .export-modal-body, .strategy-batch-body { grid-template-columns: 1fr; overflow: auto; }
       .job-log-modal { width: calc(100vw - 24px); }
       .job-log-modal .run-modal-shell { max-height: calc(100vh - 24px); }
       .modal-template-list { max-height: 220px; }
@@ -1286,6 +1507,102 @@
 	    </div>
 	  </dialog>
 
+	  <dialog id="strategy-batch-modal" class="run-modal strategy-batch-modal" aria-labelledby="strategy-batch-title">
+	    <div class="run-modal-shell">
+	      <div class="run-modal-header">
+	        <div>
+	          <h2 id="strategy-batch-title" class="panel-title">Batch tools</h2>
+	          <div id="strategy-batch-subtitle" class="muted tiny">Load or save a strategy before using batch tools.</div>
+	        </div>
+	        <button type="button" onclick="closeStrategyBatchTools()" aria-label="Close batch tools">Close</button>
+	      </div>
+	      <div class="run-modal-body strategy-batch-body">
+	        <div class="strategy-batch-pane">
+	          <div class="export-tabs" role="tablist" aria-label="Batch tool type">
+	            <button id="strategy-batch-tab-language" type="button" class="active" onclick="setStrategyBatchTab('language')" role="tab" aria-selected="true">Language</button>
+	            <button id="strategy-batch-tab-dedup" type="button" onclick="setStrategyBatchTab('dedup')" role="tab" aria-selected="false">Dedup</button>
+	          </div>
+	          <div id="strategy-batch-empty" class="warning-note">Load or save a strategy before using batch tools.</div>
+	          <div id="strategy-batch-language-panel" class="strategy-batch-tab-panel">
+	            <div class="field-row">
+	              <div class="field">
+	                <label for="bulk-lang-select">Language</label>
+	                <select id="bulk-lang-select">
+	                  <option value="en">en — English</option>
+	                  <option value="zh-TW">zh — Chinese (Traditional)</option>
+	                  <option value="ja">ja — Japanese</option>
+	                </select>
+	              </div>
+	            </div>
+	            <div class="field">
+	              <label>Update mode</label>
+	              <div class="bulk-lang-mode-group" role="radiogroup" aria-label="Bulk language update mode">
+	                <label class="bulk-lang-mode" for="bulk-lang-mode-copy">
+	                  <input type="radio" id="bulk-lang-mode-copy" name="bulk-lang-mode" value="copy" checked>
+	                  <span>
+	                    <span class="bulk-lang-mode-copy">
+	                      <span class="item-title">Create new language templates</span>
+	                      <span class="requirement-badge required">Suffix required</span>
+	                    </span>
+	                    <span class="muted tiny">Keeps originals unchanged. A name suffix is required so copies are easy to identify.</span>
+	                  </span>
+	                </label>
+	                <label class="bulk-lang-mode" for="bulk-lang-mode-update">
+	                  <input type="radio" id="bulk-lang-mode-update" name="bulk-lang-mode" value="update">
+	                  <span>
+	                    <span class="bulk-lang-mode-copy">
+	                      <span class="item-title">Update existing templates</span>
+	                      <span class="requirement-badge optional">Suffix not needed</span>
+	                    </span>
+	                    <span class="muted tiny">Edits the original templates and affects every strategy that shares them.</span>
+	                  </span>
+	                </label>
+	              </div>
+	            </div>
+	            <div id="bulk-lang-warning" class="warning-note" hidden>
+	              Warning: This will modify the original templates. Any other strategy sharing these templates will also be affected.
+	            </div>
+	            <div id="bulk-lang-suffix-field" class="field">
+	              <label for="bulk-lang-suffix">Name suffix <span id="bulk-lang-suffix-required" style="color:var(--danger)">*</span></label>
+	              <input id="bulk-lang-suffix" type="text" placeholder='e.g. "FR copy"' required>
+	              <div id="bulk-lang-suffix-help" class="muted tiny">New templates will be named: &lt;original name&gt; &lt;suffix&gt;</div>
+	            </div>
+	          </div>
+	          <div id="strategy-batch-dedup-panel" class="strategy-batch-tab-panel" hidden>
+	            <div class="field">
+	              <label for="bulk-dedup-select">Skip already-scraped URLs</label>
+	              <select id="bulk-dedup-select">
+	                <option value="off">Off</option>
+	                <option value="run">This strategy run</option>
+	                <option value="all">All past jobs</option>
+	              </select>
+	              <div class="muted tiny">"This strategy run" only applies when run as part of a strategy.</div>
+	            </div>
+	            <div class="warning-note">
+	              Warning: This will modify the original templates. Any other strategy sharing these templates will also be affected.
+	            </div>
+	          </div>
+	        </div>
+	        <div class="strategy-batch-pane">
+	          <div>
+	            <div class="panel-title">Affected templates</div>
+	            <div id="strategy-batch-preview-note" class="muted tiny">No templates selected.</div>
+	          </div>
+	          <div id="strategy-batch-preview-list" class="strategy-batch-preview-list">
+	            <div class="empty-state">No templates selected.</div>
+	          </div>
+	        </div>
+	      </div>
+	      <div class="run-modal-actions">
+	        <div id="bulk-lang-result" class="muted tiny" role="status" aria-live="polite"></div>
+	        <div id="bulk-dedup-result" class="muted tiny" role="status" aria-live="polite" hidden></div>
+	        <button type="button" onclick="closeStrategyBatchTools()">Cancel</button>
+	        <button id="strategy-batch-apply-language" type="button" class="action-primary" onclick="applyBulkLang()">Apply language to 0 templates</button>
+	        <button id="strategy-batch-apply-dedup" type="button" class="action-primary" onclick="applyBulkDedup()" hidden>Apply dedup to 0 templates</button>
+	      </div>
+	    </div>
+	  </dialog>
+
 	  <dialog id="job-log-modal" class="run-modal job-log-modal" aria-labelledby="job-log-modal-title">
 	    <div class="run-modal-shell">
 	      <div class="run-modal-header">
@@ -1308,6 +1625,30 @@
 	    </div>
 	  </dialog>
 
+	  <dialog id="mobile-log-reader" class="mobile-log-reader" aria-labelledby="mobile-log-title">
+	    <div class="mobile-log-shell">
+	      <div class="mobile-log-header">
+	        <div class="mobile-log-title">
+	          <h2 id="mobile-log-title" class="panel-title">Job Logs</h2>
+	          <div id="mobile-log-meta" class="muted tiny">No log lines yet.</div>
+	        </div>
+	        <div class="actions">
+	          <button type="button" class="icon-button action-refresh" onclick="refreshSelectedJobLog()" title="Refresh logs" aria-label="Refresh logs">
+	            {{template "icon-refresh" .}}<span class="sr-only">Refresh Logs</span>
+	          </button>
+	          <button type="button" class="icon-button" onclick="closeMobileLogReader()" title="Close logs" aria-label="Close logs">
+	            {{template "icon-close" .}}<span class="sr-only">Close</span>
+	          </button>
+	        </div>
+	      </div>
+	      <pre id="mobile-log-viewer" class="mobile-log-viewer">No log lines yet.</pre>
+	      <div class="mobile-log-actions">
+	        <button id="mobile-log-wrap-toggle" type="button" onclick="toggleMobileLogWrap()" aria-pressed="true">Wrap lines</button>
+	        <button type="button" onclick="closeMobileLogReader()">Close</button>
+	      </div>
+	    </div>
+	  </dialog>
+
 	  {{template "control-script" .}}
 	</body>
 </html>{{end}}
@@ -1319,6 +1660,14 @@
     <p class="subtitle">Queue health and lifecycle actions.</p>
   </div>
 </div>
+
+<div class="desktop-diagnostics">
+  {{template "analytics-strip" .}}
+</div>
+<details class="mobile-diagnostics-toggle">
+  <summary>Diagnostics</summary>
+  {{template "analytics-strip" .}}
+</details>
 
 <div class="dashboard-grid">
   <section class="panel" aria-labelledby="jobs-title">
@@ -1340,8 +1689,8 @@
 </div>
 
 <div class="page-workspace">
-  <section class="command-strip" aria-labelledby="config-transfer-title">
-    <div class="command-copy">
+  <details class="command-strip disclosure-strip config-transfer-disclosure" aria-labelledby="config-transfer-title" open>
+    <summary class="command-copy">
       <div class="command-title-line">
         <h2 id="config-transfer-title" class="panel-title">Import / Export</h2>
         <span class="operator-badge"><strong>{{len .Templates}}</strong> templates</span>
@@ -1349,7 +1698,7 @@
       </div>
       <div class="muted tiny">Move reusable scraper configuration between state databases.</div>
       <div id="config-import-result" class="import-summary" role="status" aria-live="polite"></div>
-    </div>
+    </summary>
     <form id="config-import-form" class="command-actions">
       <div class="field">
         <label for="config-import-collision">Collision</label>
@@ -1367,7 +1716,7 @@
       <button type="submit" class="secondary-button">Import</button>
       <button type="button" class="secondary-button" onclick="openConfigExportModal()">Export JSON</button>
     </form>
-  </section>
+  </details>
 
   <section class="panel" aria-labelledby="templates-title">
     <div class="panel-header">
@@ -1787,88 +2136,10 @@
       <button class="primary-button" type="submit">Save Strategy</button>
       <div id="strategy-result" role="status" aria-live="polite"></div>
     </form>
-
     <hr class="panel-divider">
-
-    <div class="bulk-lang-section form-section">
-      <div>
-        <strong>Bulk Language Update</strong>
-        <div class="muted tiny">Apply a new language flag to all templates in the loaded strategy.</div>
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="bulk-lang-select">Language</label>
-          <select id="bulk-lang-select">
-            <option value="en">en — English</option>
-            <option value="zh-TW">zh — Chinese (Traditional)</option>
-            <option value="ja">ja — Japanese</option>
-          </select>
-        </div>
-      </div>
-      <div class="field">
-        <label>Update mode</label>
-        <div class="bulk-lang-mode-group" role="radiogroup" aria-label="Bulk language update mode">
-          <label class="bulk-lang-mode" for="bulk-lang-mode-copy">
-            <input type="radio" id="bulk-lang-mode-copy" name="bulk-lang-mode" value="copy" checked>
-            <span>
-              <span class="bulk-lang-mode-copy">
-                <span class="item-title">Create new language templates</span>
-                <span class="requirement-badge required">Suffix required</span>
-              </span>
-              <span class="muted tiny">Keeps originals unchanged. A name suffix is required so copies are easy to identify.</span>
-            </span>
-          </label>
-          <label class="bulk-lang-mode" for="bulk-lang-mode-update">
-            <input type="radio" id="bulk-lang-mode-update" name="bulk-lang-mode" value="update">
-            <span>
-              <span class="bulk-lang-mode-copy">
-                <span class="item-title">Update existing templates</span>
-                <span class="requirement-badge optional">Suffix not needed</span>
-              </span>
-              <span class="muted tiny">Edits the original templates and affects every strategy that shares them.</span>
-            </span>
-          </label>
-        </div>
-      </div>
-      <div id="bulk-lang-warning" class="warning-note" hidden>
-        Warning: This will modify the original templates. Any other strategy sharing these templates will also be affected.
-      </div>
-      <div id="bulk-lang-suffix-field" class="field">
-        <label for="bulk-lang-suffix">Name suffix <span id="bulk-lang-suffix-required" style="color:var(--danger)">*</span></label>
-        <input id="bulk-lang-suffix" type="text" placeholder='e.g. "FR copy"' required>
-        <div id="bulk-lang-suffix-help" class="muted tiny">New templates will be named: &lt;original name&gt; &lt;suffix&gt;</div>
-      </div>
-      <div>
-        <button type="button" onclick="applyBulkLang()">Apply Language</button>
-      </div>
-      <div id="bulk-lang-result" role="status" aria-live="polite"></div>
-    </div>
-
-    <hr class="panel-divider">
-
-    <div class="bulk-dedup-section form-section">
-      <div>
-        <strong>Bulk Dedup Update</strong>
-        <div class="muted tiny">Apply the already-scraped URL skip setting to all templates in the loaded strategy.</div>
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="bulk-dedup-select">Skip already-scraped URLs</label>
-          <select id="bulk-dedup-select">
-            <option value="off">Off</option>
-            <option value="run">This strategy run</option>
-            <option value="all">All past jobs</option>
-          </select>
-          <div class="muted tiny">"This strategy run" only applies when run as part of a strategy.</div>
-        </div>
-      </div>
-      <div class="warning-note">
-        Warning: This will modify the original templates. Any other strategy sharing these templates will also be affected.
-      </div>
-      <div>
-        <button type="button" onclick="applyBulkDedup()">Apply Dedup Scope</button>
-      </div>
-      <div id="bulk-dedup-result" role="status" aria-live="polite"></div>
+    <div class="split-actions">
+      <button type="button" class="secondary-button" onclick="openStrategyBatchTools()">Batch tools</button>
+      <span class="muted tiny">Apply language or dedup settings to the loaded strategy's templates.</span>
     </div>
   </div>
 </section>
@@ -1990,8 +2261,13 @@
               {{template "icon-close" .}}<span class="sr-only">Close</span>
             </button>
           </div>
+          <div class="detail-tabs" role="tablist" aria-label="Job detail sections">
+            <button type="button" data-detail-tab="overview" data-detail-job="{{.ID}}" onclick="setJobDetailTab('{{.ID}}', 'overview')" aria-pressed="true">Overview</button>
+            <button type="button" data-detail-tab="logs" data-detail-job="{{.ID}}" onclick="openMobileLogReader('{{.ID}}')" aria-pressed="false">Logs</button>
+            <button type="button" data-detail-tab="metadata" data-detail-job="{{.ID}}" onclick="setJobDetailTab('{{.ID}}', 'metadata')" aria-pressed="false">Metadata</button>
+          </div>
           <div class="inspector-body">
-            <div class="inspector-section">
+            <div class="inspector-section active" data-detail-panel="overview" data-detail-job="{{.ID}}">
               <div class="progress-line">
                 <span>{{.Progress}}</span>
                 <span>{{.ProgressPercent}}%</span>
@@ -2001,45 +2277,31 @@
               </div>
               <div><span class="status {{.StatusClass}}" title="{{.StatusHelp}}">{{template "icon-status" .StatusLabel}}{{.StatusLabel}}</span></div>
               <span class="error-text" title="{{.LastError}}"{{if not .LastError}} hidden{{end}}>{{.LastError}}</span>
-            </div>
-            <div class="inspector-grid" aria-label="Job metrics">
-              <div class="inspector-ratio" aria-label="Job status ratio">
-                <div class="inspector-ratio-bar" role="img" aria-label="Done {{.Done}}, pending {{.Pending}}, active {{.InProgress}}, failed {{.Failed}}">
-                  <span class="inspector-ratio-segment inspector-ratio-done" style="flex: {{.Done}} 1 0;" title="Done: {{.Done}}"></span>
-                  <span class="inspector-ratio-segment inspector-ratio-pending" style="flex: {{.Pending}} 1 0;" title="Pending: {{.Pending}}"></span>
-                  <span class="inspector-ratio-segment inspector-ratio-active" style="flex: {{.InProgress}} 1 0;" title="Active: {{.InProgress}}"></span>
-                  <span class="inspector-ratio-segment inspector-ratio-failed" style="flex: {{.Failed}} 1 0;" title="Failed: {{.Failed}}"></span>
+              <div class="inspector-grid" aria-label="Job metrics">
+                <div class="inspector-ratio" aria-label="Job status ratio">
+                  <div class="inspector-ratio-bar" role="img" aria-label="Done {{.Done}}, pending {{.Pending}}, active {{.InProgress}}, failed {{.Failed}}">
+                    <span class="inspector-ratio-segment inspector-ratio-done" style="flex: {{.Done}} 1 0;" title="Done: {{.Done}}"></span>
+                    <span class="inspector-ratio-segment inspector-ratio-pending" style="flex: {{.Pending}} 1 0;" title="Pending: {{.Pending}}"></span>
+                    <span class="inspector-ratio-segment inspector-ratio-active" style="flex: {{.InProgress}} 1 0;" title="Active: {{.InProgress}}"></span>
+                    <span class="inspector-ratio-segment inspector-ratio-failed" style="flex: {{.Failed}} 1 0;" title="Failed: {{.Failed}}"></span>
+                  </div>
+                  <div class="inspector-ratio-legend" aria-hidden="true">
+                    <span><i class="inspector-ratio-done"></i>Done</span>
+                    <span><i class="inspector-ratio-pending"></i>Pending</span>
+                    <span><i class="inspector-ratio-active"></i>Active</span>
+                    <span><i class="inspector-ratio-failed"></i>Failed</span>
+                  </div>
                 </div>
-                <div class="inspector-ratio-legend" aria-hidden="true">
-                  <span><i class="inspector-ratio-done"></i>Done</span>
-                  <span><i class="inspector-ratio-pending"></i>Pending</span>
-                  <span><i class="inspector-ratio-active"></i>Active</span>
-                  <span><i class="inspector-ratio-failed"></i>Failed</span>
-                </div>
+                <div class="inspector-metric"><span class="metric-label">Done</span><strong>{{.Done}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Pending</span><strong>{{.Pending}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Active</span><strong>{{.InProgress}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Failed</span><strong>{{.Failed}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Feed URLs</span><strong>{{.FeedURLsFound}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Already scraped</span><strong>{{.CrossJobDuplicates}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Queued</span><strong>{{.QueuedURLs}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Scraped</span><strong>{{.ScrapedURLs}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Errors</span><strong>{{add .ScrapeErrors .WriteErrors}}</strong></div>
               </div>
-              <div class="inspector-metric"><span class="metric-label">Done</span><strong>{{.Done}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Pending</span><strong>{{.Pending}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Active</span><strong>{{.InProgress}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Failed</span><strong>{{.Failed}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Feed URLs</span><strong>{{.FeedURLsFound}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Already scraped</span><strong>{{.CrossJobDuplicates}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Queued</span><strong>{{.QueuedURLs}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Scraped</span><strong>{{.ScrapedURLs}}</strong></div>
-              <div class="inspector-metric"><span class="metric-label">Errors</span><strong>{{add .ScrapeErrors .WriteErrors}}</strong></div>
-            </div>
-            <div class="inspector-section">
-              <div class="metric-label">Metadata</div>
-              <div class="inspector-meta">
-                <div class="inspector-meta-row"><span>ID</span><code>{{.ID}}</code></div>
-                <div class="inspector-meta-row"><span>Query</span><span>{{.QueriesPreview}}</span></div>
-                <div class="inspector-meta-row"><span>Output</span><span>{{.OutputMode}}</span></div>
-                <div class="inspector-meta-row"><span>Lang</span><span>{{.Lang}}</span></div>
-                <div class="inspector-meta-row"><span>Raw</span><span>{{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span></div>
-                {{if .TemplateID}}<div class="inspector-meta-row"><span>Template</span><span>{{.TemplateID}}</span></div>{{end}}
-                {{if .StrategyID}}<div class="inspector-meta-row"><span>Strategy</span><span>{{.StrategyID}}</span></div>{{end}}
-              </div>
-            </div>
-            <div class="inspector-section">
               <div class="metric-label">Actions</div>
               <div class="inspector-actions">
                 <button class="action-refresh" onclick="refreshJob('{{.ID}}')" title="Refresh this row from the saved job database.">Refresh</button>
@@ -2053,13 +2315,16 @@
                 {{if not .RecoverDisabled}}<button class="action-warning" onclick="post('{{.RecoverPath}}')" title="{{.RecoverHelp}}">Recover</button>{{end}}
               </div>
             </div>
-            <section class="inspector-log inspector-log-console" aria-labelledby="log-title-{{.ID}}">
+            <section class="inspector-log inspector-log-console" data-detail-panel="logs" data-detail-job="{{.ID}}" aria-labelledby="log-title-{{.ID}}">
               <div class="panel-header">
                 <div>
                   <h2 id="log-title-{{.ID}}" class="panel-title">Job Logs</h2>
                   <div class="muted tiny" data-log-meta="{{.ID}}">Open logs to load recent lines.</div>
                 </div>
                 <div class="actions">
+                  <button type="button" class="icon-button action-refresh" onclick="openMobileLogReader('{{.ID}}')" title="Open mobile log reader" aria-label="Open mobile log reader">
+                    {{template "icon-log" .}}<span class="sr-only">Open Mobile Logs</span>
+                  </button>
                   <button type="button" class="icon-button action-refresh" onclick="openJobLogModal()" title="Expand logs" aria-label="Expand logs">
                     {{template "icon-expand" .}}<span class="sr-only">Expand Logs</span>
                   </button>
@@ -2070,6 +2335,18 @@
               </div>
               <pre class="log-viewer" data-log-viewer="{{.ID}}">No log lines yet.</pre>
             </section>
+            <div class="inspector-section" data-detail-panel="metadata" data-detail-job="{{.ID}}">
+              <div class="metric-label">Metadata</div>
+              <div class="inspector-meta">
+                <div class="inspector-meta-row"><span>ID</span><code>{{.ID}}</code></div>
+                <div class="inspector-meta-row"><span>Query</span><span>{{.QueriesPreview}}</span></div>
+                <div class="inspector-meta-row"><span>Output</span><span>{{.OutputMode}}</span></div>
+                <div class="inspector-meta-row"><span>Lang</span><span>{{.Lang}}</span></div>
+                <div class="inspector-meta-row"><span>Raw</span><span>{{.RawStatus}}{{if .PauseRequested}}, pause requested{{end}}</span></div>
+                {{if .TemplateID}}<div class="inspector-meta-row"><span>Template</span><span>{{.TemplateID}}</span></div>{{end}}
+                {{if .StrategyID}}<div class="inspector-meta-row"><span>Strategy</span><span>{{.StrategyID}}</span></div>{{end}}
+              </div>
+            </div>
           </div>
         </section>
       {{end}}
@@ -2115,10 +2392,21 @@
         {{end}}
       {{end}}
       {{if .DeletePath}}
-        <button class="icon-button action-danger" onclick="deleteJob('{{.ID}}', '{{.DeletePath}}')" title="{{.DeleteHelp}}" aria-label="Delete job {{.ID}}">
+        <button class="icon-button action-danger desktop-secondary-action" onclick="deleteJob('{{.ID}}', '{{.DeletePath}}')" title="{{.DeleteHelp}}" aria-label="Delete job {{.ID}}">
           {{template "icon-trash" .}}<span class="sr-only">Delete</span>
         </button>
       {{end}}
+      <details class="mobile-row-more">
+        <summary title="More actions" aria-label="More actions for job {{.ID}}">
+          {{template "icon-more" .}}<span class="sr-only">More</span>
+        </summary>
+        <div class="mobile-row-more-menu">
+          <button type="button" onclick="selectJob('{{.ID}}'); setJobDetailTab('{{.ID}}', 'metadata')">Metadata</button>
+          <button type="button" onclick="openMobileLogReader('{{.ID}}')">Open logs</button>
+          <button type="button" onclick="refreshJob('{{.ID}}')">Refresh</button>
+          {{if .DeletePath}}<button type="button" class="action-danger" onclick="deleteJob('{{.ID}}', '{{.DeletePath}}')" title="{{.DeleteHelp}}">Delete</button>{{end}}
+        </div>
+      </details>
     </span>
   </div>
 {{else}}
@@ -2136,6 +2424,7 @@
 {{define "icon-prev"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{end}}
 {{define "icon-next"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>{{end}}
 {{define "icon-expand"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>{{end}}
+{{define "icon-more"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg>{{end}}
 {{define "icon-status"}}{{if eq . "Running"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "Done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "Pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if or (eq . "Blocked") (eq . "Failed")}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else if or (eq . "Paused") (eq . "Pausing")}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H7v14h3z"></path><path d="M17 5h-3v14h3z"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle></svg>{{end}}{{end}}
 {{define "icon-filter-status"}}{{if eq . "active"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 5 4-5 4z"></path></svg>{{else if eq . "pending"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>{{else if eq . "done"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{else if eq . "attention"}}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{else}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M7 12h10"></path><path d="M10 17h4"></path></svg>{{end}}{{end}}
 
@@ -2258,6 +2547,7 @@
     selectedJobID = jobID || '';
     selectedLogJobID = jobID || '';
     syncJobInspector(selectedJobID);
+    if (jobID) setJobDetailTab(jobID, 'overview');
     refreshSelectedJobLog({ restore: true });
   }
 
@@ -2284,6 +2574,19 @@
     });
     if (empty) empty.hidden = hasSelection;
     if (inspector) inspector.classList.toggle('has-selection', hasSelection);
+  }
+
+  function setJobDetailTab(jobID, tab) {
+    jobID = jobID || selectedJobID || selectedLogJobID || '';
+    tab = tab || 'overview';
+    if (!jobID) return;
+    selectedJobID = jobID;
+    document.querySelectorAll('[data-detail-tab][data-detail-job="' + cssEscape(jobID) + '"]').forEach(function(button) {
+      button.setAttribute('aria-pressed', button.dataset.detailTab === tab ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-detail-panel][data-detail-job="' + cssEscape(jobID) + '"]').forEach(function(panel) {
+      panel.classList.toggle('active', panel.dataset.detailPanel === tab || (tab === 'logs' && panel.dataset.detailPanel === 'logs'));
+    });
   }
 
   function snapshotVisibleLog() {
@@ -2368,10 +2671,12 @@
       viewer.textContent = (payload.lines || []).length ? payload.lines.join('\n') : 'No log lines yet.';
       viewer.scrollTop = viewer.scrollHeight;
       syncJobLogModalView(jobID);
+      syncMobileLogReaderView(jobID);
     } catch (err) {
       meta.textContent = 'Unable to load logs for ' + jobID;
       viewer.textContent = String(err);
       syncJobLogModalView(jobID);
+      syncMobileLogReaderView(jobID);
     }
   }
 
@@ -2388,6 +2693,24 @@
     const atBottom = modalViewer.scrollTop >= modalViewer.scrollHeight - modalViewer.clientHeight - 12;
     modalViewer.textContent = source.textContent;
     if (atBottom) modalViewer.scrollTop = modalViewer.scrollHeight;
+  }
+
+  function syncMobileLogReaderView(jobID) {
+    const reader = document.getElementById('mobile-log-reader');
+    if (!reader || !reader.open) return;
+    if (jobID && jobID !== selectedLogJobID) return;
+    const source = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const sourceMeta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    const sourceTitle = document.getElementById('inspector-title-' + jobID);
+    const viewer = document.getElementById('mobile-log-viewer');
+    const meta = document.getElementById('mobile-log-meta');
+    const title = document.getElementById('mobile-log-title');
+    if (!source || !viewer) return;
+    if (title && sourceTitle) title.textContent = sourceTitle.textContent || 'Job Logs';
+    if (meta && sourceMeta) meta.textContent = sourceMeta.textContent;
+    const atBottom = viewer.scrollTop >= viewer.scrollHeight - viewer.clientHeight - 12;
+    viewer.textContent = source.textContent;
+    if (atBottom) viewer.scrollTop = viewer.scrollHeight;
   }
 
   function openJobLogModal() {
@@ -2424,6 +2747,69 @@
       modal.removeAttribute('open');
     }
   }
+
+  function openMobileLogReader(jobID) {
+    const reader = document.getElementById('mobile-log-reader');
+    if (!reader) return;
+    if (!jobID) {
+      const card = document.querySelector('[data-inspector-job].active');
+      if (card) jobID = card.dataset.inspectorJob || '';
+    }
+    if (!jobID) return;
+    selectedJobID = jobID;
+    selectedLogJobID = jobID;
+    syncJobInspector(jobID);
+    setJobDetailTab(jobID, 'logs');
+    const source = document.querySelector('[data-log-viewer="' + cssEscape(jobID) + '"]');
+    const sourceMeta = document.querySelector('[data-log-meta="' + cssEscape(jobID) + '"]');
+    const sourceTitle = document.getElementById('inspector-title-' + jobID);
+    const viewer = document.getElementById('mobile-log-viewer');
+    const meta = document.getElementById('mobile-log-meta');
+    const title = document.getElementById('mobile-log-title');
+    if (viewer) viewer.textContent = source ? source.textContent : 'No log lines yet.';
+    if (meta) meta.textContent = sourceMeta ? sourceMeta.textContent : '';
+    if (title) title.textContent = sourceTitle ? sourceTitle.textContent : 'Job Logs';
+    if (typeof reader.showModal === 'function') {
+      reader.showModal();
+    } else {
+      reader.setAttribute('open', 'open');
+    }
+    if (viewer) viewer.scrollTop = viewer.scrollHeight;
+    refreshSelectedJobLog();
+  }
+
+  function closeMobileLogReader() {
+    const reader = document.getElementById('mobile-log-reader');
+    if (!reader) return;
+    if (typeof reader.close === 'function') {
+      reader.close();
+    } else {
+      reader.removeAttribute('open');
+    }
+  }
+
+  function toggleMobileLogWrap() {
+    const viewer = document.getElementById('mobile-log-viewer');
+    const button = document.getElementById('mobile-log-wrap-toggle');
+    if (!viewer || !button) return;
+    const nowrap = viewer.classList.toggle('nowrap');
+    button.setAttribute('aria-pressed', nowrap ? 'false' : 'true');
+    button.textContent = nowrap ? 'No wrap' : 'Wrap lines';
+  }
+
+  function syncResponsiveDisclosures() {
+    const narrow = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+    document.querySelectorAll('.config-transfer-disclosure').forEach(function(details) {
+      if (narrow) {
+        details.removeAttribute('open');
+      } else {
+        details.setAttribute('open', 'open');
+      }
+    });
+  }
+
+  syncResponsiveDisclosures();
+  window.addEventListener('resize', syncResponsiveDisclosures);
 
   async function refreshActiveLog() {
     await refreshSelectedJobLog();
@@ -2645,6 +3031,7 @@
     setValue('strategy-name', '');
     setValue('strategy-notes', '');
     document.querySelectorAll('#strategy-template-ids input[name="template_ids"]').forEach(function(input) { input.checked = false; });
+    savedStrategyTemplateSignature = '';
     updateStrategyOrder();
     const result = document.getElementById('strategy-result');
     if (result) result.textContent = '';
@@ -3065,6 +3452,7 @@
   }
 
   let pendingStrategyRun = null;
+  let savedStrategyTemplateSignature = '';
 
   async function editStrategy(id) {
     try {
@@ -3076,6 +3464,7 @@
       document.querySelectorAll('#strategy-template-ids input[name="template_ids"]').forEach(function(input) {
         input.checked = selected.has(input.value);
       });
+      savedStrategyTemplateSignature = selectedTemplateSignature();
       updateStrategyOrder();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -3208,6 +3597,7 @@
     const selected = Array.from(list.querySelectorAll('input[name="template_ids"]:checked'));
     if (!selected.length) {
       output.innerHTML = '<div class="empty-state">No templates selected.</div>';
+      renderStrategyBatchPreview();
       return;
     }
     output.innerHTML = '';
@@ -3225,6 +3615,7 @@
       row.appendChild(text);
       output.appendChild(row);
     });
+    renderStrategyBatchPreview();
   }
 
   const strategyTemplateList = document.getElementById('strategy-template-ids');
@@ -3256,6 +3647,143 @@
     return document.querySelector('input[name="bulk-lang-mode"]:checked')?.value === 'update';
   }
 
+  function selectedStrategyTemplates() {
+    const list = document.getElementById('strategy-template-ids');
+    if (!list) return [];
+    return Array.from(list.querySelectorAll('input[name="template_ids"]:checked')).map(function(input) {
+      const choice = input.closest('.strategy-template-choice');
+      return {
+        id: input.value,
+        name: choice?.querySelector('.item-title')?.textContent || input.value
+      };
+    });
+  }
+
+  function selectedTemplateSignature() {
+    return selectedStrategyTemplates().map(function(tpl) { return tpl.id; }).join('|');
+  }
+
+  function strategyBatchSelectionDirty() {
+    const strategyID = formValue('strategy-edit-id');
+    return !!strategyID && savedStrategyTemplateSignature !== selectedTemplateSignature();
+  }
+
+  function currentStrategyBatchTab() {
+    return document.getElementById('strategy-batch-tab-dedup')?.classList.contains('active') ? 'dedup' : 'language';
+  }
+
+  function setStrategyBatchTab(tab) {
+    tab = tab === 'dedup' ? 'dedup' : 'language';
+    const languageTab = document.getElementById('strategy-batch-tab-language');
+    const dedupTab = document.getElementById('strategy-batch-tab-dedup');
+    const languagePanel = document.getElementById('strategy-batch-language-panel');
+    const dedupPanel = document.getElementById('strategy-batch-dedup-panel');
+    const languageResult = document.getElementById('bulk-lang-result');
+    const dedupResult = document.getElementById('bulk-dedup-result');
+    const languageApply = document.getElementById('strategy-batch-apply-language');
+    const dedupApply = document.getElementById('strategy-batch-apply-dedup');
+    if (languageTab) {
+      languageTab.classList.toggle('active', tab === 'language');
+      languageTab.setAttribute('aria-selected', tab === 'language' ? 'true' : 'false');
+    }
+    if (dedupTab) {
+      dedupTab.classList.toggle('active', tab === 'dedup');
+      dedupTab.setAttribute('aria-selected', tab === 'dedup' ? 'true' : 'false');
+    }
+    if (languagePanel) languagePanel.hidden = tab !== 'language';
+    if (dedupPanel) dedupPanel.hidden = tab !== 'dedup';
+    if (languageResult) languageResult.hidden = tab !== 'language';
+    if (dedupResult) dedupResult.hidden = tab !== 'dedup';
+    if (languageApply) languageApply.hidden = tab !== 'language';
+    if (dedupApply) dedupApply.hidden = tab !== 'dedup';
+    renderStrategyBatchPreview();
+  }
+
+  function renderStrategyBatchPreview() {
+    const list = document.getElementById('strategy-batch-preview-list');
+    const note = document.getElementById('strategy-batch-preview-note');
+    const empty = document.getElementById('strategy-batch-empty');
+    const languageApply = document.getElementById('strategy-batch-apply-language');
+    const dedupApply = document.getElementById('strategy-batch-apply-dedup');
+    const strategyID = formValue('strategy-edit-id');
+    const strategyName = formValue('strategy-name') || 'Unsaved strategy';
+    const templates = selectedStrategyTemplates();
+    const tab = currentStrategyBatchTab();
+    const copyMode = !bulkLangUpdatesExisting();
+    const suffix = formValue('bulk-lang-suffix') || '<suffix>';
+    const selectionDirty = strategyBatchSelectionDirty();
+    const canApply = !!strategyID && templates.length > 0 && !selectionDirty;
+    const subtitle = document.getElementById('strategy-batch-subtitle');
+    if (subtitle) subtitle.textContent = strategyID ? strategyName + ' - ' + templates.length + ' templates' : 'Load or save a strategy before using batch tools.';
+    if (empty) {
+      empty.hidden = !!strategyID && !selectionDirty;
+      empty.textContent = !strategyID ? 'Load or save a strategy before using batch tools.' : 'Save the strategy before applying batch tools to the changed template selection.';
+    }
+    if (languageApply) {
+      languageApply.disabled = !canApply;
+      languageApply.textContent = 'Apply language to ' + templates.length + ' template' + (templates.length === 1 ? '' : 's');
+    }
+    if (dedupApply) {
+      dedupApply.disabled = !canApply;
+      dedupApply.textContent = 'Apply dedup to ' + templates.length + ' template' + (templates.length === 1 ? '' : 's');
+    }
+    if (note) {
+      if (!templates.length) {
+        note.textContent = 'No templates selected.';
+      } else if (selectionDirty) {
+        note.textContent = 'Save this strategy first. Batch tools apply to the saved template set.';
+      } else if (tab === 'language' && copyMode) {
+        note.textContent = 'Previewing copied template names.';
+      } else {
+        note.textContent = 'These templates will be updated in place.';
+      }
+    }
+    if (!list) return;
+    list.innerHTML = '';
+    if (!templates.length) {
+      list.innerHTML = '<div class="empty-state">No templates selected.</div>';
+      return;
+    }
+    templates.forEach(function(tpl, index) {
+      const row = document.createElement('div');
+      row.className = 'strategy-batch-preview-item';
+      const num = document.createElement('div');
+      num.className = 'order-index';
+      num.textContent = String(index + 1);
+      const text = document.createElement('div');
+      text.innerHTML = '<div class="item-title"></div><div class="item-meta"></div><code></code>';
+      text.querySelector('.item-title').textContent = tpl.name;
+      text.querySelector('.item-meta').textContent = tab === 'language' && copyMode ? 'Copy name: ' + tpl.name + ' ' + suffix : 'Updates original template';
+      text.querySelector('code').textContent = tpl.id;
+      row.appendChild(num);
+      row.appendChild(text);
+      list.appendChild(row);
+    });
+  }
+
+  function openStrategyBatchTools() {
+    const modal = document.getElementById('strategy-batch-modal');
+    if (!modal) return;
+    setStrategyBatchTab(currentStrategyBatchTab());
+    syncBulkLangMode();
+    renderStrategyBatchPreview();
+    if (typeof modal.showModal === 'function') {
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', 'open');
+    }
+  }
+
+  function closeStrategyBatchTools() {
+    const modal = document.getElementById('strategy-batch-modal');
+    if (!modal) return;
+    if (typeof modal.close === 'function') {
+      modal.close();
+    } else {
+      modal.removeAttribute('open');
+    }
+  }
+
   function syncBulkLangMode() {
     const updatesExisting = bulkLangUpdatesExisting();
     const suffixField = document.getElementById('bulk-lang-suffix-field');
@@ -3277,16 +3805,23 @@
         : 'New templates will be named: <original name> <suffix>';
     }
     if (warning) warning.hidden = !updatesExisting;
+    renderStrategyBatchPreview();
   }
   document.querySelectorAll('input[name="bulk-lang-mode"]').forEach(function(input) {
     input.addEventListener('change', syncBulkLangMode);
   });
+  document.getElementById('bulk-lang-suffix')?.addEventListener('input', renderStrategyBatchPreview);
+  document.getElementById('strategy-name')?.addEventListener('input', renderStrategyBatchPreview);
   syncBulkLangMode();
 
 	  async function applyBulkLang() {
 	    const strategyID = formValue('strategy-edit-id');
 	    if (!strategyID) {
       alert('Please load or save a strategy first.');
+      return;
+    }
+    if (strategyBatchSelectionDirty()) {
+      alert('Save the strategy before applying batch tools to the changed template selection.');
       return;
     }
     const lang = formValue('bulk-lang-select');
@@ -3316,6 +3851,7 @@
         result.style.color = '#027a48';
         result.textContent = payload.message || 'Language updated.';
       }
+      renderStrategyBatchPreview();
     } catch (err) {
       if (result) {
         result.style.color = '#b42318';
@@ -3328,6 +3864,10 @@
     const strategyID = formValue('strategy-edit-id');
     if (!strategyID) {
       alert('Please load or save a strategy first.');
+      return;
+    }
+    if (strategyBatchSelectionDirty()) {
+      alert('Save the strategy before applying batch tools to the changed template selection.');
       return;
     }
     const scope = formValue('bulk-dedup-select') || 'off';
@@ -3346,6 +3886,7 @@
         result.style.color = '#027a48';
         result.textContent = payload.message || 'Dedup scope updated.';
       }
+      renderStrategyBatchPreview();
     } catch (err) {
       if (result) {
         result.style.color = '#b42318';
