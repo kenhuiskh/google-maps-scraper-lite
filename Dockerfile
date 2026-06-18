@@ -25,6 +25,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
+    tini \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -56,6 +57,8 @@ COPY --from=builder /ms-playwright /ms-playwright
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# tini as PID 1 reaps orphaned Chromium/Node driver processes left behind when a
+# scraper subprocess is OOM-killed or crashes without running its deferred cleanup.
 # Default: serve the control UI. Override CMD to run a one-shot scrape.
-ENTRYPOINT ["/app/google-maps-scraper-lite"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/google-maps-scraper-lite"]
 CMD ["-state-db", "/data/gmdata/scraper-state.sqlite", "-control-addr", "0.0.0.0:8080"]

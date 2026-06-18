@@ -94,6 +94,14 @@ func startControlServer(ctx context.Context, addr string, store *gmaps.JobStore,
 	mux := http.NewServeMux()
 	registerControlHandlers(mux, store, stateDB, launchResume, launchStart)
 	if launchStart != nil {
+		// A prior process may have been killed (OOM, container restart) mid-job,
+		// leaving jobs stuck in starting/running which blocks the queue forever.
+		// Reset them to resumable before the scheduler starts.
+		if n, err := store.RecoverInterruptedJobs(ctx, errors.New("process restarted; job interrupted")); err != nil {
+			log.Printf("recover interrupted jobs: %v", err)
+		} else if n > 0 {
+			log.Printf("recovered %d interrupted job(s) from previous run", n)
+		}
 		go runJobQueue(ctx, store, stateDB, launchStart, 30*time.Second)
 	}
 

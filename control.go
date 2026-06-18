@@ -603,15 +603,40 @@ func newProcessStartLauncher(stateDB string) startLauncher {
 	}
 }
 
+// jobTimeout is the wall-clock limit for a spawned scraper subprocess. A hung
+// scrape would otherwise hold its Chromium open forever. Override with the
+// SCRAPER_JOB_TIMEOUT env var (Go duration, e.g. "2h"); set to "0" to disable.
+func jobTimeout() time.Duration {
+	const def = 4 * time.Hour
+	v := strings.TrimSpace(os.Getenv("SCRAPER_JOB_TIMEOUT"))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("invalid SCRAPER_JOB_TIMEOUT=%q: %v; using %s", v, err, def)
+		return def
+	}
+	return d
+}
+
 func spawnProcess(exe string, args []string, logPath string) error {
-	cmd := exec.Command(exe, args...)
+	// exec.CommandContext sends SIGKILL when the context expires, so a stuck
+	// subprocess (and the Chromium it owns) cannot linger past the timeout.
+	procCtx, cancel := context.WithCancel(context.Background())
+	if to := jobTimeout(); to > 0 {
+		procCtx, cancel = context.WithTimeout(context.Background(), to)
+	}
+	cmd := exec.CommandContext(procCtx, exe, args...)
 	var logFile *os.File
 	if logPath != "" {
 		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+			cancel()
 			return err
 		}
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
+			cancel()
 			return err
 		}
 		logFile = f
@@ -624,6 +649,7 @@ func spawnProcess(exe string, args []string, logPath string) error {
 	cmd.Stdin = nil
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
+		cancel()
 		if logFile != nil {
 			_ = logFile.Close()
 		}
@@ -631,13 +657,18 @@ func spawnProcess(exe string, args []string, logPath string) error {
 	}
 	log.Printf("started process: %s %s (pid %d)", exe, strings.Join(args, " "), cmd.Process.Pid)
 	go func() {
+		defer cancel()
 		defer func() {
 			if logFile != nil {
 				_ = logFile.Close()
 			}
 		}()
 		if err := cmd.Wait(); err != nil {
-			log.Printf("process pid %d exited: %v", cmd.Process.Pid, err)
+			if procCtx.Err() == context.DeadlineExceeded {
+				log.Printf("process pid %d killed: exceeded job timeout", cmd.Process.Pid)
+			} else {
+				log.Printf("process pid %d exited: %v", cmd.Process.Pid, err)
+			}
 		}
 	}()
 	return nil
