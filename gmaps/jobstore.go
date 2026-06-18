@@ -1889,6 +1889,45 @@ func (s *JobStore) RecoverStaleActiveJob(ctx context.Context, jobID string, stal
 	return nil
 }
 
+// RecoverInterruptedJobs resets jobs left in an active state (starting/running)
+// by a crashed or killed process — e.g. after a container restart. Each is
+// reset via RecoverStaleActiveJob so partially-scraped work becomes resumable
+// instead of permanently blocking the queue (which gates on no active job).
+// Returns the number of jobs recovered.
+func (s *JobStore) RecoverInterruptedJobs(ctx context.Context, reason error) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs WHERE status IN (?, ?)`,
+		JobStatusStarting, JobStatusRunning)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+
+	var recovered int
+	for _, id := range ids {
+		if err := s.RecoverStaleActiveJob(ctx, id, reason); err != nil {
+			if errors.Is(err, ErrJobNotStale) {
+				continue
+			}
+			return recovered, err
+		}
+		recovered++
+	}
+	return recovered, nil
+}
+
 func (s *JobStore) jobStatus(ctx context.Context, jobID string) (string, error) {
 	var status string
 	if err := s.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, jobID).Scan(&status); err != nil {

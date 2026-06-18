@@ -185,6 +185,55 @@ func TestJobStoreResetInProgress(t *testing.T) {
 	}
 }
 
+func TestJobStoreRecoverInterruptedJobs(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	// A running job with in-progress work, as if a process died mid-scrape.
+	runningID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1", "u2"})
+	if err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
+	if err := store.StartJob(ctx, runningID); err != nil {
+		t.Fatalf("start running job: %v", err)
+	}
+	if _, err := store.ClaimNextURL(ctx, runningID); err != nil {
+		t.Fatalf("claim url: %v", err)
+	}
+
+	n, err := store.RecoverInterruptedJobs(ctx, errors.New("process restarted"))
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("recovered = %d, want 1", n)
+	}
+
+	job, err := store.GetJob(ctx, runningID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.Status != JobStatusPaused {
+		t.Fatalf("status = %q, want %q", job.Status, JobStatusPaused)
+	}
+	stats, err := store.JobStats(ctx, runningID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.InProgress != 0 || stats.Pending != 2 {
+		t.Fatalf("after recover in_progress=%d pending=%d, want 0/2", stats.InProgress, stats.Pending)
+	}
+
+	// Idempotent: nothing active left to recover.
+	n, err = store.RecoverInterruptedJobs(ctx, errors.New("again"))
+	if err != nil {
+		t.Fatalf("recover second: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("second recover = %d, want 0", n)
+	}
+}
+
 func TestJobStorePauseFlagBlocksClaim(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
