@@ -222,3 +222,221 @@ func TestScraperAutoRecoverRequeuesFailedURL(t *testing.T) {
 		t.Fatalf("stats = %+v, want all done without failed URLs", stats)
 	}
 }
+
+func TestScraperTransientNavErrorRetriesNoRecovery(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	attempts := 0
+	s := Scraper{
+		Config: Config{
+			Concurrency:      1,
+			JobID:            jobID,
+			AutoRecover:      true,
+			RecoveryMinDelay: time.Millisecond,
+			RecoveryMaxDelay: time.Millisecond,
+			BrowseStartDelay: time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("Frame.Goto: Timeout 30000ms exceeded")
+			}
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 (in-process retry)", attempts)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Pending != 0 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 0 pending / 0 failed", stats)
+	}
+	// Transient retry handled on the same claim: no requeue should have occurred.
+	es, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("exec stats: %v", err)
+	}
+	if es.RetryEvents != 0 {
+		t.Fatalf("RetryEvents = %d, want 0 (no requeue/recovery)", es.RetryEvents)
+	}
+}
+
+func TestScraperBotBlockTriggersRecovery(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1", "u2"})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	attempts := make(map[string]int)
+	firstBlocked := false
+	s := Scraper{
+		Config: Config{
+			Concurrency:      1,
+			JobID:            jobID,
+			AutoRecover:      true,
+			RecoveryMinDelay: time.Millisecond,
+			RecoveryMaxDelay: time.Millisecond,
+			BrowseStartDelay: time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			attempts[placeURL]++
+			if !firstBlocked {
+				firstBlocked = true
+				return nil, fmt.Errorf("bot block: /sorry/: %w", ErrBotBlocked)
+			}
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 2 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want 2 done / 0 failed", stats)
+	}
+	es, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("exec stats: %v", err)
+	}
+	if es.RetryEvents < 1 {
+		t.Fatalf("RetryEvents = %d, want >= 1 (bot-block requeue)", es.RetryEvents)
+	}
+}
+
+func TestScraperConsecutiveFailuresBackstop(t *testing.T) {
+	t.Run("autoRecoverOff_returnsSessionBlocked", func(t *testing.T) {
+		ctx := context.Background()
+		store := newTestJobStore(t)
+		urls := make([]string, 10)
+		for i := range urls {
+			urls[i] = fmt.Sprintf("u%d", i+1)
+		}
+		jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, urls)
+		if err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+
+		s := Scraper{
+			Config: Config{Concurrency: 1, JobID: jobID},
+			Pool:   fakePagePool{},
+			Store:  store,
+			ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+				return nil, errors.New("parse entry JSON: boom")
+			},
+		}
+
+		out := make(chan PlaceResult, 2)
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- s.Run(ctx, nil, out)
+		}()
+		for range out {
+		}
+		if err := <-errCh; !errors.Is(err, ErrSessionBlocked) {
+			t.Fatalf("run error = %v, want ErrSessionBlocked", err)
+		}
+	})
+
+	t.Run("autoRecoverOn_backstopTriggersRecovery", func(t *testing.T) {
+		ctx := context.Background()
+		store := newTestJobStore(t)
+		jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+		if err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+
+		attempts := 0
+		s := Scraper{
+			Config: Config{
+				Concurrency:      1,
+				JobID:            jobID,
+				AutoRecover:      true,
+				RecoveryMinDelay: time.Millisecond,
+				RecoveryMaxDelay: time.Millisecond,
+				BrowseStartDelay: time.Millisecond,
+			},
+			Pool:  fakePagePool{},
+			Store: store,
+			ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+				attempts++
+				if attempts <= int(blockThreshold) {
+					return nil, errors.New("parse entry JSON: boom")
+				}
+				return &Entry{PlaceID: placeURL}, nil
+			},
+		}
+
+		out := make(chan PlaceResult, 2)
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- s.Run(ctx, nil, out)
+		}()
+		for result := range out {
+			if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+				t.Fatalf("mark done: %v", err)
+			}
+		}
+		if err := <-errCh; err != nil {
+			t.Fatalf("run error = %v, want nil", err)
+		}
+		if attempts != int(blockThreshold)+1 {
+			t.Fatalf("attempts = %d, want %d", attempts, blockThreshold+1)
+		}
+		stats, err := store.JobStats(ctx, jobID)
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		if stats.Done != 1 {
+			t.Fatalf("stats = %+v, want 1 done", stats)
+		}
+		es, err := store.JobExecutionStats(ctx, jobID)
+		if err != nil {
+			t.Fatalf("exec stats: %v", err)
+		}
+		if es.RetryEvents < int(blockThreshold) {
+			t.Fatalf("RetryEvents = %d, want >= %d", es.RetryEvents, blockThreshold)
+		}
+	})
+}

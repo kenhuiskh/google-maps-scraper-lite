@@ -891,7 +891,7 @@ func TestJobStoreMigratesExistingSQLiteSchema(t *testing.T) {
 			t.Fatalf("jobs.%s was not migrated", column)
 		}
 	}
-	for _, table := range []string{"strategies", "strategy_templates", "job_execution_stats"} {
+	for _, table := range []string{"strategies", "strategy_templates", "job_execution_stats", "job_processes"} {
 		if !testTableExists(t, store.db, table) {
 			t.Fatalf("%s table was not created", table)
 		}
@@ -1110,5 +1110,177 @@ func TestJobStoreClaimResumeRejectsStartingJob(t *testing.T) {
 	}
 	if _, err := store.ClaimResume(ctx, jobID); !errors.Is(err, ErrJobNotResumable) {
 		t.Fatalf("claim starting job error = %v, want ErrJobNotResumable", err)
+	}
+}
+
+func TestBatchDeleteJobsPartial(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	doneID, err := store.CreateStartingJob(ctx, []string{"done"}, nil)
+	if err != nil {
+		t.Fatalf("create done: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, doneID, JobStatusDone, nil); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+	activeID, err := store.CreateStartingJob(ctx, []string{"active"}, nil)
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	if err := store.StartJob(ctx, activeID); err != nil {
+		t.Fatalf("start active: %v", err)
+	}
+
+	results, err := store.BatchDeleteJobs(ctx, []string{doneID, activeID, "missing"})
+	if err != nil {
+		t.Fatalf("batch delete: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range results {
+		got[r.ID] = r.Status
+	}
+	if got[doneID] != "deleted" {
+		t.Fatalf("done result = %q, want deleted", got[doneID])
+	}
+	if got[activeID] != "skipped_active" {
+		t.Fatalf("active result = %q, want skipped_active", got[activeID])
+	}
+	if got["missing"] != "not_found" {
+		t.Fatalf("missing result = %q, want not_found", got["missing"])
+	}
+}
+
+func TestDeleteStrategyCascadeKeepsSharedTemplate(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	shared, err := store.SaveJobTemplate(ctx, "shared", map[string]any{"q": "shared"})
+	if err != nil {
+		t.Fatalf("save shared: %v", err)
+	}
+	solo, err := store.SaveJobTemplate(ctx, "solo", map[string]any{"q": "solo"})
+	if err != nil {
+		t.Fatalf("save solo: %v", err)
+	}
+	stratA, err := store.SaveStrategy(ctx, "", "A", "", []string{shared, solo})
+	if err != nil {
+		t.Fatalf("save A: %v", err)
+	}
+	stratB, err := store.SaveStrategy(ctx, "", "B", "", []string{shared})
+	if err != nil {
+		t.Fatalf("save B: %v", err)
+	}
+
+	if err := store.DeleteStrategy(ctx, stratA, true); err != nil {
+		t.Fatalf("delete A cascade: %v", err)
+	}
+
+	if _, err := store.GetStrategy(ctx, stratA); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("strategy A still present: %v", err)
+	}
+	if _, err := store.GetStrategy(ctx, stratB); err != nil {
+		t.Fatalf("strategy B should survive: %v", err)
+	}
+	if _, err := store.GetJobTemplate(ctx, shared); err != nil {
+		t.Fatalf("shared template should survive: %v", err)
+	}
+	if _, err := store.GetJobTemplate(ctx, solo); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("solo template should be deleted: %v", err)
+	}
+}
+
+func TestDeleteStrategyNoCascadeKeepsTemplates(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	tpl, err := store.SaveJobTemplate(ctx, "t", map[string]any{"q": "t"})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	strat, err := store.SaveStrategy(ctx, "", "S", "", []string{tpl})
+	if err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+	if err := store.DeleteStrategy(ctx, strat, false); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := store.GetJobTemplate(ctx, tpl); err != nil {
+		t.Fatalf("template should survive non-cascade delete: %v", err)
+	}
+}
+
+func TestBatchDeleteJobTemplates(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	referenced, err := store.SaveJobTemplate(ctx, "ref", map[string]any{"q": "ref"})
+	if err != nil {
+		t.Fatalf("save ref: %v", err)
+	}
+	free, err := store.SaveJobTemplate(ctx, "free", map[string]any{"q": "free"})
+	if err != nil {
+		t.Fatalf("save free: %v", err)
+	}
+	if _, err := store.SaveStrategy(ctx, "", "S", "", []string{referenced}); err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+
+	results, err := store.BatchDeleteJobTemplates(ctx, []string{free, referenced, "missing"})
+	if err != nil {
+		t.Fatalf("batch delete templates: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range results {
+		got[r.ID] = r.Status
+	}
+	if got[free] != "deleted" {
+		t.Fatalf("free = %q, want deleted", got[free])
+	}
+	if got[referenced] != "skipped_referenced" {
+		t.Fatalf("referenced = %q, want skipped_referenced", got[referenced])
+	}
+	if got["missing"] != "not_found" {
+		t.Fatalf("missing = %q, want not_found", got["missing"])
+	}
+}
+
+func TestJobProcessRegistryRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+
+	if err := store.RecordJobProcess(ctx, "job-1", 1234, 1234); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if err := store.RecordJobProcess(ctx, "job-2", 5678, 5678); err != nil {
+		t.Fatalf("record 2: %v", err)
+	}
+	procs, err := store.ListJobProcesses(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(procs) != 2 {
+		t.Fatalf("len = %d, want 2", len(procs))
+	}
+	byID := map[string]JobProcess{}
+	for _, p := range procs {
+		byID[p.JobID] = p
+	}
+	if byID["job-1"].PID != 1234 || byID["job-1"].PGID != 1234 {
+		t.Fatalf("job-1 = %+v", byID["job-1"])
+	}
+	if byID["job-1"].StartedAt.IsZero() {
+		t.Fatalf("job-1 started_at not set")
+	}
+
+	if err := store.DeleteJobProcess(ctx, "job-1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	procs, err = store.ListJobProcesses(ctx)
+	if err != nil {
+		t.Fatalf("list 2: %v", err)
+	}
+	if len(procs) != 1 || procs[0].JobID != "job-2" {
+		t.Fatalf("after delete = %+v", procs)
 	}
 }

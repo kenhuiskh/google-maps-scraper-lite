@@ -31,13 +31,14 @@ const (
 )
 
 var (
-	ErrJobPaused       = errors.New("scraper: job pause requested")
-	ErrNoPendingURL    = errors.New("scraper: no pending URLs")
-	ErrJobNotResumable = errors.New("scraper: job is already running or done")
-	ErrActiveJobExists = errors.New("scraper: a job is already starting or running")
-	ErrJobNotPending   = errors.New("scraper: job is not pending")
-	ErrJobNotStale     = errors.New("scraper: job is not starting or running")
-	ErrJobNotDeletable = errors.New("scraper: job must be pending, paused, blocked, done, or failed to delete")
+	ErrJobPaused          = errors.New("scraper: job pause requested")
+	ErrNoPendingURL       = errors.New("scraper: no pending URLs")
+	ErrJobNotResumable    = errors.New("scraper: job is already running or done")
+	ErrActiveJobExists    = errors.New("scraper: a job is already starting or running")
+	ErrJobNotPending      = errors.New("scraper: job is not pending")
+	ErrJobNotStale        = errors.New("scraper: job is not starting or running")
+	ErrJobNotDeletable    = errors.New("scraper: job must be pending, paused, blocked, done, or failed to delete")
+	ErrTemplateReferenced = errors.New("scraper: template is referenced by a strategy")
 
 	ErrConfigExportInvalid  = errors.New("config export: invalid selection")
 	ErrConfigImportInvalid  = errors.New("config import: invalid payload")
@@ -47,6 +48,10 @@ var (
 // ErrSessionBlocked is returned by Scraper.Run when consecutive place-scrape
 // failures indicate the Playwright session has been rate-limited by Google.
 var ErrSessionBlocked = errors.New("scraper: session blocked by Google")
+
+// ErrBotBlocked is returned when Google serves a captcha/consent/sorry wall
+// or a 429, indicating the session needs the long recovery pause.
+var ErrBotBlocked = errors.New("scraper: bot block detected by Google")
 
 // blockThreshold is the number of consecutive failures across all workers
 // that triggers an ErrSessionBlocked return.
@@ -305,6 +310,12 @@ func (s *JobStore) migrate(ctx context.Context) error {
 			write_errors INTEGER NOT NULL DEFAULT 0,
 			retry_events INTEGER NOT NULL DEFAULT 0,
 			updated_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS job_processes (
+			job_id TEXT PRIMARY KEY,
+			pid INTEGER NOT NULL,
+			pgid INTEGER NOT NULL,
+			started_at DATETIME NOT NULL
 		)`,
 		`PRAGMA user_version = 1`,
 	}
@@ -735,6 +746,81 @@ func (s *JobStore) DeleteJob(ctx context.Context, jobID string) error {
 	return nil
 }
 
+// JobDeleteResult reports the outcome of deleting one job in a batch.
+// Status is one of "deleted", "skipped_active", or "not_found".
+type JobDeleteResult struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// BatchDeleteJobs deletes each job by reusing DeleteJob, which enforces the
+// active-job guard. Active (starting/running) jobs are reported as
+// "skipped_active", unknown ids as "not_found"; the rest as "deleted". A
+// non-nil error is returned only for an unexpected DB failure, not for the
+// per-job logical outcomes.
+func (s *JobStore) BatchDeleteJobs(ctx context.Context, ids []string) ([]JobDeleteResult, error) {
+	results := make([]JobDeleteResult, 0, len(ids))
+	for _, id := range ids {
+		status := "deleted"
+		switch err := s.DeleteJob(ctx, id); {
+		case err == nil:
+		case errors.Is(err, ErrJobNotDeletable):
+			status = "skipped_active"
+		case errors.Is(err, sql.ErrNoRows):
+			status = "not_found"
+		default:
+			return nil, err
+		}
+		results = append(results, JobDeleteResult{ID: id, Status: status})
+	}
+	return results, nil
+}
+
+// JobProcess is a recorded subprocess (and its process group) spawned for a
+// job. The registry lets a new-job-start sweep reap leftover process groups
+// from previous or crashed jobs (and the Chromium children they own).
+type JobProcess struct {
+	JobID     string
+	PID       int
+	PGID      int
+	StartedAt time.Time
+}
+
+// RecordJobProcess stores (or replaces) the process-group registry row for a
+// job after its subprocess starts.
+func (s *JobStore) RecordJobProcess(ctx context.Context, jobID string, pid, pgid int) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO job_processes (job_id, pid, pgid, started_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(job_id) DO UPDATE SET pid = excluded.pid, pgid = excluded.pgid, started_at = excluded.started_at`,
+		jobID, pid, pgid, time.Now().UTC())
+	return err
+}
+
+// DeleteJobProcess removes a job's registry row after a clean exit.
+func (s *JobStore) DeleteJobProcess(ctx context.Context, jobID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM job_processes WHERE job_id = ?`, jobID)
+	return err
+}
+
+// ListJobProcesses returns all recorded process groups. After clean exits only
+// leaked groups remain.
+func (s *JobStore) ListJobProcesses(ctx context.Context) ([]JobProcess, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT job_id, pid, pgid, started_at FROM job_processes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var procs []JobProcess
+	for rows.Next() {
+		var p JobProcess
+		if err := rows.Scan(&p.JobID, &p.PID, &p.PGID, &p.StartedAt); err != nil {
+			return nil, err
+		}
+		procs = append(procs, p)
+	}
+	return procs, rows.Err()
+}
+
 const schedulerPausedKey = "scheduler_paused"
 
 // SchedulerPaused returns true when the job queue scheduler has been paused
@@ -1051,7 +1137,7 @@ func (s *JobStore) DeleteJobTemplate(ctx context.Context, id string) error {
 		return err
 	}
 	if refs > 0 {
-		return fmt.Errorf("template is used by %d strategy entries", refs)
+		return fmt.Errorf("%w: used by %d strategy entries", ErrTemplateReferenced, refs)
 	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM job_templates WHERE id = ?`, id)
 	if err != nil {
@@ -1061,6 +1147,35 @@ func (s *JobStore) DeleteJobTemplate(ctx context.Context, id string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// TemplateDeleteResult reports the outcome of deleting one template in a batch.
+// Status is one of "deleted", "skipped_referenced", or "not_found".
+type TemplateDeleteResult struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// BatchDeleteJobTemplates deletes each template by reusing DeleteJobTemplate,
+// which refuses templates still referenced by a strategy. Referenced templates
+// are reported as "skipped_referenced", unknown ids as "not_found"; the rest as
+// "deleted".
+func (s *JobStore) BatchDeleteJobTemplates(ctx context.Context, ids []string) ([]TemplateDeleteResult, error) {
+	results := make([]TemplateDeleteResult, 0, len(ids))
+	for _, id := range ids {
+		status := "deleted"
+		switch err := s.DeleteJobTemplate(ctx, id); {
+		case err == nil:
+		case errors.Is(err, sql.ErrNoRows):
+			status = "not_found"
+		case errors.Is(err, ErrTemplateReferenced):
+			status = "skipped_referenced"
+		default:
+			return nil, err
+		}
+		results = append(results, TemplateDeleteResult{ID: id, Status: status})
+	}
+	return results, nil
 }
 
 func (s *JobStore) SaveStrategy(ctx context.Context, id, name, notes string, templateIDs []string) (string, error) {
@@ -1565,15 +1680,64 @@ func upsertStrategyTx(ctx context.Context, tx *sql.Tx, id, name, notes string, t
 	return nil
 }
 
-func (s *JobStore) DeleteStrategy(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM strategies WHERE id = ?`, id)
+// DeleteStrategy removes a strategy. When deleteTemplates is true it also
+// deletes the strategy's job templates that become unreferenced once this
+// strategy's join rows are gone; templates still shared with another strategy
+// are kept (only their join row to this strategy is removed via the
+// strategy_templates ON DELETE CASCADE foreign key).
+func (s *JobStore) DeleteStrategy(ctx context.Context, id string, deleteTemplates bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var templateIDs []string
+	if deleteTemplates {
+		rows, err := tx.QueryContext(ctx, `SELECT template_id FROM strategy_templates WHERE strategy_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var tplID string
+			if err := rows.Scan(&tplID); err != nil {
+				rows.Close()
+				return err
+			}
+			templateIDs = append(templateIDs, tplID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM strategies WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+
+	// Strategy is gone (its join rows cascaded). Delete only templates that are
+	// now unreferenced; shared templates still have a row for another strategy.
+	for _, tplID := range templateIDs {
+		var refs int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM strategy_templates WHERE template_id = ?`, tplID).Scan(&refs); err != nil {
+			return err
+		}
+		if refs > 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM job_templates WHERE id = ?`, tplID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *JobStore) MarkStrategyUsed(ctx context.Context, id string) error {

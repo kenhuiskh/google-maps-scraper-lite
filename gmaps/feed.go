@@ -28,7 +28,7 @@ func scrapePlaceID(ctx context.Context, page playwright.Page, id string) ([]stri
 	target := PlaceIDToURL(id)
 
 	if _, err := page.Goto(target, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		WaitUntil: playwright.WaitUntilStateCommit,
 	}); err != nil {
 		return nil, fmt.Errorf("goto place-ID URL: %w", err)
 	}
@@ -64,7 +64,7 @@ func ScrapeFeed(ctx context.Context, page playwright.Page, query string, opts Fe
 	fullURL := buildFeedURL(query, opts)
 
 	if _, err := page.Goto(fullURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		WaitUntil: playwright.WaitUntilStateCommit,
 	}); err != nil {
 		return nil, fmt.Errorf("goto feed URL: %w", err)
 	}

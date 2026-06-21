@@ -1764,3 +1764,154 @@ func TestLanguagePostgresTables(t *testing.T) {
 		t.Fatalf("tables = %q/%q, want restaurants_zh_tw/restaurant_reviews_zh_tw", restaurant, review)
 	}
 }
+
+func TestBatchDeleteJobsEndpoint(t *testing.T) {
+	ctx := context.Background()
+	store := newStartStore(t)
+	stateDB := filepath.Join(t.TempDir(), "scraper-state.sqlite")
+
+	doneID, err := store.CreateStartingJob(ctx, []string{"done"}, nil)
+	if err != nil {
+		t.Fatalf("create done: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, doneID, gmaps.JobStatusDone, nil); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+	activeID, err := store.CreateStartingJob(ctx, []string{"active"}, nil)
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	if err := store.StartJob(ctx, activeID); err != nil {
+		t.Fatalf("start active: %v", err)
+	}
+
+	// Seed a log file for the deletable job to confirm cleanup.
+	logPath := jobLogPath(stateDB, doneID)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("log"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, stateDB, nil, noopStartLauncher)
+
+	payload, _ := json.Marshal(map[string]any{"job_ids": []string{doneID, activeID, "missing"}})
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs/batch-delete", bytes.NewReader(payload))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range resp.Results {
+		got[r.ID] = r.Status
+	}
+	if got[doneID] != "deleted" || got[activeID] != "skipped_active" || got["missing"] != "not_found" {
+		t.Fatalf("results = %+v", got)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("log file for deleted job should be removed, stat err = %v", err)
+	}
+}
+
+func TestBatchDeleteJobTemplatesEndpoint(t *testing.T) {
+	ctx := context.Background()
+	store := newStartStore(t)
+
+	referenced, err := store.SaveJobTemplate(ctx, "ref", map[string]any{"q": "ref"})
+	if err != nil {
+		t.Fatalf("save ref: %v", err)
+	}
+	free, err := store.SaveJobTemplate(ctx, "free", map[string]any{"q": "free"})
+	if err != nil {
+		t.Fatalf("save free: %v", err)
+	}
+	if _, err := store.SaveStrategy(ctx, "", "S", "", []string{referenced}); err != nil {
+		t.Fatalf("save strategy: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+
+	payload, _ := json.Marshal(map[string]any{"template_ids": []string{free, referenced}})
+	req := httptest.NewRequest(http.MethodPost, "/api/job-templates/batch-delete", bytes.NewReader(payload))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Results []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range resp.Results {
+		got[r.ID] = r.Status
+	}
+	if got[free] != "deleted" || got[referenced] != "skipped_referenced" {
+		t.Fatalf("results = %+v", got)
+	}
+}
+
+func TestSweepLeakedProcessesCleansRows(t *testing.T) {
+	ctx := context.Background()
+	store := newStartStore(t)
+
+	// A pid that does not match our exe/chrome (init/pid 1) must not be killed,
+	// only have its stale row cleaned.
+	if err := store.RecordJobProcess(ctx, "leaked", 1, 1); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	sweepLeakedProcesses(ctx, store)
+	procs, err := store.ListJobProcesses(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(procs) != 0 {
+		t.Fatalf("rows after sweep = %d, want 0", len(procs))
+	}
+}
+
+func TestJobsPanelRendersBatchSelectUI(t *testing.T) {
+	ctx := context.Background()
+	store := newStartStore(t)
+	doneID, err := store.CreateStartingJob(ctx, []string{"done"}, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, doneID, gmaps.JobStatusDone, nil); err != nil {
+		t.Fatalf("set done: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodGet, "/ui/jobs", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"jobs-bulk-bar", `class="job-select"`, "batchDeleteJobs"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("jobs panel missing %q", want)
+		}
+	}
+}
