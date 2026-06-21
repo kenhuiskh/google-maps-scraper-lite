@@ -43,10 +43,15 @@ type PlaceOptions struct {
 func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 	fullURL := placeURLWithLang(placeURL, opts.LangCode)
 
-	if _, err := page.Goto(fullURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-	}); err != nil {
+	resp, err := page.Goto(fullURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateCommit,
+	})
+	if err != nil {
 		return nil, fmt.Errorf("goto place URL: %w", err)
+	}
+
+	if berr := detectBotBlock(page, resp); berr != nil {
+		return nil, berr
 	}
 
 	clickRejectCookiesPlaywright(page)
@@ -83,6 +88,28 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 	}
 
 	return &entry, nil
+}
+
+// detectBotBlock returns a non-nil error wrapping ErrBotBlocked when the page
+// shows a Google captcha/consent/sorry wall, a 429 response, or "unusual
+// traffic" / "automated queries" text. Returns nil otherwise.
+func detectBotBlock(page playwright.Page, resp playwright.Response) error {
+	curURL := page.URL()
+	for _, marker := range []string{"/sorry/", "consent.google", "ipv4.google.com/sorry"} {
+		if strings.Contains(curURL, marker) {
+			return fmt.Errorf("bot block: url %q: %w", curURL, ErrBotBlocked)
+		}
+	}
+	if resp != nil && resp.Status() == 429 {
+		return fmt.Errorf("bot block: HTTP 429: %w", ErrBotBlocked)
+	}
+	if content, err := page.Content(); err == nil {
+		lc := strings.ToLower(content)
+		if strings.Contains(lc, "unusual traffic") || strings.Contains(lc, "automated queries") {
+			return fmt.Errorf("bot block: unusual-traffic page: %w", ErrBotBlocked)
+		}
+	}
+	return nil
 }
 
 func placeURLWithLang(placeURL, lang string) string {
@@ -449,7 +476,7 @@ func extractPlaceJSON(ctx context.Context, page playwright.Page) ([]byte, error)
 				// rate-limited or bot-detected response.
 				page.WaitForTimeout(float64(2000 * (attempt + 1)))
 				if _, reloadErr := page.Reload(playwright.PageReloadOptions{
-					WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+					WaitUntil: playwright.WaitUntilStateCommit,
 				}); reloadErr == nil {
 					continue
 				}

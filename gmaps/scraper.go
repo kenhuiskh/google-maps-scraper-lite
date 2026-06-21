@@ -14,6 +14,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// isTransientNavError reports whether err is a transient navigation/page error
+// that warrants a fast in-process retry rather than the long recovery pause.
+func isTransientNavError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Timeout") ||
+		strings.Contains(msg, "net::ERR") ||
+		strings.Contains(msg, "Page crashed")
+}
+
 // Config controls what the Scraper extracts.
 type Config struct {
 	Concurrency      int
@@ -146,7 +158,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 
 				page := s.Pool.AcquirePage()
 				entry, err := scrapePlace(gctx, page, claimed.URL, placeOpts)
-				for retry := 1; retry <= 2 && err != nil && strings.Contains(err.Error(), "Page crashed"); retry++ {
+				for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
 					s.Pool.ReleasePage(page)
 					if err := sleepContext(gctx, time.Duration(retry*2)*time.Second); err != nil {
 						return err
@@ -159,8 +171,18 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					if s.Config.AutoRecover {
 						_ = s.Store.RequeueURL(context.Background(), claimed.ID, err)
 						log.Printf("place scrape error %s: %v", claimed.URL, err)
-						if recoverErr := recovery.trigger(gctx, err, rng); recoverErr != nil {
-							return recoverErr
+						if errors.Is(err, ErrBotBlocked) {
+							log.Printf("bot block detected — auto recovery for job %s", jobID)
+							if recoverErr := recovery.trigger(gctx, err, rng); recoverErr != nil {
+								return recoverErr
+							}
+							continue
+						}
+						if atomic.AddInt64(&consecFails, 1) >= blockThreshold {
+							log.Printf("session blocked after %d consecutive failures — auto recovery for job %s", blockThreshold, jobID)
+							if recoverErr := recovery.trigger(gctx, err, rng); recoverErr != nil {
+								return recoverErr
+							}
 						}
 						continue
 					}
