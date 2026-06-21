@@ -199,6 +199,18 @@
       gap: 12px;
       align-items: center;
     }
+    .jobs-bulk-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      background: #f8fbff;
+    }
+    .jobs-bulk-bar[hidden] { display: none; }
+    .jobs-bulk-bar .jobs-bulk-all { display: flex; align-items: center; gap: 6px; }
+    .jobs-bulk-bar button { margin-left: auto; }
+    .job-select { cursor: pointer; }
     .jobs-list-head {
       padding: 8px 12px;
       color: var(--muted);
@@ -789,6 +801,10 @@
       align-items: center;
       min-width: 0;
     }
+    .compact-item-selectable { display: flex; align-items: flex-start; gap: 10px; }
+    .compact-item-selectable .compact-row { flex: 1; min-width: 0; }
+    .template-select-wrap { padding-top: 2px; }
+    .template-select { cursor: pointer; }
     .row-primary, .row-secondary { min-width: 0; display: grid; gap: 5px; align-content: start; }
     .row-title-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
     .row-title-line .item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1727,9 +1743,15 @@
       <a class="button-link secondary-button" href="/templates/editor">New Template</a>
     </div>
     <div class="panel-body">
+      <div id="templates-bulk-bar" class="jobs-bulk-bar" hidden>
+        <label class="jobs-bulk-all"><input type="checkbox" id="templates-select-all" onchange="onTemplatesSelectAll(this)"> Select all</label>
+        <span id="templates-bulk-count" class="muted tiny">0 selected</span>
+        <button type="button" class="danger-button" onclick="batchDeleteTemplates()">Delete selected</button>
+      </div>
       <div class="compact-list" id="template-list">
         {{range .Templates}}
-          <div class="compact-item" data-template-row="{{.ID}}">
+          <div class="compact-item compact-item-selectable" data-template-row="{{.ID}}">
+            <label class="template-select-wrap"><input type="checkbox" class="template-select" value="{{.ID}}" onchange="onTemplateSelectChange()" aria-label="Select template {{.Name}}"></label>
             <div class="compact-row">
               <div class="row-primary">
                 <div class="row-title-line">
@@ -2236,6 +2258,11 @@
   </div>
   <div class="jobs-workspace">
     <section class="jobs-list-shell" aria-label="Scraper jobs">
+      <div id="jobs-bulk-bar" class="jobs-bulk-bar" hidden>
+        <label class="jobs-bulk-all"><input type="checkbox" id="jobs-select-all" onchange="onJobsSelectAll(this)"> Select all</label>
+        <span id="jobs-bulk-count" class="muted tiny">0 selected</span>
+        <button type="button" class="action-danger" onclick="batchDeleteJobs()">Delete selected</button>
+      </div>
       <div class="jobs-list-head" aria-hidden="true">
         <span>Run</span>
         <span>Progress</span>
@@ -2360,6 +2387,7 @@
   <div data-job-id="{{.ID}}" class="job-row {{if .Active}}active-row{{end}}">
     <span class="job-main">
       <span class="job-runline">
+        {{if .DeletePath}}<input type="checkbox" class="job-select" value="{{.ID}}" onclick="event.stopPropagation()" onchange="onJobSelectChange()" aria-label="Select job {{.ID}}">{{end}}
         <span class="job-status-icon {{.StatusClass}}" title="{{.StatusHelp}}" aria-label="{{.StatusLabel}}">{{template "icon-status" .StatusLabel}}</span>
         <span class="job-summary">
           <span class="job-title-row">
@@ -2488,6 +2516,61 @@
       if (selectedLogJobID === jobID) {
         selectedLogJobID = '';
       }
+      await refreshPartials();
+    } catch (err) {
+      alert('Error: ' + err);
+    }
+  }
+
+  function jobSelectBoxes() {
+    return Array.prototype.slice.call(document.querySelectorAll('.job-select'));
+  }
+
+  function onJobSelectChange() {
+    const boxes = jobSelectBoxes();
+    const checked = boxes.filter(function(b) { return b.checked; });
+    const bar = document.getElementById('jobs-bulk-bar');
+    const count = document.getElementById('jobs-bulk-count');
+    const all = document.getElementById('jobs-select-all');
+    if (bar) bar.hidden = boxes.length === 0;
+    if (count) count.textContent = checked.length + ' selected';
+    if (all) all.checked = boxes.length > 0 && checked.length === boxes.length;
+  }
+
+  function onJobsSelectAll(source) {
+    jobSelectBoxes().forEach(function(b) { b.checked = source.checked; });
+    onJobSelectChange();
+  }
+
+  async function batchDeleteJobs() {
+    const ids = jobSelectBoxes().filter(function(b) { return b.checked; }).map(function(b) { return b.value; });
+    if (ids.length === 0) return;
+    if (!confirm('Delete ' + ids.length + ' job(s) and their scraped URL records? This cannot be undone.')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/jobs/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: ids })
+      });
+      if (!res.ok) {
+        alert('Error: ' + await res.text());
+        return;
+      }
+      const payload = JSON.parse(await res.text());
+      const counts = { deleted: 0, skipped_active: 0, not_found: 0 };
+      (payload.results || []).forEach(function(r) {
+        counts[r.status] = (counts[r.status] || 0) + 1;
+        if (r.status === 'deleted') {
+          if (selectedJobID === r.id) selectedJobID = '';
+          if (selectedLogJobID === r.id) selectedLogJobID = '';
+        }
+      });
+      const parts = [counts.deleted + ' deleted'];
+      if (counts.skipped_active) parts.push(counts.skipped_active + ' skipped (active)');
+      if (counts.not_found) parts.push(counts.not_found + ' not found');
+      alert(parts.join(', '));
       await refreshPartials();
     } catch (err) {
       alert('Error: ' + err);
@@ -3141,6 +3224,48 @@
     }
   }
 
+  function templateSelectBoxes() {
+    return Array.prototype.slice.call(document.querySelectorAll('.template-select'));
+  }
+
+  function onTemplateSelectChange() {
+    const boxes = templateSelectBoxes();
+    const checked = boxes.filter(function(b) { return b.checked; });
+    const bar = document.getElementById('templates-bulk-bar');
+    const count = document.getElementById('templates-bulk-count');
+    const all = document.getElementById('templates-select-all');
+    if (bar) bar.hidden = boxes.length === 0;
+    if (count) count.textContent = checked.length + ' selected';
+    if (all) all.checked = boxes.length > 0 && checked.length === boxes.length;
+  }
+
+  function onTemplatesSelectAll(source) {
+    templateSelectBoxes().forEach(function(b) { b.checked = source.checked; });
+    onTemplateSelectChange();
+  }
+
+  async function batchDeleteTemplates() {
+    const ids = templateSelectBoxes().filter(function(b) { return b.checked; }).map(function(b) { return b.value; });
+    if (ids.length === 0) return;
+    if (!confirm('Delete ' + ids.length + ' template(s)?')) return;
+    try {
+      const payload = await fetchJSON('/api/job-templates/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_ids: ids })
+      });
+      const counts = { deleted: 0, skipped_referenced: 0, not_found: 0 };
+      (payload.results || []).forEach(function(r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+      const parts = [counts.deleted + ' deleted'];
+      if (counts.skipped_referenced) parts.push(counts.skipped_referenced + ' skipped (used by a strategy)');
+      if (counts.not_found) parts.push(counts.not_found + ' not found');
+      alert(parts.join(', '));
+      location.reload();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  }
+
   function importSummaryText(summary) {
     const t = summary.templates || {};
     const s = summary.strategies || {};
@@ -3582,8 +3707,12 @@
 
   async function deleteStrategy(id) {
     if (!confirm('Delete this strategy?')) return;
+    // Offer to also delete its job templates. Templates shared with another
+    // strategy are always kept server-side.
+    const cascade = confirm('Also delete this strategy\'s job templates?\n\nOK = delete templates that are not shared with another strategy.\nCancel = keep all templates.');
     try {
-      await fetchJSON('/api/strategies/' + encodeURIComponent(id), { method: 'DELETE' });
+      const url = '/api/strategies/' + encodeURIComponent(id) + (cascade ? '?cascade=true' : '');
+      await fetchJSON(url, { method: 'DELETE' });
       location.reload();
     } catch (err) {
       alert('Error: ' + err.message);

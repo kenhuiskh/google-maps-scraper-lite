@@ -123,7 +123,7 @@ func main() {
 	log.Printf("using state db %s", *stateDB)
 
 	if *controlAddr != "" {
-		if _, err := startControlServer(ctx, *controlAddr, store, *stateDB, newProcessResumeLauncher(store, *stateDB), newProcessStartLauncher(*stateDB)); err != nil {
+		if _, err := startControlServer(ctx, *controlAddr, store, *stateDB, newProcessResumeLauncher(store, *stateDB), newProcessStartLauncher(store, *stateDB)); err != nil {
 			log.Fatalf("control server: %v", err)
 		}
 	}

@@ -588,18 +588,20 @@ func newProcessResumeLauncher(store *gmaps.JobStore, stateDB string) resumeLaunc
 			_ = store.SetJobStatus(context.Background(), jobID, gmaps.JobStatusFailed, err)
 			return err
 		}
-		return spawnProcess(exe, args, jobLogPath(stateDB, job.ID))
+		sweepLeakedProcesses(ctx, store)
+		return spawnProcess(store, job.ID, exe, args, jobLogPath(stateDB, job.ID))
 	}
 }
 
-func newProcessStartLauncher(stateDB string) startLauncher {
+func newProcessStartLauncher(store *gmaps.JobStore, stateDB string) startLauncher {
 	return func(ctx context.Context, p startParams) error {
 		exe, err := os.Executable()
 		if err != nil {
 			return err
 		}
 		args := buildStartArgs(p, stateDB)
-		return spawnProcess(exe, args, jobLogPath(stateDB, p.JobID))
+		sweepLeakedProcesses(ctx, store)
+		return spawnProcess(store, p.JobID, exe, args, jobLogPath(stateDB, p.JobID))
 	}
 }
 
@@ -620,7 +622,7 @@ func jobTimeout() time.Duration {
 	return d
 }
 
-func spawnProcess(exe string, args []string, logPath string) error {
+func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPath string) error {
 	// exec.CommandContext sends SIGKILL when the context expires, so a stuck
 	// subprocess (and the Chromium it owns) cannot linger past the timeout.
 	procCtx, cancel := context.WithCancel(context.Background())
@@ -628,6 +630,9 @@ func spawnProcess(exe string, args []string, logPath string) error {
 		procCtx, cancel = context.WithTimeout(context.Background(), to)
 	}
 	cmd := exec.CommandContext(procCtx, exe, args...)
+	// Own process group so the whole group (Go subprocess + Chromium children)
+	// can be reaped together; see proc_*.go.
+	setProcGroup(cmd)
 	var logFile *os.File
 	if logPath != "" {
 		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
@@ -655,7 +660,14 @@ func spawnProcess(exe string, args []string, logPath string) error {
 		}
 		return err
 	}
-	log.Printf("started process: %s %s (pid %d)", exe, strings.Join(args, " "), cmd.Process.Pid)
+	pid := cmd.Process.Pid
+	pgid := processGroupID(pid)
+	log.Printf("started process: %s %s (pid %d pgid %d)", exe, strings.Join(args, " "), pid, pgid)
+	if store != nil && jobID != "" {
+		if err := store.RecordJobProcess(context.Background(), jobID, pid, pgid); err != nil {
+			log.Printf("record job process %s: %v", jobID, err)
+		}
+	}
 	go func() {
 		defer cancel()
 		defer func() {
@@ -665,13 +677,52 @@ func spawnProcess(exe string, args []string, logPath string) error {
 		}()
 		if err := cmd.Wait(); err != nil {
 			if procCtx.Err() == context.DeadlineExceeded {
-				log.Printf("process pid %d killed: exceeded job timeout", cmd.Process.Pid)
+				log.Printf("process pid %d killed: exceeded job timeout", pid)
 			} else {
-				log.Printf("process pid %d exited: %v", cmd.Process.Pid, err)
+				log.Printf("process pid %d exited: %v", pid, err)
+			}
+		}
+		// Clean exit: belt-and-suspenders kill of any stragglers in our group,
+		// then drop the registry row so the table holds only leaked groups.
+		_ = killProcessGroup(pgid)
+		if store != nil && jobID != "" {
+			if err := store.DeleteJobProcess(context.Background(), jobID); err != nil {
+				log.Printf("delete job process %s: %v", jobID, err)
 			}
 		}
 	}()
 	return nil
+}
+
+// sweepLeakedProcesses kills leftover process groups recorded by previous or
+// crashed jobs. Jobs run serially, so this only runs when nothing legitimate
+// is active (new-job-start and control-server boot). Each row is validated
+// against PID reuse before killing; non-matching rows are just cleaned.
+func sweepLeakedProcesses(ctx context.Context, store *gmaps.JobStore) {
+	if store == nil {
+		return
+	}
+	procs, err := store.ListJobProcesses(ctx)
+	if err != nil {
+		log.Printf("sweep: list job processes: %v", err)
+		return
+	}
+	if len(procs) == 0 {
+		return
+	}
+	exe, _ := os.Executable()
+	for _, p := range procs {
+		if validateProcessMatch(p.PID, exe) {
+			if err := killProcessGroup(p.PGID); err != nil {
+				log.Printf("sweep: kill pgid %d (job %s): %v", p.PGID, p.JobID, err)
+			} else {
+				log.Printf("sweep: reaped leaked process group pgid %d (job %s)", p.PGID, p.JobID)
+			}
+		}
+		if err := store.DeleteJobProcess(ctx, p.JobID); err != nil {
+			log.Printf("sweep: delete job process %s: %v", p.JobID, err)
+		}
+	}
 }
 
 func controlLogDir(stateDB string) string {

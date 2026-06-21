@@ -102,6 +102,9 @@ func startControlServer(ctx context.Context, addr string, store *gmaps.JobStore,
 		} else if n > 0 {
 			log.Printf("recovered %d interrupted job(s) from previous run", n)
 		}
+		// Reap any process groups orphaned by a crash/restart before the queue
+		// starts spawning new jobs.
+		sweepLeakedProcesses(ctx, store)
 		go runJobQueue(ctx, store, stateDB, launchStart, 30*time.Second)
 	}
 
@@ -339,7 +342,7 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 				status := http.StatusInternalServerError
 				if errors.Is(err, sql.ErrNoRows) {
 					status = http.StatusNotFound
-				} else if strings.Contains(err.Error(), "strategy") {
+				} else if errors.Is(err, gmaps.ErrTemplateReferenced) {
 					status = http.StatusConflict
 				}
 				http.Error(w, err.Error(), status)
@@ -414,7 +417,8 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 				}
 				writeJSON(w, strategy)
 			case http.MethodDelete:
-				if err := store.DeleteStrategy(r.Context(), strategyID); err != nil {
+				cascade := r.URL.Query().Get("cascade") == "true"
+				if err := store.DeleteStrategy(r.Context(), strategyID, cascade); err != nil {
 					if errors.Is(err, sql.ErrNoRows) {
 						http.Error(w, err.Error(), http.StatusNotFound)
 						return
@@ -607,6 +611,52 @@ func registerControlHandlers(mux *http.ServeMux, store *gmaps.JobStore, stateDB 
 			return
 		}
 		writeJSON(w, map[string]string{"status": "resumed"})
+	})
+	mux.HandleFunc("/api/jobs/batch-delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			JobIDs []string `json:"job_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		results, err := store.BatchDeleteJobs(r.Context(), body.JobIDs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, res := range results {
+			if res.Status != "deleted" {
+				continue
+			}
+			if path := jobLogPath(stateDB, res.ID); path != "" {
+				_ = os.Remove(path)
+			}
+		}
+		writeJSON(w, map[string]any{"results": results})
+	})
+	mux.HandleFunc("/api/job-templates/batch-delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			TemplateIDs []string `json:"template_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		results, err := store.BatchDeleteJobTemplates(r.Context(), body.TemplateIDs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"results": results})
 	})
 	mux.HandleFunc("/api/jobs/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
