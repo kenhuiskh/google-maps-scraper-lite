@@ -60,7 +60,46 @@ type PagePool interface {
 type PlaceResult struct {
 	URLID int64
 	URL   string
+	Lang  string
 	Entry *Entry
+}
+
+// normalizeLangs parses a comma-separated language string into a normalized,
+// de-duplicated list (trimmed, lowercased, empties dropped). It always returns
+// at least one language, defaulting to "en". Collision validation (codes that
+// sanitize to the same output table/file suffix) is the caller's responsibility
+// at the CLI boundary.
+func normalizeLangs(s string) []string {
+	seen := make(map[string]struct{})
+	var langs []string
+	for _, part := range strings.Split(s, ",") {
+		lang := strings.ToLower(strings.TrimSpace(part))
+		if lang == "" {
+			continue
+		}
+		if _, ok := seen[lang]; ok {
+			continue
+		}
+		seen[lang] = struct{}{}
+		langs = append(langs, lang)
+	}
+	if len(langs) == 0 {
+		return []string{"en"}
+	}
+	return langs
+}
+
+// expandLangs fans out each canonical place URL into one QueuedURL per language.
+// Ordering is URL-major (all languages of a place are adjacent) so both
+// languages progress together under concurrent claims.
+func expandLangs(urls []string, langs []string) []QueuedURL {
+	out := make([]QueuedURL, 0, len(urls)*len(langs))
+	for _, u := range urls {
+		for _, lang := range langs {
+			out = append(out, QueuedURL{URL: u, Lang: lang})
+		}
+	}
+	return out
 }
 
 // Scraper orchestrates the full scraping pipeline.
@@ -85,18 +124,19 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 		scrapePlace = ScrapePlace
 	}
 
+	langs := normalizeLangs(s.Config.Lang)
 	feedOpts := FeedOptions{
 		MaxDepth: s.Config.Depth,
-		LangCode: s.Config.Lang,
+		LangCode: langs[0],
 		Geo:      s.Config.Geo,
 	}
+	// placeOpts.LangCode is set per claimed URL from the row's language.
 	placeOpts := PlaceOptions{
 		ExtractEmail: s.Config.ExtractEmail,
-		LangCode:     s.Config.Lang,
 		ExtraReviews: s.Config.ExtraReviews,
 	}
 
-	jobID, err := s.ensureJob(ctx, queries, feedOpts)
+	jobID, err := s.ensureJob(ctx, queries, feedOpts, langs)
 	if err != nil {
 		return err
 	}
@@ -156,15 +196,23 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					return err
 				}
 
+				claimOpts := placeOpts
+				claimOpts.LangCode = claimed.Lang
+				if claimOpts.LangCode == "" {
+					// Legacy rows predate the lang column; fall back to the
+					// job's configured first language.
+					claimOpts.LangCode = langs[0]
+				}
+
 				page := s.Pool.AcquirePage()
-				entry, err := scrapePlace(gctx, page, claimed.URL, placeOpts)
+				entry, err := scrapePlace(gctx, page, claimed.URL, claimOpts)
 				for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
 					s.Pool.ReleasePage(page)
 					if err := sleepContext(gctx, time.Duration(retry*2)*time.Second); err != nil {
 						return err
 					}
 					page = s.Pool.AcquirePage()
-					entry, err = scrapePlace(gctx, page, claimed.URL, placeOpts)
+					entry, err = scrapePlace(gctx, page, claimed.URL, claimOpts)
 				}
 				s.Pool.ReleasePage(page)
 				if err != nil {
@@ -203,7 +251,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					log.Printf("Places %d/%d completed", stats.Done, stats.Total)
 				}
 
-				result := PlaceResult{URLID: claimed.ID, URL: claimed.URL, Entry: entry}
+				result := PlaceResult{URLID: claimed.ID, URL: claimed.URL, Lang: claimOpts.LangCode, Entry: entry}
 				if useRadiusFilter {
 					// Defer MarkURLDone until after the radius filter: filtered-out
 					// entries are marked done here (no write needed); kept entries
@@ -231,10 +279,12 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 		rawEntries := make([]*Entry, 0, len(entries))
 		entryURLID := make(map[*Entry]int64, len(entries))
 		entryURL := make(map[*Entry]string, len(entries))
+		entryLang := make(map[*Entry]string, len(entries))
 		for _, result := range entries {
 			rawEntries = append(rawEntries, result.Entry)
 			entryURLID[result.Entry] = result.URLID
 			entryURL[result.Entry] = result.URL
+			entryLang[result.Entry] = result.Lang
 		}
 		filtered := filterAndSortEntriesWithinRadius(rawEntries, lat, lon, s.Config.Radius)
 		keep := make(map[*Entry]struct{}, len(filtered))
@@ -252,7 +302,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 		}
 		for _, e := range filtered {
 			select {
-			case out <- PlaceResult{URLID: entryURLID[e], URL: entryURL[e], Entry: e}:
+			case out <- PlaceResult{URLID: entryURLID[e], URL: entryURL[e], Lang: entryLang[e], Entry: e}:
 			case <-ctx.Done():
 				break
 			}
@@ -412,14 +462,14 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts FeedOptions) (string, error) {
+func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts FeedOptions, langs []string) (string, error) {
 	if s.Config.JobID != "" {
 		job, err := s.Store.GetJob(ctx, s.Config.JobID)
 		if err != nil {
 			return "", err
 		}
 		if job.Status == JobStatusStarting {
-			collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, job.StrategyRunID.String)
+			collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, job.StrategyRunID.String, langs)
 			if err != nil {
 				return "", err
 			}
@@ -450,7 +500,7 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 		return s.Config.JobID, nil
 	}
 
-	collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, "")
+	collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, "", langs)
 	if err != nil {
 		return "", err
 	}
@@ -471,13 +521,13 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 }
 
 type feedCollection struct {
-	URLs                  []string
+	URLs                  []QueuedURL
 	FeedURLsFound         int
 	FeedDuplicateURLs     int
 	CrossJobDuplicateURLs int
 }
 
-func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions, strategyRunID string) (feedCollection, error) {
+func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOpts FeedOptions, strategyRunID string, langs []string) (feedCollection, error) {
 	scrapeFeed := s.ScrapeFeed
 	if scrapeFeed == nil {
 		scrapeFeed = ScrapeFeed
@@ -526,27 +576,30 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 	}
 	feedURLs = dedupedURLs
 	duplicatesRemoved := originalCount - len(feedURLs)
-	crossJobDuplicates := 0
-	dedupScraped := s.Config.DedupScope == "run" || s.Config.DedupScope == "all"
-	if dedupScraped {
-		kept, skipped, err := s.Store.FilterAlreadyScrapedURLs(ctx, feedURLs, strategyRunID, s.Config.DedupScope == "all")
-		if err != nil {
-			return feedCollection{}, err
-		}
-		feedURLs = kept
-		crossJobDuplicates = skipped
-	}
+	// Limit caps canonical places, not place×language tasks, so apply it before
+	// fanning out into per-language queued URLs.
 	if s.Config.Limit > 0 && len(feedURLs) > s.Config.Limit {
 		feedURLs = feedURLs[:s.Config.Limit]
 	}
+	queued := expandLangs(feedURLs, langs)
+	crossJobDuplicates := 0
+	dedupScraped := s.Config.DedupScope == "run" || s.Config.DedupScope == "all"
 	if dedupScraped {
-		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed, %d already-scraped skipped)", len(feedURLs), total, duplicatesRemoved, crossJobDuplicates)
-	} else if duplicatesRemoved > 0 {
-		log.Printf("Feed collection done: %d URLs queued across %d queries (%d duplicates removed)", len(feedURLs), total, duplicatesRemoved)
-	} else {
-		log.Printf("Feed collection done: %d URLs queued across %d queries", len(feedURLs), total)
+		kept, skipped, err := s.Store.FilterAlreadyScrapedURLs(ctx, queued, strategyRunID, s.Config.DedupScope == "all", langs[0])
+		if err != nil {
+			return feedCollection{}, err
+		}
+		queued = kept
+		crossJobDuplicates = skipped
 	}
-	return feedCollection{URLs: feedURLs, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved, CrossJobDuplicateURLs: crossJobDuplicates}, nil
+	if dedupScraped {
+		log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages (%d duplicates removed, %d already-scraped skipped)", len(queued), total, len(langs), duplicatesRemoved, crossJobDuplicates)
+	} else if duplicatesRemoved > 0 {
+		log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages (%d duplicates removed)", len(queued), total, len(langs), duplicatesRemoved)
+	} else {
+		log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages", len(queued), total, len(langs))
+	}
+	return feedCollection{URLs: queued, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved, CrossJobDuplicateURLs: crossJobDuplicates}, nil
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {

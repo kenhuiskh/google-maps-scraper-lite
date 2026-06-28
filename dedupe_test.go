@@ -9,9 +9,11 @@ import (
 func TestPlaceDeduperMatchesAnyGoogleID(t *testing.T) {
 	dedupe := newPlaceDeduper()
 
-	if dedupe.Seen(&gmaps.Entry{Cid: "cid-1", PlaceID: "place-1", DataID: "data-1"}) {
+	first := &gmaps.Entry{Cid: "cid-1", PlaceID: "place-1", DataID: "data-1"}
+	if dedupe.Seen(first) {
 		t.Fatal("first entry should not be seen")
 	}
+	dedupe.Record(first)
 
 	tests := []struct {
 		name  string

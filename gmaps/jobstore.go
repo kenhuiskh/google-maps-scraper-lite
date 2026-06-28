@@ -125,6 +125,25 @@ type ClaimedURL struct {
 	JobID    string
 	Position int
 	URL      string
+	Lang     string
+}
+
+// QueuedURL is a canonical place URL paired with the language it should be
+// scraped in. Multi-language jobs expand each canonical URL into one QueuedURL
+// per language; single-language jobs use Lang = "".
+type QueuedURL struct {
+	URL  string
+	Lang string
+}
+
+// URLsNoLang wraps plain URLs as QueuedURL values with no language set. It is a
+// convenience for callers that do not fan out by language.
+func URLsNoLang(urls []string) []QueuedURL {
+	out := make([]QueuedURL, len(urls))
+	for i, u := range urls {
+		out[i] = QueuedURL{URL: u}
+	}
+	return out
 }
 
 type StrategyJobCreate struct {
@@ -230,6 +249,7 @@ func (s *JobStore) Init(ctx context.Context) error {
 			job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
 			position INTEGER NOT NULL,
 			url TEXT NOT NULL,
+			lang TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
 			attempts INTEGER NOT NULL DEFAULT 0,
 			last_error TEXT,
@@ -238,7 +258,7 @@ func (s *JobStore) Init(ctx context.Context) error {
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
 			UNIQUE(job_id, position),
-			UNIQUE(job_id, url)
+			UNIQUE(job_id, url, lang)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_job_urls_claim ON job_urls(job_id, status, position)`,
 		`CREATE INDEX IF NOT EXISTS idx_job_urls_url_status ON job_urls(url, status)`,
@@ -327,7 +347,98 @@ func (s *JobStore) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "job_execution_stats", "cross_job_duplicate_urls", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := s.migrateJobURLsLang(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+// hasColumn reports whether table has a column with the given name.
+func (s *JobStore) hasColumn(ctx context.Context, table, column string) (bool, error) {
+	if err := validateSQLIdentifier(table); err != nil {
+		return false, err
+	}
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid          int
+			name, typ    string
+			notNull, pk  int
+			defaultValue any
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateJobURLsLang adds the job_urls.lang column and changes the row-identity
+// uniqueness from (job_id, url) to (job_id, url, lang) so the same canonical
+// place URL can be queued once per language. SQLite cannot alter an inline
+// UNIQUE constraint, so existing databases need a full table rebuild. Legacy
+// rows are preserved with lang=”. Nothing references job_urls, so the rebuild
+// is safe; foreign keys are disabled around it per the SQLite-recommended
+// table-rebuild procedure.
+func (s *JobStore) migrateJobURLsLang(ctx context.Context) error {
+	has, err := s.hasColumn(ctx, "job_urls", "lang")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+
+	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer func() { _, _ = s.db.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`CREATE TABLE job_urls_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+			position INTEGER NOT NULL,
+			url TEXT NOT NULL,
+			lang TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			started_at DATETIME,
+			finished_at DATETIME,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			UNIQUE(job_id, position),
+			UNIQUE(job_id, url, lang)
+		)`,
+		`INSERT INTO job_urls_new
+			(id, job_id, position, url, lang, status, attempts, last_error, started_at, finished_at, created_at, updated_at)
+			SELECT id, job_id, position, url, '', status, attempts, last_error, started_at, finished_at, created_at, updated_at
+			FROM job_urls`,
+		`DROP TABLE job_urls`,
+		`ALTER TABLE job_urls_new RENAME TO job_urls`,
+		`CREATE INDEX IF NOT EXISTS idx_job_urls_claim ON job_urls(job_id, status, position)`,
+		`CREATE INDEX IF NOT EXISTS idx_job_urls_url_status ON job_urls(url, status)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // validateSQLIdentifier rejects names containing anything outside letters,
@@ -377,7 +488,7 @@ func (s *JobStore) ensureColumn(ctx context.Context, table, column, decl string)
 	return err
 }
 
-func (s *JobStore) CreateJob(ctx context.Context, queries []string, config any, urls []string) (string, error) {
+func (s *JobStore) CreateJob(ctx context.Context, queries []string, config any, urls []QueuedURL) (string, error) {
 	now := time.Now().UTC()
 	id := newJobID(now)
 	queriesJSON, err := json.Marshal(queries)
@@ -400,8 +511,8 @@ func (s *JobStore) CreateJob(ctx context.Context, queries []string, config any, 
 	}
 	for i, u := range urls {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO job_urls
-			(job_id, position, url, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, id, i, u, URLStatusPending, now, now); err != nil {
+			(job_id, position, url, lang, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, id, i, u.URL, u.Lang, URLStatusPending, now, now); err != nil {
 			return "", err
 		}
 	}
@@ -651,7 +762,7 @@ func (s *JobStore) NextPendingJobAfterDone(ctx context.Context) (*Job, error) {
 	return s.GetJob(ctx, id)
 }
 
-func (s *JobStore) QueueStartingJobURLs(ctx context.Context, jobID string, urls []string) error {
+func (s *JobStore) QueueStartingJobURLs(ctx context.Context, jobID string, urls []QueuedURL) error {
 	now := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -667,8 +778,8 @@ func (s *JobStore) QueueStartingJobURLs(ctx context.Context, jobID string, urls 
 	}
 	for i, u := range urls {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO job_urls
-			(job_id, position, url, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, jobID, i, u, URLStatusPending, now, now); err != nil {
+			(job_id, position, url, lang, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, jobID, i, u.URL, u.Lang, URLStatusPending, now, now); err != nil {
 			return err
 		}
 	}
@@ -687,6 +798,26 @@ func (s *JobStore) QueueStartingJobURLs(ctx context.Context, jobID string, urls 
 		return err
 	}
 	return tx.Commit()
+}
+
+// JobLangs returns the distinct, ordered languages present in a job's queued
+// URLs. The authoritative language set comes from the job config; this is a
+// consistency check / fallback for resume paths.
+func (s *JobStore) JobLangs(ctx context.Context, jobID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT lang FROM job_urls WHERE job_id = ? ORDER BY lang`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var langs []string
+	for rows.Next() {
+		var lang string
+		if err := rows.Scan(&lang); err != nil {
+			return nil, err
+		}
+		langs = append(langs, lang)
+	}
+	return langs, rows.Err()
 }
 
 func (s *JobStore) GetJob(ctx context.Context, jobID string) (*Job, error) {
@@ -2132,10 +2263,10 @@ func (s *JobStore) ClaimNextURL(ctx context.Context, jobID string) (*ClaimedURL,
 			ORDER BY ju.position
 			LIMIT 1
 		)
-		RETURNING id, position, url`, URLStatusInProgress, now, now, jobID, URLStatusPending)
+		RETURNING id, position, url, lang`, URLStatusInProgress, now, now, jobID, URLStatusPending)
 	var claimed ClaimedURL
 	claimed.JobID = jobID
-	if err := row.Scan(&claimed.ID, &claimed.Position, &claimed.URL); err != nil {
+	if err := row.Scan(&claimed.ID, &claimed.Position, &claimed.URL, &claimed.Lang); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			paused, pauseErr := s.PauseRequested(ctx, jobID)
 			if pauseErr != nil {
@@ -2238,21 +2369,32 @@ func (s *JobStore) JobStats(ctx context.Context, jobID string) (JobStats, error)
 	return stats, rows.Err()
 }
 
-// FilterAlreadyScrapedURLs removes URLs already marked done in prior job rows.
-// Run-scoped filtering needs a strategy run id; without one it is a no-op so
-// ad-hoc CLI jobs keep their historical behavior unless all-time mode is used.
-func (s *JobStore) FilterAlreadyScrapedURLs(ctx context.Context, urls []string, strategyRunID string, allTime bool) (kept []string, skipped int, err error) {
+// FilterAlreadyScrapedURLs removes (url, lang) pairs already marked done in
+// prior job rows. Matching is per-(url, lang): the same place URL in a not-yet
+// scraped language is kept. Legacy done rows predate the lang column and carry
+// lang=”; they are treated as firstLang so pre-existing single-language data is
+// still recognized. Run-scoped filtering needs a strategy run id; without one it
+// is a no-op so ad-hoc CLI jobs keep their historical behavior unless all-time
+// mode is used.
+func (s *JobStore) FilterAlreadyScrapedURLs(ctx context.Context, urls []QueuedURL, strategyRunID string, allTime bool, firstLang string) (kept []QueuedURL, skipped int, err error) {
 	if len(urls) == 0 {
-		return []string{}, 0, nil
+		return []QueuedURL{}, 0, nil
 	}
 	if !allTime && strategyRunID == "" {
-		return append([]string(nil), urls...), 0, nil
+		return append([]QueuedURL(nil), urls...), 0, nil
+	}
+
+	key := func(url, lang string) string {
+		if lang == "" {
+			lang = firstLang
+		}
+		return url + "\x00" + lang
 	}
 
 	// Query only the candidate URLs (chunked to stay under SQLite's parameter
 	// limit) so startup work scales with the current feed, not the full scrape
-	// history. Matches are collected into a set, then candidates are filtered
-	// in their original order.
+	// history. Matches are collected into a set keyed by (url, normalized lang),
+	// then candidates are filtered in their original order.
 	const chunkSize = 900
 	done := make(map[string]struct{})
 	for start := 0; start < len(urls); start += chunkSize {
@@ -2268,13 +2410,13 @@ func (s *JobStore) FilterAlreadyScrapedURLs(ctx context.Context, urls []string, 
 		var query string
 		args := make([]any, 0, len(chunk)+1)
 		if allTime {
-			query = `SELECT DISTINCT url FROM job_urls WHERE status='done' AND url IN (` + placeholders + `)`
+			query = `SELECT DISTINCT url, lang FROM job_urls WHERE status='done' AND url IN (` + placeholders + `)`
 		} else {
-			query = `SELECT DISTINCT ju.url FROM job_urls ju JOIN jobs j ON ju.job_id=j.id WHERE ju.status='done' AND j.strategy_run_id=? AND ju.url IN (` + placeholders + `)`
+			query = `SELECT DISTINCT ju.url, ju.lang FROM job_urls ju JOIN jobs j ON ju.job_id=j.id WHERE ju.status='done' AND j.strategy_run_id=? AND ju.url IN (` + placeholders + `)`
 			args = append(args, strategyRunID)
 		}
 		for _, u := range chunk {
-			args = append(args, u)
+			args = append(args, u.URL)
 		}
 
 		rows, err := s.db.QueryContext(ctx, query, args...)
@@ -2282,12 +2424,12 @@ func (s *JobStore) FilterAlreadyScrapedURLs(ctx context.Context, urls []string, 
 			return nil, 0, err
 		}
 		for rows.Next() {
-			var u string
-			if err := rows.Scan(&u); err != nil {
+			var u, lang string
+			if err := rows.Scan(&u, &lang); err != nil {
 				rows.Close()
 				return nil, 0, err
 			}
-			done[u] = struct{}{}
+			done[key(u, lang)] = struct{}{}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -2296,9 +2438,9 @@ func (s *JobStore) FilterAlreadyScrapedURLs(ctx context.Context, urls []string, 
 		rows.Close()
 	}
 
-	kept = make([]string, 0, len(urls))
+	kept = make([]QueuedURL, 0, len(urls))
 	for _, u := range urls {
-		if _, ok := done[u]; ok {
+		if _, ok := done[key(u.URL, u.Lang)]; ok {
 			skipped++
 			continue
 		}

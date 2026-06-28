@@ -34,7 +34,7 @@ func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
 		},
 	}
 
-	collected, err := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"}, "")
+	collected, err := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"}, "", []string{"en"})
 	if err != nil {
 		t.Fatalf("collectPlaceURLs: %v", err)
 	}
@@ -44,11 +44,14 @@ func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
 	if len(collected.URLs) != 2 {
 		t.Fatalf("urls = %#v, want 2", collected.URLs)
 	}
-	if collected.URLs[0] == PlaceIDToURL("ChIJ123") {
-		t.Fatalf("place ID queued synthetic URL %q", collected.URLs[0])
+	if collected.URLs[0].URL == PlaceIDToURL("ChIJ123") {
+		t.Fatalf("place ID queued synthetic URL %q", collected.URLs[0].URL)
 	}
-	if collected.URLs[0] != "https://www.google.com/maps/place/Test/data=!4m2!3m1!1s0x1:0x2" {
-		t.Fatalf("first url = %q, want canonical feed URL", collected.URLs[0])
+	if collected.URLs[0].URL != "https://www.google.com/maps/place/Test/data=!4m2!3m1!1s0x1:0x2" {
+		t.Fatalf("first url = %q, want canonical feed URL", collected.URLs[0].URL)
+	}
+	if collected.URLs[0].Lang != "en" {
+		t.Fatalf("first url lang = %q, want en", collected.URLs[0].Lang)
 	}
 	if collected.FeedURLsFound != 2 {
 		t.Fatalf("FeedURLsFound = %d, want 2", collected.FeedURLsFound)
@@ -64,12 +67,12 @@ func TestCollectPlaceURLsFallsBackForPlaceIDFeedError(t *testing.T) {
 		},
 	}
 
-	collected, err := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"}, "")
+	collected, err := s.collectPlaceURLs(ctx, []string{"place_id:ChIJ123", "coffee"}, FeedOptions{LangCode: "en"}, "", []string{"en"})
 	if err != nil {
 		t.Fatalf("collectPlaceURLs: %v", err)
 	}
 	want := PlaceIDToURL("ChIJ123")
-	if len(collected.URLs) != 1 || collected.URLs[0] != want {
+	if len(collected.URLs) != 1 || collected.URLs[0].URL != want {
 		t.Fatalf("urls = %#v, want only %q", collected.URLs, want)
 	}
 }
@@ -82,7 +85,7 @@ func TestCollectPlaceURLsSkipsAlreadyScraped(t *testing.T) {
 	const newURL = "https://www.google.com/maps/place/New/data=!4m2!3m1!1s0x3:0x4"
 
 	// Seed seededURL as done in a prior job.
-	jobID, err := store.CreateJob(ctx, []string{"seed"}, nil, []string{seededURL})
+	jobID, err := store.CreateJob(ctx, []string{"seed"}, nil, URLsNoLang([]string{seededURL}))
 	if err != nil {
 		t.Fatalf("create seed job: %v", err)
 	}
@@ -106,11 +109,11 @@ func TestCollectPlaceURLsSkipsAlreadyScraped(t *testing.T) {
 		Config: Config{DedupScope: "all"},
 	}
 
-	collected, err := s.collectPlaceURLs(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, "")
+	collected, err := s.collectPlaceURLs(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, "", []string{"en"})
 	if err != nil {
 		t.Fatalf("collectPlaceURLs: %v", err)
 	}
-	if len(collected.URLs) != 1 || collected.URLs[0] != newURL {
+	if len(collected.URLs) != 1 || collected.URLs[0].URL != newURL {
 		t.Fatalf("urls = %#v, want only %q", collected.URLs, newURL)
 	}
 	if collected.CrossJobDuplicateURLs != 1 {
@@ -125,7 +128,7 @@ func TestScraperGracefulPauseFinishesCurrentURL(t *testing.T) {
 	for i := range urls {
 		urls[i] = fmt.Sprintf("u%d", i+1)
 	}
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, urls)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang(urls))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -172,7 +175,7 @@ func TestScraperAutoRecoverRequeuesFailedURL(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
 	urls := []string{"u1", "u2"}
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, urls)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang(urls))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -226,7 +229,7 @@ func TestScraperAutoRecoverRequeuesFailedURL(t *testing.T) {
 func TestScraperTransientNavErrorRetriesNoRecovery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -288,7 +291,7 @@ func TestScraperTransientNavErrorRetriesNoRecovery(t *testing.T) {
 func TestScraperBotBlockTriggersRecovery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1", "u2"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1", "u2"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -353,7 +356,7 @@ func TestScraperConsecutiveFailuresBackstop(t *testing.T) {
 		for i := range urls {
 			urls[i] = fmt.Sprintf("u%d", i+1)
 		}
-		jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, urls)
+		jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang(urls))
 		if err != nil {
 			t.Fatalf("create job: %v", err)
 		}
@@ -382,7 +385,7 @@ func TestScraperConsecutiveFailuresBackstop(t *testing.T) {
 	t.Run("autoRecoverOn_backstopTriggersRecovery", func(t *testing.T) {
 		ctx := context.Background()
 		store := newTestJobStore(t)
-		jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+		jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
 		if err != nil {
 			t.Fatalf("create job: %v", err)
 		}

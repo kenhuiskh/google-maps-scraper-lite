@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,7 +43,7 @@ func main() {
 	tableReview := flag.String("table-review", "restaurant_reviews", "postgres table name for reviews (used with -dsn)")
 	extractEmail := flag.Bool("email", false, "extract emails from websites")
 	extraReviews := flag.Int("reviews", 0, "minimum number of reviews to scrape (0 = use page default)")
-	lang := flag.String("lang", "en", "language code")
+	lang := flag.String("lang", "en", "language code(s); comma-separated for multi-language (e.g. \"en,fr\") — collects URLs once and scrapes each place per language, routing to language-suffixed files/tables")
 	geo := flag.String("geo", "", `geographic center for search, format "lat,lng,zoomz" e.g. "43.6532,-79.3832,14z"`)
 	radius := flag.Float64("radius", 0, "filter results within this radius in meters from -geo center (0 = no filter)")
 	headless := flag.Bool("headless", true, "run browser in headless mode")
@@ -214,37 +215,77 @@ func main() {
 		log.Fatalf("create output dir: %v", err)
 	}
 
-	var w output.Writer
+	// Resolve the language set: a new job uses the CLI -lang; a resumed job uses
+	// the languages recorded in its stored config (authoritative), falling back
+	// to the CLI value. Output is then routed per language.
+	langs, err := determineLangs(ctx, store, *jobID, *lang)
+	if err != nil {
+		log.Fatalf("language config: %v", err)
+	}
+	multiLang := len(langs) > 1
+
+	// writers is keyed by sanitized language suffix; closeFns tears everything
+	// down (writers and any underlying files) in reverse order on shutdown or
+	// partial-init failure.
+	writers := make(map[string]output.Writer, len(langs))
+	var closeFns []func() error
+	closeAll := func() {
+		for i := len(closeFns) - 1; i >= 0; i-- {
+			if cerr := closeFns[i](); cerr != nil {
+				log.Printf("close error: %v", cerr)
+			}
+		}
+	}
+
 	switch {
 	case *dsn != "":
-		defaultRestaurant, defaultReview := languagePostgresTables(*lang)
-		if !explicitTables["table-restaurant"] {
-			*tableRestaurant = defaultRestaurant
+		for _, lang := range langs {
+			restaurant, review := languagePostgresTables(lang)
+			// Explicit table overrides only make sense for a single language;
+			// with multiple languages each must get its own suffixed tables.
+			if !multiLang {
+				if explicitTables["table-restaurant"] {
+					restaurant = *tableRestaurant
+				}
+				if explicitTables["table-review"] {
+					review = *tableReview
+				}
+			}
+			pw, perr := output.NewPostgresWriter(ctx, *dsn, restaurant, review)
+			if perr != nil {
+				closeAll()
+				log.Fatalf("postgres writer init (%s): %v", lang, perr)
+			}
+			writers[postgresLanguageSuffix(lang)] = pw
+			closeFns = append(closeFns, pw.Close)
 		}
-		if !explicitTables["table-review"] {
-			*tableReview = defaultReview
-		}
-		pw, err := output.NewPostgresWriter(ctx, *dsn, *tableRestaurant, *tableReview)
-		if err != nil {
-			log.Fatalf("postgres writer init: %v", err)
-		}
-		w = pw
 	default:
 		ext := ".csv"
 		if *jsonOut {
 			ext = ".json"
 		}
-		outPath := filepath.Join(*outDir, ts+ext)
-		f, err := os.Create(outPath)
-		if err != nil {
-			log.Fatalf("create output file: %v", err)
-		}
-		defer f.Close()
-		log.Printf("writing output to %s", outPath)
-		if *jsonOut {
-			w = output.NewJSONWriter(f)
-		} else {
-			w = output.NewCSVWriter(f)
+		for _, lang := range langs {
+			// Single language keeps the original timestamp-only filename for
+			// back-compat; multiple languages get a language suffix.
+			outPath := filepath.Join(*outDir, ts+ext)
+			if multiLang {
+				outPath = filepath.Join(*outDir, ts+"_"+postgresLanguageSuffix(lang)+ext)
+			}
+			f, ferr := os.Create(outPath)
+			if ferr != nil {
+				closeAll()
+				log.Fatalf("create output file (%s): %v", lang, ferr)
+			}
+			log.Printf("writing %s output to %s", lang, outPath)
+			var fw output.Writer
+			if *jsonOut {
+				fw = output.NewJSONWriter(f)
+			} else {
+				fw = output.NewCSVWriter(f)
+			}
+			writers[postgresLanguageSuffix(lang)] = fw
+			file := f
+			closeFns = append(closeFns, fw.Close, file.Close)
 		}
 	}
 
@@ -260,7 +301,7 @@ func main() {
 			Concurrency:      *concurrency,
 			MaxConcurrency:   *maxConcurrency,
 			Depth:            *depth,
-			Lang:             *lang,
+			Lang:             strings.Join(langs, ","),
 			Geo:              *geo,
 			Radius:           *radius,
 			ExtractEmail:     *extractEmail,
@@ -319,7 +360,9 @@ func main() {
 	}()
 
 	var written, failed, dupes int
-	dedupe := newPlaceDeduper()
+	// Dedup is per language: the same restaurant is scraped once per language but
+	// kept across languages.
+	dedupers := make(map[string]*placeDeduper, len(langs))
 	for result := range out {
 		currentJobMu.Lock()
 		statsJobID := currentJobID
@@ -328,6 +371,23 @@ func main() {
 			_ = store.IncrementJobStat(context.Background(), statsJobID, "scraped_urls", 1)
 		}
 		entry := result.Entry
+
+		suffix := postgresLanguageSuffix(result.Lang)
+		w := writers[suffix]
+		if w == nil {
+			log.Printf("no writer for language %q (suffix %q); skipping result", result.Lang, suffix)
+			if result.URLID != 0 {
+				_ = store.MarkURLFailed(context.Background(), result.URLID, fmt.Errorf("no writer for language %q", result.Lang))
+			}
+			failed++
+			continue
+		}
+		dedupe := dedupers[suffix]
+		if dedupe == nil {
+			dedupe = newPlaceDeduper()
+			dedupers[suffix] = dedupe
+		}
+
 		if dedupe.Seen(entry) {
 			dupes++
 			if statsJobID != "" {
@@ -348,6 +408,9 @@ func main() {
 			}
 			failed++
 		} else {
+			// Record dedup identity only after a successful write so a failed
+			// write does not silently drop a later equivalent result.
+			dedupe.Record(entry)
 			if result.URLID != 0 {
 				if err := store.MarkURLDone(context.Background(), result.URLID); err != nil {
 					log.Printf("state update error: %v", err)
@@ -388,9 +451,7 @@ func main() {
 		}
 	}
 
-	if err := w.Close(); err != nil {
-		log.Printf("writer close error: %v", err)
-	}
+	closeAll()
 }
 
 func controlUIOnly(jobID, queries, placeIDs string) bool {
@@ -433,6 +494,8 @@ func newPlaceDeduper() *placeDeduper {
 	}
 }
 
+// Seen reports whether an equivalent entry has already been recorded. It does
+// not mutate state; call Record after a successful write to register identity.
 func (d *placeDeduper) Seen(entry *gmaps.Entry) bool {
 	if entry.Cid != "" {
 		if _, ok := d.cids[entry.Cid]; ok {
@@ -449,7 +512,12 @@ func (d *placeDeduper) Seen(entry *gmaps.Entry) bool {
 			return true
 		}
 	}
+	return false
+}
 
+// Record registers an entry's identity so future equivalent entries are treated
+// as duplicates.
+func (d *placeDeduper) Record(entry *gmaps.Entry) {
 	if entry.Cid != "" {
 		d.cids[entry.Cid] = struct{}{}
 	}
@@ -459,8 +527,52 @@ func (d *placeDeduper) Seen(entry *gmaps.Entry) bool {
 	if entry.DataID != "" {
 		d.dataIDs[entry.DataID] = struct{}{}
 	}
+}
 
-	return false
+// parseLangs splits a comma-separated language string into a normalized,
+// de-duplicated list (trimmed, lowercased, empties dropped, default "en"). It
+// returns an error if two distinct codes sanitize to the same output suffix
+// (which would silently merge their files/tables).
+func parseLangs(s string) ([]string, error) {
+	seen := make(map[string]struct{})
+	bySuffix := make(map[string]string)
+	var langs []string
+	for _, part := range strings.Split(s, ",") {
+		lang := strings.ToLower(strings.TrimSpace(part))
+		if lang == "" {
+			continue
+		}
+		if _, ok := seen[lang]; ok {
+			continue
+		}
+		suffix := postgresLanguageSuffix(lang)
+		if prev, ok := bySuffix[suffix]; ok {
+			return nil, fmt.Errorf("languages %q and %q both map to output suffix %q; use distinct language codes", prev, lang, suffix)
+		}
+		bySuffix[suffix] = lang
+		seen[lang] = struct{}{}
+		langs = append(langs, lang)
+	}
+	if len(langs) == 0 {
+		return []string{"en"}, nil
+	}
+	return langs, nil
+}
+
+// determineLangs resolves the language set for a run. A resumed job's languages
+// come from its stored config (authoritative); a new job uses the CLI value.
+func determineLangs(ctx context.Context, store *gmaps.JobStore, jobID, cliLang string) ([]string, error) {
+	if jobID != "" {
+		if job, err := store.GetJob(ctx, jobID); err == nil {
+			var cfg struct {
+				Lang string `json:"Lang"`
+			}
+			if json.Unmarshal([]byte(job.ConfigJSON), &cfg) == nil && strings.TrimSpace(cfg.Lang) != "" {
+				return parseLangs(cfg.Lang)
+			}
+		}
+	}
+	return parseLangs(cliLang)
 }
 
 // runURLsOnly collects feed URLs for all queries and writes them one-per-line

@@ -27,7 +27,7 @@ func TestControlPauseEndpoint(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestControlRecoverStaleEndpoint(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestControlIndexListsJobs(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestControlSummaryCountsActiveAndPendingJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create active job: %v", err)
 	}
-	if err := store.QueueStartingJobURLs(ctx, activeID, []string{"u1", "u2"}); err != nil {
+	if err := store.QueueStartingJobURLs(ctx, activeID, gmaps.URLsNoLang([]string{"u1", "u2"})); err != nil {
 		t.Fatalf("queue urls: %v", err)
 	}
 	if err := store.StartJob(ctx, activeID); err != nil {
@@ -532,7 +532,7 @@ func TestControlUIPartialsRenderSummaryAndJobs(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestControlJobsPartialPaginates(t *testing.T) {
 	var ids []string
 	for i := 1; i <= 12; i++ {
 		query := "query " + strconv.Itoa(i)
-		id, err := store.CreateJob(ctx, []string{query}, nil, []string{"url-" + query})
+		id, err := store.CreateJob(ctx, []string{query}, nil, gmaps.URLsNoLang([]string{"url-" + query}))
 		if err != nil {
 			t.Fatalf("create %s: %v", query, err)
 		}
@@ -667,7 +667,7 @@ func TestControlIndexRendersFiltersInJobHeader(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	if _, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"}); err != nil {
+	if _, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"})); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
 	mux := http.NewServeMux()
@@ -710,7 +710,7 @@ func TestControlJobEndpointReturnsCurrentJob(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -841,7 +841,7 @@ func TestControlResumeEndpointLaunchesJob(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -879,7 +879,7 @@ func TestControlResumeEndpointConflict(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -1111,7 +1111,7 @@ func TestJobLogsEndpointReturnsErrorForMissingDoneLog(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -1141,7 +1141,7 @@ func TestJobLogsEndpointTailsExistingLog(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -1171,7 +1171,7 @@ func TestJobLogsEndpointTailsExistingLog(t *testing.T) {
 
 func TestStartJobQueuesWhenRunning(t *testing.T) {
 	store := newStartStore(t)
-	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(context.Background(), []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
