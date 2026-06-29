@@ -26,7 +26,7 @@ func newTestJobStore(t *testing.T) *JobStore {
 func TestJobStoreClaimOrderingAndDoneSkip(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, map[string]string{"lang": "en"}, []string{"u1", "u2", "u3"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, map[string]string{"lang": "en"}, URLsNoLang([]string{"u1", "u2", "u3"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestJobStoreFilterAlreadyScrapedURLs(t *testing.T) {
 	failedURL := "https://maps.google.com/?cid=failed"
 	newURL := "https://maps.google.com/?cid=new"
 
-	sameRunJobID, err := store.CreateJob(ctx, []string{"same run"}, nil, []string{doneURL, failedURL})
+	sameRunJobID, err := store.CreateJob(ctx, []string{"same run"}, nil, URLsNoLang([]string{doneURL, failedURL}))
 	if err != nil {
 		t.Fatalf("create same-run job: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestJobStoreFilterAlreadyScrapedURLs(t *testing.T) {
 		t.Fatalf("mark failed url: %v", err)
 	}
 
-	otherRunJobID, err := store.CreateJob(ctx, []string{"other run"}, nil, []string{otherRunDoneURL})
+	otherRunJobID, err := store.CreateJob(ctx, []string{"other run"}, nil, URLsNoLang([]string{otherRunDoneURL}))
 	if err != nil {
 		t.Fatalf("create other-run job: %v", err)
 	}
@@ -106,8 +106,16 @@ func TestJobStoreFilterAlreadyScrapedURLs(t *testing.T) {
 		t.Fatalf("mark other-run done: %v", err)
 	}
 
-	urls := []string{doneURL, otherRunDoneURL, failedURL, newURL}
-	kept, skipped, err := store.FilterAlreadyScrapedURLs(ctx, urls, "run-1", false)
+	urls := URLsNoLang([]string{doneURL, otherRunDoneURL, failedURL, newURL})
+	keptURLs := func(q []QueuedURL) []string {
+		out := make([]string, len(q))
+		for i, u := range q {
+			out[i] = u.URL
+		}
+		return out
+	}
+
+	kept, skipped, err := store.FilterAlreadyScrapedURLs(ctx, urls, "run-1", false, "en")
 	if err != nil {
 		t.Fatalf("filter same-run: %v", err)
 	}
@@ -115,11 +123,11 @@ func TestJobStoreFilterAlreadyScrapedURLs(t *testing.T) {
 		t.Fatalf("same-run skipped = %d, want 1", skipped)
 	}
 	want := []string{otherRunDoneURL, failedURL, newURL}
-	if !slicesEqual(kept, want) {
-		t.Fatalf("same-run kept = %#v, want %#v", kept, want)
+	if !slicesEqual(keptURLs(kept), want) {
+		t.Fatalf("same-run kept = %#v, want %#v", keptURLs(kept), want)
 	}
 
-	kept, skipped, err = store.FilterAlreadyScrapedURLs(ctx, urls, "run-1", true)
+	kept, skipped, err = store.FilterAlreadyScrapedURLs(ctx, urls, "run-1", true, "en")
 	if err != nil {
 		t.Fatalf("filter all-time: %v", err)
 	}
@@ -127,19 +135,19 @@ func TestJobStoreFilterAlreadyScrapedURLs(t *testing.T) {
 		t.Fatalf("all-time skipped = %d, want 2", skipped)
 	}
 	want = []string{failedURL, newURL}
-	if !slicesEqual(kept, want) {
-		t.Fatalf("all-time kept = %#v, want %#v", kept, want)
+	if !slicesEqual(keptURLs(kept), want) {
+		t.Fatalf("all-time kept = %#v, want %#v", keptURLs(kept), want)
 	}
 
-	kept, skipped, err = store.FilterAlreadyScrapedURLs(ctx, urls, "", false)
+	kept, skipped, err = store.FilterAlreadyScrapedURLs(ctx, urls, "", false, "en")
 	if err != nil {
 		t.Fatalf("filter empty run: %v", err)
 	}
 	if skipped != 0 {
 		t.Fatalf("empty-run skipped = %d, want 0", skipped)
 	}
-	if !slicesEqual(kept, urls) {
-		t.Fatalf("empty-run kept = %#v, want %#v", kept, urls)
+	if !slicesEqual(keptURLs(kept), keptURLs(urls)) {
+		t.Fatalf("empty-run kept = %#v, want %#v", keptURLs(kept), keptURLs(urls))
 	}
 }
 
@@ -158,7 +166,7 @@ func slicesEqual(a, b []string) bool {
 func TestJobStoreResetInProgress(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -190,7 +198,7 @@ func TestJobStoreRecoverInterruptedJobs(t *testing.T) {
 	store := newTestJobStore(t)
 
 	// A running job with in-progress work, as if a process died mid-scrape.
-	runningID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1", "u2"})
+	runningID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1", "u2"}))
 	if err != nil {
 		t.Fatalf("create running job: %v", err)
 	}
@@ -237,7 +245,7 @@ func TestJobStoreRecoverInterruptedJobs(t *testing.T) {
 func TestJobStorePauseFlagBlocksClaim(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -267,7 +275,7 @@ func TestJobStorePauseFlagBlocksClaim(t *testing.T) {
 func TestJobStoreClaimResumeClaimsOnceAndClearsPause(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, map[string]string{"lang": "en"}, []string{"u1"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, map[string]string{"lang": "en"}, URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -297,7 +305,7 @@ func TestJobStoreClaimResumeClaimsOnceAndClearsPause(t *testing.T) {
 func TestJobStoreClaimResumeRejectsDoneJob(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, []string{"u1"})
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -405,7 +413,7 @@ func TestJobStoreClaimPendingJobByID(t *testing.T) {
 func TestJobStoreRecoverStaleActiveJob(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
-	runningID, err := store.CreateJob(ctx, []string{"running"}, nil, []string{"u1"})
+	runningID, err := store.CreateJob(ctx, []string{"running"}, nil, URLsNoLang([]string{"u1"}))
 	if err != nil {
 		t.Fatalf("create running job: %v", err)
 	}
@@ -457,7 +465,7 @@ func TestJobStoreListJobsPage(t *testing.T) {
 	store := newTestJobStore(t)
 	var ids []string
 	for _, query := range []string{"one", "two", "three"} {
-		id, err := store.CreateJob(ctx, []string{query}, nil, []string{"url-" + query})
+		id, err := store.CreateJob(ctx, []string{query}, nil, URLsNoLang([]string{"url-" + query}))
 		if err != nil {
 			t.Fatalf("create %s: %v", query, err)
 		}
@@ -1083,7 +1091,7 @@ func TestJobStoreQueueStartingJobURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create starting job: %v", err)
 	}
-	if err := store.QueueStartingJobURLs(ctx, jobID, []string{"u1", "u2"}); err != nil {
+	if err := store.QueueStartingJobURLs(ctx, jobID, URLsNoLang([]string{"u1", "u2"})); err != nil {
 		t.Fatalf("queue URLs: %v", err)
 	}
 	stats, err := store.JobStats(ctx, jobID)
@@ -1096,7 +1104,7 @@ func TestJobStoreQueueStartingJobURLs(t *testing.T) {
 	if err := store.StartJob(ctx, jobID); err != nil {
 		t.Fatalf("start job: %v", err)
 	}
-	if err := store.QueueStartingJobURLs(ctx, jobID, []string{"u3"}); err == nil {
+	if err := store.QueueStartingJobURLs(ctx, jobID, URLsNoLang([]string{"u3"})); err == nil {
 		t.Fatal("expected queueing a non-starting job to fail")
 	}
 }

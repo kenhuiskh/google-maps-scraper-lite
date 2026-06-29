@@ -104,6 +104,8 @@ CLAUDE.md
 # Skills
 .agents/
 
+artifacts/
+
 mcp.json
 
 # Air (live-reload tool)
