@@ -940,6 +940,57 @@
       box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
     }
     .run-modal::backdrop { background: rgba(15, 23, 42, 0.46); }
+    .delete-modal { width: min(560px, calc(100vw - 32px)); }
+    .delete-modal .run-modal-body {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      overflow: auto;
+    }
+    .delete-summary-card {
+      display: grid;
+      gap: 6px;
+      padding: 12px;
+      border: 1px solid rgba(220, 38, 38, 0.18);
+      border-radius: 8px;
+      background: #fff7f7;
+    }
+    .delete-count {
+      display: inline-flex;
+      align-items: center;
+      width: max-content;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(220, 38, 38, 0.1);
+      color: var(--danger);
+      font-size: 0.78rem;
+      font-weight: 850;
+    }
+    .delete-detail-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }
+    .delete-option {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .delete-confirm-button {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #fff;
+      font-weight: 850;
+    }
+    .delete-confirm-button:hover:not([disabled]) { background: #b91c1c; border-color: #b91c1c; color: #fff; }
     .job-log-modal { width: min(960px, calc(100vw - 48px)); }
     .job-log-modal .run-modal-shell { grid-template-rows: auto minmax(0, 1fr); }
     .job-log-modal .run-modal-header { background: #111827; border-bottom-color: rgba(255, 255, 255, 0.12); }
@@ -1641,6 +1692,37 @@
 	    </div>
 	  </dialog>
 
+    <dialog id="delete-confirm-modal" class="run-modal delete-modal" aria-labelledby="delete-confirm-title">
+      <div class="run-modal-shell">
+        <div class="run-modal-header">
+          <div>
+            <h2 id="delete-confirm-title" class="panel-title">Confirm Delete</h2>
+            <div id="delete-confirm-subtitle" class="muted tiny">This removes saved SQLite data.</div>
+          </div>
+          <button type="button" onclick="closeDeleteConfirmModal(false)" aria-label="Close delete confirmation">Close</button>
+        </div>
+        <div class="run-modal-body">
+          <div class="delete-summary-card">
+            <span id="delete-confirm-count" class="delete-count">0 items</span>
+            <div id="delete-confirm-message">This cannot be undone.</div>
+          </div>
+          <ul id="delete-confirm-details" class="delete-detail-list"></ul>
+          <label id="delete-confirm-option-wrap" class="delete-option" hidden>
+            <input id="delete-confirm-option" type="checkbox">
+            <span>
+              <span id="delete-confirm-option-label" class="item-title">Also delete related data</span>
+              <span id="delete-confirm-option-help" class="muted tiny"></span>
+            </span>
+          </label>
+        </div>
+        <div class="run-modal-actions">
+          <div id="delete-confirm-status" class="muted tiny" role="status" aria-live="polite"></div>
+          <button type="button" onclick="closeDeleteConfirmModal(false)">Cancel</button>
+          <button id="delete-confirm-button" type="button" class="delete-confirm-button" onclick="closeDeleteConfirmModal(true)">Delete</button>
+        </div>
+      </div>
+    </dialog>
+
 	  <dialog id="mobile-log-reader" class="mobile-log-reader" aria-labelledby="mobile-log-title">
 	    <div class="mobile-log-shell">
 	      <div class="mobile-log-header">
@@ -1740,7 +1822,10 @@
         <h2 id="templates-title" class="panel-title">Saved Templates</h2>
         <div class="muted tiny">Template library and dependency-safe actions.</div>
       </div>
-      <a class="button-link secondary-button" href="/templates/editor">New Template</a>
+      <div class="split-actions">
+        <button type="button" class="danger-button" onclick="deleteAllTemplates()">Delete all</button>
+        <a class="button-link secondary-button" href="/templates/editor">New Template</a>
+      </div>
     </div>
     <div class="panel-body">
       <div id="templates-bulk-bar" class="jobs-bulk-bar" hidden>
@@ -1908,7 +1993,10 @@
         <h2 id="strategies-title" class="panel-title">Strategies</h2>
         <div class="muted tiny">Saved template batches with run controls.</div>
       </div>
-      <button type="button" class="secondary-button" onclick="newStrategy()">New Strategy</button>
+      <div class="split-actions">
+        <button type="button" class="danger-button" onclick="deleteAllStrategies()">Delete all</button>
+        <button type="button" class="secondary-button" onclick="newStrategy()">New Strategy</button>
+      </div>
     </div>
     <div class="panel-body">
       <div class="compact-list" id="strategy-list">
@@ -2101,7 +2189,10 @@
         <textarea id="template-edit-json" class="code-field" name="params_json" required>{{.TemplateEditor.TemplateParamsJSON}}</textarea>
       </div>
       <div id="template-sync-result" role="status" aria-live="polite"></div>
-      <button class="primary-button" type="submit">Save Template</button>
+      <div class="split-actions">
+        <button class="primary-button" type="submit">Save Template</button>
+        <button id="template-editor-delete" type="button" class="danger-button" onclick="deleteCurrentTemplate()"{{if not .TemplateEditor.TemplateID}} hidden{{end}}>Delete Template</button>
+      </div>
       <div id="template-result" role="status" aria-live="polite"></div>
     </form>
   </div>
@@ -2155,7 +2246,10 @@
           <div class="empty-state">No templates selected.</div>
         </div>
       </div>
-      <button class="primary-button" type="submit">Save Strategy</button>
+      <div class="split-actions">
+        <button class="primary-button" type="submit">Save Strategy</button>
+        <button id="strategy-editor-delete" type="button" class="danger-button" onclick="deleteCurrentStrategy()" hidden>Delete Strategy</button>
+      </div>
       <div id="strategy-result" role="status" aria-live="polite"></div>
     </form>
     <hr class="panel-divider">
@@ -2219,6 +2313,9 @@
         </div>
         <button type="button" class="icon-button" onclick="refreshPartials()" title="Refresh dashboard and job table." aria-label="Refresh dashboard and job table">
           {{template "icon-refresh" .}}<span class="sr-only">Refresh</span>
+        </button>
+        <button type="button" class="icon-button action-danger" onclick="deleteAllJobs()" title="Delete all jobs matching the current filter." aria-label="Delete all matching jobs">
+          {{template "icon-trash" .}}<span class="sr-only">Delete all matching jobs</span>
         </button>
         {{if .Summary.SchedulerPaused}}
           <button type="button" class="icon-button action-warning" onclick="resumeScheduler()" title="Resume the queue scheduler. Pending jobs will be claimed again." aria-label="Resume scheduler">
@@ -2488,6 +2585,79 @@
     await refreshPartials();
   }
 
+  let pendingDeleteConfirm = null;
+
+  function showDeleteConfirm(options) {
+    options = options || {};
+    const modal = document.getElementById('delete-confirm-modal');
+    if (!modal) return Promise.resolve({ confirmed: false, optionChecked: false });
+    document.getElementById('delete-confirm-title').textContent = options.title || 'Confirm Delete';
+    document.getElementById('delete-confirm-subtitle').textContent = options.subtitle || 'This removes saved SQLite data.';
+    document.getElementById('delete-confirm-count').textContent = (options.count || 1) + ' ' + (options.count === 1 ? 'item' : 'items');
+    document.getElementById('delete-confirm-message').textContent = options.message || 'This cannot be undone.';
+    const details = document.getElementById('delete-confirm-details');
+    details.innerHTML = '';
+    (options.details || []).forEach(function(detail) {
+      const li = document.createElement('li');
+      li.textContent = detail;
+      details.appendChild(li);
+    });
+    details.hidden = !(options.details || []).length;
+    const optionWrap = document.getElementById('delete-confirm-option-wrap');
+    const option = document.getElementById('delete-confirm-option');
+    const optionLabel = document.getElementById('delete-confirm-option-label');
+    const optionHelp = document.getElementById('delete-confirm-option-help');
+    option.checked = !!options.optionChecked;
+    optionWrap.hidden = !options.optionLabel;
+    optionLabel.textContent = options.optionLabel || '';
+    optionHelp.textContent = options.optionHelp || '';
+    const status = document.getElementById('delete-confirm-status');
+    if (status) status.textContent = '';
+    const button = document.getElementById('delete-confirm-button');
+    if (button) {
+      button.disabled = false;
+      button.textContent = options.confirmLabel || 'Delete';
+    }
+    return new Promise(function(resolve) {
+      pendingDeleteConfirm = resolve;
+      modal.addEventListener('cancel', onDeleteConfirmCancel);
+      if (typeof modal.showModal === 'function') {
+        modal.showModal();
+      } else {
+        modal.setAttribute('open', 'open');
+      }
+    });
+  }
+
+  function onDeleteConfirmCancel(event) {
+    event.preventDefault();
+    closeDeleteConfirmModal(false);
+  }
+
+  function closeDeleteConfirmModal(confirmed) {
+    const modal = document.getElementById('delete-confirm-modal');
+    const option = document.getElementById('delete-confirm-option');
+    const resolve = pendingDeleteConfirm;
+    pendingDeleteConfirm = null;
+    if (modal) {
+      modal.removeEventListener('cancel', onDeleteConfirmCancel);
+      if (typeof modal.close === 'function') modal.close();
+      else modal.removeAttribute('open');
+    }
+    if (resolve) resolve({ confirmed: !!confirmed, optionChecked: !!option?.checked });
+  }
+
+  function deleteError(err) {
+    alert('Error: ' + (err && err.message ? err.message : err));
+  }
+
+  function removeRows(selector, ids, attr) {
+    ids.forEach(function(id) {
+      const row = document.querySelector(selector + '[' + attr + '="' + cssEscape(id) + '"]');
+      if (row) row.remove();
+    });
+  }
+
   async function pauseScheduler() {
     if (!confirm('Pause the queue scheduler? Queued runs stop being claimed. The currently running job continues until it finishes.')) {
       return;
@@ -2500,7 +2670,18 @@
   }
 
   async function deleteJob(jobID, path) {
-    if (!confirm('Delete this job and its scraped URL records? This cannot be undone.')) {
+    const decision = await showDeleteConfirm({
+      title: 'Delete Job',
+      count: 1,
+      message: 'Delete this job and its scraped URL records? This cannot be undone.',
+      details: [
+        'Removes the job row from SQLite.',
+        'Cascades queued URLs, job events, and execution stats.',
+        'Active and running jobs are protected server-side.'
+      ],
+      confirmLabel: 'Delete Job'
+    });
+    if (!decision.confirmed) {
       return;
     }
     try {
@@ -2518,7 +2699,7 @@
       }
       await refreshPartials();
     } catch (err) {
-      alert('Error: ' + err);
+      deleteError(err);
     }
   }
 
@@ -2545,7 +2726,18 @@
   async function batchDeleteJobs() {
     const ids = jobSelectBoxes().filter(function(b) { return b.checked; }).map(function(b) { return b.value; });
     if (ids.length === 0) return;
-    if (!confirm('Delete ' + ids.length + ' job(s) and their scraped URL records? This cannot be undone.')) {
+    const decision = await showDeleteConfirm({
+      title: 'Delete Jobs',
+      count: ids.length,
+      message: 'Delete selected jobs and their scraped URL records? This cannot be undone.',
+      details: [
+        'Each deleted job cascades queued URLs, job events, and execution stats.',
+        'Active and running jobs will be skipped.',
+        'Deleted job log files are removed when present.'
+      ],
+      confirmLabel: 'Delete Jobs'
+    });
+    if (!decision.confirmed) {
       return;
     }
     try {
@@ -2573,8 +2765,59 @@
       alert(parts.join(', '));
       await refreshPartials();
     } catch (err) {
-      alert('Error: ' + err);
+      deleteError(err);
     }
+  }
+
+  async function deleteAllJobs() {
+    const panel = document.getElementById('jobs-panel');
+    const count = Number(panel?.dataset.totalJobs || 0);
+    if (count === 0) return;
+    const decision = await showDeleteConfirm({
+      title: 'Delete All Matching Jobs',
+      count: count,
+      message: 'Delete all jobs matching the current filter, not just this visible page?',
+      details: [
+        'Current filter: ' + jobsFilterLabel(),
+        'Each deleted job cascades queued URLs, job events, and execution stats.',
+        'Active and running jobs will be skipped.'
+      ],
+      confirmLabel: 'Delete All Jobs'
+    });
+    if (!decision.confirmed) return;
+    try {
+      const res = await fetch('/api/jobs/batch-delete-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: jobsFilter })
+      });
+      if (!res.ok) {
+        alert('Error: ' + await res.text());
+        return;
+      }
+      const payload = await res.json();
+      const counts = { deleted: 0, skipped_active: 0, not_found: 0 };
+      (payload.results || []).forEach(function(r) {
+        counts[r.status] = (counts[r.status] || 0) + 1;
+        if (r.status === 'deleted') {
+          if (selectedJobID === r.id) selectedJobID = '';
+          if (selectedLogJobID === r.id) selectedLogJobID = '';
+        }
+      });
+      const parts = [counts.deleted + ' deleted'];
+      if (counts.skipped_active) parts.push(counts.skipped_active + ' skipped (active)');
+      if (counts.not_found) parts.push(counts.not_found + ' not found');
+      alert(parts.join(', '));
+      jobsPage = 1;
+      await refreshPartials();
+    } catch (err) {
+      deleteError(err);
+    }
+  }
+
+  function jobsFilterLabel() {
+    const selected = document.querySelector('[data-filter-option][aria-pressed="true"]');
+    return selected ? selected.textContent.trim() : (jobsFilter || 'all');
   }
 
   async function refreshJob(jobID) {
@@ -3105,6 +3348,7 @@
     setValue('template-edit-id', '');
     setValue('template-edit-name', '');
     setValue('template-edit-json', '{\n  "Queries": []\n}');
+    syncTemplateDeleteButton();
     const result = document.getElementById('template-result');
     if (result) result.textContent = '';
   }
@@ -3115,6 +3359,7 @@
     setValue('strategy-notes', '');
     document.querySelectorAll('#strategy-template-ids input[name="template_ids"]').forEach(function(input) { input.checked = false; });
     savedStrategyTemplateSignature = '';
+    syncStrategyDeleteButton();
     updateStrategyOrder();
     const result = document.getElementById('strategy-result');
     if (result) result.textContent = '';
@@ -3129,6 +3374,7 @@
       setValue('template-edit-id', this.selectedOptions[0]?.dataset.templateId || '');
       setValue('template-edit-name', this.selectedOptions[0]?.textContent || '');
       setValue('template-edit-json', formatTemplateJSONText(this.value));
+      syncTemplateDeleteButton();
       applyTemplateJSONToForm();
     });
   }
@@ -3202,6 +3448,7 @@
       setValue('template-edit-id', tpl.ID || '');
       setValue('template-edit-name', tpl.Name || '');
       setValue('template-edit-json', formatTemplateJSONText(tpl.ParamsJSON || '{}'));
+      syncTemplateDeleteButton();
     } catch (err) {
       alert('Error: ' + err.message);
     }
@@ -3215,13 +3462,43 @@
   }
 
   async function deleteTemplate(id) {
-    if (!confirm('Delete this template?')) return;
+    const decision = await showDeleteConfirm({
+      title: 'Delete Template',
+      count: 1,
+      message: 'Delete this job template from SQLite?',
+      details: [
+        'Templates associated with a strategy cannot be deleted.',
+        'Existing jobs keep their historical config JSON.',
+        'No strategy links will be removed by this action.'
+      ],
+      confirmLabel: 'Delete Template'
+    });
+    if (!decision.confirmed) return;
     try {
       await fetchJSON('/api/job-templates/' + encodeURIComponent(id), { method: 'DELETE' });
-      location.reload();
+      removeRows('[data-template-row]', [id], 'data-template-row');
+      if (formValue('template-edit-id') === id) {
+        if (document.getElementById('template-form')) {
+          newTemplate();
+        } else {
+          location.href = '/templates';
+        }
+      }
     } catch (err) {
-      alert('Error: ' + err.message);
+      deleteError(err);
     }
+  }
+
+  async function deleteCurrentTemplate() {
+    const id = formValue('template-edit-id');
+    if (!id) return;
+    await deleteTemplate(id);
+  }
+
+  function syncTemplateDeleteButton() {
+    const button = document.getElementById('template-editor-delete');
+    if (!button) return;
+    button.hidden = !formValue('template-edit-id');
   }
 
   function templateSelectBoxes() {
@@ -3247,7 +3524,18 @@
   async function batchDeleteTemplates() {
     const ids = templateSelectBoxes().filter(function(b) { return b.checked; }).map(function(b) { return b.value; });
     if (ids.length === 0) return;
-    if (!confirm('Delete ' + ids.length + ' template(s)?')) return;
+    const decision = await showDeleteConfirm({
+      title: 'Delete Templates',
+      count: ids.length,
+      message: 'Delete selected job templates from SQLite?',
+      details: [
+        'Templates associated with strategies will be skipped.',
+        'Existing jobs keep their historical config JSON.',
+        'No strategy links will be removed by this action.'
+      ],
+      confirmLabel: 'Delete Templates'
+    });
+    if (!decision.confirmed) return;
     try {
       const payload = await fetchJSON('/api/job-templates/batch-delete', {
         method: 'POST',
@@ -3260,9 +3548,44 @@
       if (counts.skipped_referenced) parts.push(counts.skipped_referenced + ' skipped (used by a strategy)');
       if (counts.not_found) parts.push(counts.not_found + ' not found');
       alert(parts.join(', '));
-      location.reload();
+      const deletedIDs = (payload.results || []).filter(function(r) { return r.status === 'deleted'; }).map(function(r) { return r.id; });
+      removeRows('[data-template-row]', deletedIDs, 'data-template-row');
+      if (deletedIDs.indexOf(formValue('template-edit-id')) !== -1) newTemplate();
+      onTemplateSelectChange();
     } catch (err) {
-      alert('Error: ' + err.message);
+      deleteError(err);
+    }
+  }
+
+  async function deleteAllTemplates() {
+    const count = document.querySelectorAll('[data-template-row]').length;
+    if (count === 0) return;
+    const decision = await showDeleteConfirm({
+      title: 'Delete All Templates',
+      count: count,
+      message: 'Delete all job templates from SQLite?',
+      details: [
+        'Templates associated with strategies will be skipped.',
+        'Existing jobs keep their historical config JSON.',
+        'No strategy links will be removed by this action.'
+      ],
+      confirmLabel: 'Delete All Templates'
+    });
+    if (!decision.confirmed) return;
+    try {
+      const payload = await fetchJSON('/api/job-templates/batch-delete-all', { method: 'POST' });
+      const counts = { deleted: 0, skipped_referenced: 0, not_found: 0 };
+      (payload.results || []).forEach(function(r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+      const parts = [counts.deleted + ' deleted'];
+      if (counts.skipped_referenced) parts.push(counts.skipped_referenced + ' skipped (used by a strategy)');
+      if (counts.not_found) parts.push(counts.not_found + ' not found');
+      alert(parts.join(', '));
+      const deletedIDs = (payload.results || []).filter(function(r) { return r.status === 'deleted'; }).map(function(r) { return r.id; });
+      removeRows('[data-template-row]', deletedIDs, 'data-template-row');
+      if (deletedIDs.indexOf(formValue('template-edit-id')) !== -1) newTemplate();
+      onTemplateSelectChange();
+    } catch (err) {
+      deleteError(err);
     }
   }
 
@@ -3590,6 +3913,7 @@
         input.checked = selected.has(input.value);
       });
       savedStrategyTemplateSignature = selectedTemplateSignature();
+      syncStrategyDeleteButton();
       updateStrategyOrder();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -3706,17 +4030,79 @@
   }
 
   async function deleteStrategy(id) {
-    if (!confirm('Delete this strategy?')) return;
-    // Offer to also delete its job templates. Templates shared with another
-    // strategy are always kept server-side.
-    const cascade = confirm('Also delete this strategy\'s job templates?\n\nOK = delete templates that are not shared with another strategy.\nCancel = keep all templates.');
+    const decision = await showDeleteConfirm({
+      title: 'Delete Strategy',
+      count: 1,
+      message: 'Delete this strategy and its template links from SQLite?',
+      details: [
+        'Removes the strategy row and its strategy-template join rows.',
+        'Jobs created from this strategy are not deleted.',
+        'Shared templates are always kept.'
+      ],
+      optionLabel: 'Also delete unshared templates',
+      optionHelp: 'Deletes only templates that become unreferenced after this strategy is removed.',
+      confirmLabel: 'Delete Strategy'
+    });
+    if (!decision.confirmed) return;
+    const cascade = decision.optionChecked;
     try {
       const url = '/api/strategies/' + encodeURIComponent(id) + (cascade ? '?cascade=true' : '');
       await fetchJSON(url, { method: 'DELETE' });
-      location.reload();
+      removeRows('[data-strategy-row]', [id], 'data-strategy-row');
+      if (formValue('strategy-edit-id') === id) newStrategy();
+      if (cascade) location.reload();
     } catch (err) {
-      alert('Error: ' + err.message);
+      deleteError(err);
     }
+  }
+
+  async function deleteCurrentStrategy() {
+    const id = formValue('strategy-edit-id');
+    if (!id) return;
+    await deleteStrategy(id);
+  }
+
+  async function deleteAllStrategies() {
+    const count = document.querySelectorAll('[data-strategy-row]').length;
+    if (count === 0) return;
+    const decision = await showDeleteConfirm({
+      title: 'Delete All Strategies',
+      count: count,
+      message: 'Delete all strategies and their template links from SQLite?',
+      details: [
+        'Jobs created from these strategies are not deleted.',
+        'Shared templates are always kept.',
+        'Use the checkbox below to also delete templates that become unreferenced.'
+      ],
+      optionLabel: 'Also delete unshared templates',
+      optionHelp: 'Deletes only templates that become unreferenced as strategies are removed.',
+      confirmLabel: 'Delete All Strategies'
+    });
+    if (!decision.confirmed) return;
+    try {
+      const payload = await fetchJSON('/api/strategies/batch-delete-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delete_templates: decision.optionChecked })
+      });
+      const counts = { deleted: 0, not_found: 0 };
+      (payload.results || []).forEach(function(r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+      const parts = [counts.deleted + ' deleted'];
+      if (counts.not_found) parts.push(counts.not_found + ' not found');
+      alert(parts.join(', '));
+      const deletedIDs = (payload.results || []).filter(function(r) { return r.status === 'deleted'; }).map(function(r) { return r.id; });
+      removeRows('[data-strategy-row]', deletedIDs, 'data-strategy-row');
+      if (deletedIDs.indexOf(formValue('strategy-edit-id')) !== -1) newStrategy();
+      if (decision.optionChecked) location.reload();
+    } catch (err) {
+      deleteError(err);
+    }
+  }
+
+  function syncStrategyDeleteButton() {
+    const button = document.getElementById('strategy-editor-delete');
+    if (!button) return;
+    button.hidden = !formValue('strategy-edit-id');
   }
 
   function updateStrategyOrder() {

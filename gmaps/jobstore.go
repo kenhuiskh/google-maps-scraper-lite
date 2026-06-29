@@ -1164,6 +1164,24 @@ func (s *JobStore) ListJobsPageFiltered(ctx context.Context, filter string, limi
 	return s.loadJobsByQuery(ctx, `SELECT id FROM jobs`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args...)
 }
 
+func (s *JobStore) ListJobIDsFiltered(ctx context.Context, filter string) ([]string, error) {
+	where, args := jobsFilterWhere(filter)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs`+where+` ORDER BY created_at DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func jobsFilterWhere(filter string) (string, []any) {
 	switch filter {
 	case "pending":
