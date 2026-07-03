@@ -44,11 +44,12 @@ type Options struct {
 // cookies (needed for the reviews RPC credentials:include fetch) are shared
 // across workers.
 func New(opts Options) (*Browser, error) {
-	// Skip install when PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is set (e.g. CI with pre-installed browsers).
-	if os.Getenv("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD") == "" {
-		if err := playwright.Install(); err != nil {
-			return nil, fmt.Errorf("install playwright: %w", err)
-		}
+	installOpts := &playwright.RunOptions{Browsers: []string{"chromium"}}
+	if os.Getenv("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD") != "" {
+		installOpts.SkipInstallBrowsers = true
+	}
+	if err := playwright.Install(installOpts); err != nil {
+		return nil, fmt.Errorf("install playwright: %w", err)
 	}
 
 	pw, err := playwright.Run()
