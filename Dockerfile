@@ -30,11 +30,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
+    libatspi2.0-0 \
     libcairo-gobject2 \
     libcairo2 \
     libcups2 \
     libdbus-1-3 \
     libdrm2 \
+    libegl1 \
+    libfontconfig1 \
+    libfreetype6 \
     libgdk-pixbuf-2.0-0 \
     libgbm1 \
     libglib2.0-0 \
@@ -51,8 +55,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxdamage1 \
     libxext6 \
     libxfixes3 \
+    libxi6 \
     libxkbcommon0 \
     libxrandr2 \
+    libxrender1 \
+    libxshmfence1 \
+    libxtst6 \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -62,6 +70,7 @@ COPY --from=builder /build/google-maps-scraper-lite .
 COPY --from=builder /ms-playwright /ms-playwright
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # tini as PID 1 reaps orphaned Chromium/Node driver processes left behind when a
 # scraper subprocess is OOM-killed or crashes without running its deferred cleanup.
