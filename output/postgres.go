@@ -174,7 +174,7 @@ func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
 	toJSON := func(field string, v any) []byte {
 		b, err := json.Marshal(v)
 		if err != nil {
-			log.Printf("postgres: json.Marshal failed for field %q: %v", field, err)
+			log.Printf("postgres[%s]: json.Marshal failed for field %q: %v", p.tableRestaurant, field, err)
 			return []byte("null")
 		}
 		return b
@@ -183,7 +183,7 @@ func (p *PostgresWriter) Write(entry *gmaps.Entry) error {
 	canonicalCID, err := p.canonicalCID(ctx, entry)
 	if err != nil {
 		atomic.AddInt64(&p.failed, 1)
-		log.Printf("postgres: canonical lookup failed for %q: %v", entry.Cid, err)
+		log.Printf("postgres[%s]: canonical lookup failed for %q: %v", p.tableRestaurant, entry.Cid, err)
 		return fmt.Errorf("canonical restaurant lookup %q: %w", entry.Cid, err)
 	}
 
@@ -282,7 +282,7 @@ INSERT INTO %s (
 	)
 	if err != nil {
 		atomic.AddInt64(&p.failed, 1)
-		log.Printf("postgres: write failed for %q: %v", canonicalCID, err)
+		log.Printf("postgres[%s]: write failed for %q: %v", p.tableRestaurant, canonicalCID, err)
 		return fmt.Errorf("upsert restaurant %q: %w", canonicalCID, err)
 	}
 
@@ -305,14 +305,14 @@ ON CONFLICT (cid, reviewer_name) DO NOTHING`, quotePostgresIdent(p.tableReview))
 		)
 		if err != nil {
 			atomic.AddInt64(&p.failed, 1)
-			log.Printf("postgres: write failed for %q: %v", canonicalCID, err)
+			log.Printf("postgres[%s]: write failed for %q: %v", p.tableRestaurant, canonicalCID, err)
 			return fmt.Errorf("insert review for %q: %w", canonicalCID, err)
 		}
 	}
 
 	written := atomic.AddInt64(&p.written, 1)
 	if written%10 == 0 {
-		log.Printf("postgres: %d records written", written)
+		log.Printf("postgres[%s]: %d records written", p.tableRestaurant, written)
 	}
 
 	return nil
@@ -365,7 +365,8 @@ func (p *PostgresWriter) Flush() error { return nil }
 
 func (p *PostgresWriter) Close() error {
 	log.Printf(
-		"postgres: closing — total written=%d failed=%d",
+		"postgres[%s]: closing — total written=%d failed=%d",
+		p.tableRestaurant,
 		atomic.LoadInt64(&p.written),
 		atomic.LoadInt64(&p.failed),
 	)

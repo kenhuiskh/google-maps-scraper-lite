@@ -677,7 +677,12 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 		}()
 		if err := cmd.Wait(); err != nil {
 			if procCtx.Err() == context.DeadlineExceeded {
-				log.Printf("process pid %d killed: exceeded job timeout", pid)
+				log.Printf("process pid %d killed: exceeded job timeout; recovering job %s", pid, jobID)
+				if store != nil && jobID != "" {
+					if err := store.RecoverStaleActiveJob(context.Background(), jobID, errors.New("exceeded job timeout")); err != nil {
+						log.Printf("recover timed-out job %s: %v", jobID, err)
+					}
+				}
 			} else {
 				log.Printf("process pid %d exited: %v", pid, err)
 			}
