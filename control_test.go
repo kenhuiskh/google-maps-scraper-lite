@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gosom/google-maps-scraper-lite/gmaps"
 )
@@ -1887,6 +1889,49 @@ func TestSweepLeakedProcessesCleansRows(t *testing.T) {
 	if len(procs) != 0 {
 		t.Fatalf("rows after sweep = %d, want 0", len(procs))
 	}
+}
+
+func TestSpawnProcessTimeoutRecoversJob(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh is required for subprocess timeout test")
+	}
+	t.Setenv("SCRAPER_JOB_TIMEOUT", "100ms")
+
+	ctx := context.Background()
+	store := newStartStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start job: %v", err)
+	}
+	if _, err := store.ClaimNextURL(ctx, jobID); err != nil {
+		t.Fatalf("claim url: %v", err)
+	}
+
+	logPath := filepath.Join(t.TempDir(), "job.log")
+	if err := spawnProcess(store, jobID, "/bin/sh", []string{"-c", "sleep 2"}, logPath); err != nil {
+		t.Fatalf("spawn process: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		job, jobErr := store.GetJob(ctx, jobID)
+		stats, statsErr := store.JobStats(ctx, jobID)
+		procs, procsErr := store.ListJobProcesses(ctx)
+		if jobErr == nil && statsErr == nil && procsErr == nil {
+			last = fmt.Sprintf("status=%s pending=%d in_progress=%d procs=%d", job.Status, stats.Pending, stats.InProgress, len(procs))
+			if job.Status == gmaps.JobStatusPaused && stats.Pending == 1 && stats.InProgress == 0 && len(procs) == 0 {
+				return
+			}
+		} else {
+			last = fmt.Sprintf("jobErr=%v statsErr=%v procsErr=%v", jobErr, statsErr, procsErr)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed-out process did not recover job; last state: %s", last)
 }
 
 func TestJobsPanelRendersBatchSelectUI(t *testing.T) {
