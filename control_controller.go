@@ -105,7 +105,7 @@ func startControlServer(ctx context.Context, addr string, store *gmaps.JobStore,
 		// Reap any process groups orphaned by a crash/restart before the queue
 		// starts spawning new jobs.
 		sweepLeakedProcesses(ctx, store)
-		go runJobQueue(ctx, store, stateDB, launchStart, 30*time.Second)
+		go runJobQueue(ctx, store, stateDB, launchResume, launchStart, 30*time.Second)
 	}
 
 	var handler http.Handler = mux

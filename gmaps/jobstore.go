@@ -24,6 +24,8 @@ const (
 	JobStatusDone     = "done"
 	JobStatusFailed   = "failed"
 
+	JobTimeoutError = "exceeded job timeout"
+
 	URLStatusPending    = "pending"
 	URLStatusInProgress = "in_progress"
 	URLStatusDone       = "done"
@@ -753,6 +755,26 @@ func (s *JobStore) NextPendingJobAfterDone(ctx context.Context) (*Job, error) {
 		ORDER BY created_at ASC
 		LIMIT 1`,
 		JobStatusPending, JobStatusStarting, JobStatusRunning, JobStatusPending, JobStatusDone, JobStatusDone).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return s.GetJob(ctx, id)
+}
+
+func (s *JobStore) NextTimeoutPausedJob(ctx context.Context) (*Job, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT j.id
+		FROM jobs j
+		WHERE j.status = ?
+			AND j.last_error = ?
+			AND NOT EXISTS (SELECT 1 FROM jobs WHERE status IN (?, ?))
+			AND EXISTS (SELECT 1 FROM job_urls ju WHERE ju.job_id = j.id AND ju.status = ?)
+		ORDER BY j.updated_at ASC, j.created_at ASC
+		LIMIT 1`,
+		JobStatusPaused, JobTimeoutError, JobStatusStarting, JobStatusRunning, URLStatusPending).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows

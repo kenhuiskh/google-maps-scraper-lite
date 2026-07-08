@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1631,7 +1632,7 @@ func TestRunJobQueueOnceLaunchesAfterDone(t *testing.T) {
 		launched = p.JobID
 		return nil
 	})
-	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", launcher); err != nil {
+	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", nil, launcher); err != nil {
 		t.Fatalf("run queue: %v", err)
 	}
 	if launched != secondID {
@@ -1664,11 +1665,80 @@ func TestRunJobQueueOnceDoesNotLaunchAfterFailed(t *testing.T) {
 		called = true
 		return nil
 	})
-	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", launcher); err != nil {
+	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", nil, launcher); err != nil {
 		t.Fatalf("run queue: %v", err)
 	}
 	if called {
 		t.Fatal("queue launched after failed job")
+	}
+}
+
+func TestRunJobQueueOnceAutoResumesTimeoutPausedJob(t *testing.T) {
+	oldDelay := timeoutAutoResumeDelay
+	timeoutAutoResumeDelay = func() time.Duration { return 0 }
+	t.Cleanup(func() { timeoutAutoResumeDelay = oldDelay })
+
+	store := newStartStore(t)
+	ctx := context.Background()
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, gmaps.Config{OutputMode: "file"}, gmaps.URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start job: %v", err)
+	}
+	if _, err := store.ClaimNextURL(ctx, jobID); err != nil {
+		t.Fatalf("claim url: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, jobID, errors.New(gmaps.JobTimeoutError)); err != nil {
+		t.Fatalf("recover timeout job: %v", err)
+	}
+
+	var resumed string
+	resume := resumeLauncher(func(_ context.Context, id string) error {
+		resumed = id
+		return nil
+	})
+	startCalled := false
+	start := startLauncher(func(_ context.Context, _ startParams) error {
+		startCalled = true
+		return nil
+	})
+	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", resume, start); err != nil {
+		t.Fatalf("run queue: %v", err)
+	}
+	if resumed != jobID {
+		t.Fatalf("resumed = %q, want %q", resumed, jobID)
+	}
+	if startCalled {
+		t.Fatal("started pending job instead of resuming timeout job")
+	}
+}
+
+func TestRunJobQueueOnceDoesNotAutoResumeManualPause(t *testing.T) {
+	oldDelay := timeoutAutoResumeDelay
+	timeoutAutoResumeDelay = func() time.Duration { return 0 }
+	t.Cleanup(func() { timeoutAutoResumeDelay = oldDelay })
+
+	store := newStartStore(t)
+	ctx := context.Background()
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, gmaps.Config{OutputMode: "file"}, gmaps.URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, jobID, gmaps.JobStatusPaused, errors.New("operator paused")); err != nil {
+		t.Fatalf("pause job: %v", err)
+	}
+	called := false
+	resume := resumeLauncher(func(_ context.Context, _ string) error {
+		called = true
+		return nil
+	})
+	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", resume, noopStartLauncher); err != nil {
+		t.Fatalf("run queue: %v", err)
+	}
+	if called {
+		t.Fatal("manual pause was auto-resumed")
 	}
 }
 
