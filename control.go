@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,6 +23,10 @@ import (
 type resumeLauncher func(ctx context.Context, jobID string) error
 
 type startLauncher func(ctx context.Context, params startParams) error
+
+var timeoutAutoResumeDelay = func() time.Duration {
+	return 5*time.Minute + time.Duration(rand.Int63n(int64(10*time.Minute)+1))
+}
 
 type startParams struct {
 	JobID            string
@@ -487,7 +492,7 @@ func startParamsFromTemplate(tpl gmaps.JobTemplate, stateDB string) (startParams
 	return p, nil
 }
 
-func runJobQueue(ctx context.Context, store *gmaps.JobStore, stateDB string, launchStart startLauncher, pollInterval time.Duration) {
+func runJobQueue(ctx context.Context, store *gmaps.JobStore, stateDB string, launchResume resumeLauncher, launchStart startLauncher, pollInterval time.Duration) {
 	if pollInterval <= 0 {
 		pollInterval = 30 * time.Second
 	}
@@ -499,20 +504,41 @@ func runJobQueue(ctx context.Context, store *gmaps.JobStore, stateDB string, lau
 			return
 		case <-timer.C:
 		}
-		if err := runJobQueueOnce(ctx, store, stateDB, launchStart); err != nil && !errors.Is(err, context.Canceled) {
+		if err := runJobQueueOnce(ctx, store, stateDB, launchResume, launchStart); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("job queue: %v", err)
 		}
 		timer.Reset(pollInterval)
 	}
 }
 
-func runJobQueueOnce(ctx context.Context, store *gmaps.JobStore, stateDB string, launchStart startLauncher) error {
+func runJobQueueOnce(ctx context.Context, store *gmaps.JobStore, stateDB string, launchResume resumeLauncher, launchStart startLauncher) error {
 	paused, err := store.SchedulerPaused(ctx)
 	if err != nil {
 		return err
 	}
 	if paused {
 		return nil
+	}
+	if launchResume != nil {
+		job, err := store.NextTimeoutPausedJob(ctx)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			delay := timeoutAutoResumeDelay()
+			log.Printf("job queue: auto-resume job %s after timeout in %s", job.ID, delay.Round(time.Second))
+			if err := sleepContext(ctx, delay); err != nil {
+				return err
+			}
+			job, err = store.NextTimeoutPausedJob(ctx)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			return launchResume(ctx, job.ID)
+		}
 	}
 	job, err := store.NextPendingJobAfterDone(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -679,7 +705,7 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 			if procCtx.Err() == context.DeadlineExceeded {
 				log.Printf("process pid %d killed: exceeded job timeout; recovering job %s", pid, jobID)
 				if store != nil && jobID != "" {
-					if err := store.RecoverStaleActiveJob(context.Background(), jobID, errors.New("exceeded job timeout")); err != nil {
+					if err := store.RecoverStaleActiveJob(context.Background(), jobID, errors.New(gmaps.JobTimeoutError)); err != nil {
 						log.Printf("recover timed-out job %s: %v", jobID, err)
 					}
 				}

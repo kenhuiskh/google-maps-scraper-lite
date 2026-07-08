@@ -378,6 +378,48 @@ func TestJobStoreClaimNextPendingJobAfterDone(t *testing.T) {
 	}
 }
 
+func TestJobStoreNextTimeoutPausedJob(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start job: %v", err)
+	}
+	if _, err := store.ClaimNextURL(ctx, jobID); err != nil {
+		t.Fatalf("claim url: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, jobID, errors.New(JobTimeoutError)); err != nil {
+		t.Fatalf("recover timeout job: %v", err)
+	}
+	job, err := store.NextTimeoutPausedJob(ctx)
+	if err != nil {
+		t.Fatalf("next timeout paused: %v", err)
+	}
+	if job.ID != jobID {
+		t.Fatalf("job ID = %q, want %q", job.ID, jobID)
+	}
+
+	manualID, err := store.CreateJob(ctx, []string{"tea"}, nil, URLsNoLang([]string{"u2"}))
+	if err != nil {
+		t.Fatalf("create manual job: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, manualID, JobStatusPaused, errors.New("operator paused")); err != nil {
+		t.Fatalf("pause manual job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("restart timeout job: %v", err)
+	}
+	if err := store.SetJobStatus(ctx, jobID, JobStatusDone, nil); err != nil {
+		t.Fatalf("mark timeout job done: %v", err)
+	}
+	if _, err := store.NextTimeoutPausedJob(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("manual pause selection error = %v, want sql.ErrNoRows", err)
+	}
+}
+
 func TestJobStoreClaimPendingJobByID(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
