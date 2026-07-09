@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gosom/google-maps-scraper-lite/gmaps"
@@ -571,7 +572,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func newProcessResumeLauncher(store *gmaps.JobStore, stateDB string) resumeLauncher {
-	return func(ctx context.Context, jobID string) error {
+	var launch resumeLauncher
+	launch = func(ctx context.Context, jobID string) error {
 		job, err := store.ClaimResume(ctx, jobID)
 		if errors.Is(err, gmaps.ErrJobNotResumable) {
 			return errHTTP(err.Error())
@@ -589,11 +591,13 @@ func newProcessResumeLauncher(store *gmaps.JobStore, stateDB string) resumeLaunc
 			return err
 		}
 		sweepLeakedProcesses(ctx, store)
-		return spawnProcess(store, job.ID, exe, args, jobLogPath(stateDB, job.ID))
+		return spawnProcess(store, job.ID, exe, args, jobLogPath(stateDB, job.ID), newStallAutoResume(launch))
 	}
+	return launch
 }
 
 func newProcessStartLauncher(store *gmaps.JobStore, stateDB string) startLauncher {
+	resume := newProcessResumeLauncher(store, stateDB)
 	return func(ctx context.Context, p startParams) error {
 		exe, err := os.Executable()
 		if err != nil {
@@ -601,7 +605,18 @@ func newProcessStartLauncher(store *gmaps.JobStore, stateDB string) startLaunche
 		}
 		args := buildStartArgs(p, stateDB)
 		sweepLeakedProcesses(ctx, store)
-		return spawnProcess(store, p.JobID, exe, args, jobLogPath(stateDB, p.JobID))
+		return spawnProcess(store, p.JobID, exe, args, jobLogPath(stateDB, p.JobID), newStallAutoResume(resume))
+	}
+}
+
+// newStallAutoResume adapts a resumeLauncher into the onStallExit hook that
+// spawnProcess invokes after a stall-watchdog exit. Failures are only logged:
+// the job is already paused, so an operator can still resume it manually.
+func newStallAutoResume(launch resumeLauncher) func(jobID string) {
+	return func(jobID string) {
+		if err := launch(context.Background(), jobID); err != nil {
+			log.Printf("stall auto-resume job %s: %v", jobID, err)
+		}
 	}
 }
 
@@ -622,7 +637,46 @@ func jobTimeout() time.Duration {
 	return d
 }
 
-func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPath string) error {
+// exitCodeStallWatchdog is the exit code the scraper subprocess uses when its
+// stall watchdog fires: the subprocess marks its job paused in the job store
+// and exits so the control server can recover and relaunch it.
+const exitCodeStallWatchdog = 3
+
+// maxStallAutoResumes caps automatic relaunches after stall-watchdog exits so
+// a job that stalls every time cannot respawn forever. Tracked in memory only;
+// a container restart resets the counts.
+const maxStallAutoResumes = 3
+
+// stallResumeDelay is how long to wait before relaunching a job after a
+// stall-watchdog exit, giving Chromium and the page pool time to wind down.
+// A var so tests can shorten it.
+var stallResumeDelay = 30 * time.Second
+
+var (
+	stallResumesMu sync.Mutex
+	stallResumes   = map[string]int{}
+)
+
+// allowStallAutoResume records one automatic stall-resume attempt for jobID
+// and reports whether it is still within the per-job cap.
+func allowStallAutoResume(jobID string) bool {
+	stallResumesMu.Lock()
+	defer stallResumesMu.Unlock()
+	if stallResumes[jobID] >= maxStallAutoResumes {
+		return false
+	}
+	stallResumes[jobID]++
+	return true
+}
+
+// isStallWatchdogExit reports whether a cmd.Wait error is the subprocess
+// exiting with exitCodeStallWatchdog of its own accord (not a kill signal).
+func isStallWatchdogExit(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == exitCodeStallWatchdog
+}
+
+func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPath string, onStallExit func(jobID string)) error {
 	// exec.CommandContext sends SIGKILL when the context expires, so a stuck
 	// subprocess (and the Chromium it owns) cannot linger past the timeout.
 	procCtx, cancel := context.WithCancel(context.Background())
@@ -675,15 +729,28 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 				_ = logFile.Close()
 			}
 		}()
+		stallExit := false
 		if err := cmd.Wait(); err != nil {
-			if procCtx.Err() == context.DeadlineExceeded {
+			switch {
+			case procCtx.Err() == context.DeadlineExceeded:
 				log.Printf("process pid %d killed: exceeded job timeout; recovering job %s", pid, jobID)
 				if store != nil && jobID != "" {
 					if err := store.RecoverStaleActiveJob(context.Background(), jobID, errors.New("exceeded job timeout")); err != nil {
 						log.Printf("recover timed-out job %s: %v", jobID, err)
 					}
 				}
-			} else {
+			case isStallWatchdogExit(err):
+				stallExit = true
+				log.Printf("process pid %d exited via stall watchdog (code %d); auto-resuming job %s", pid, exitCodeStallWatchdog, jobID)
+				if store != nil && jobID != "" {
+					// The scraper usually marks the job paused itself before
+					// exiting, so ErrJobNotStale just means nothing is left
+					// to recover here.
+					if err := store.RecoverStaleActiveJob(context.Background(), jobID, errors.New("stall watchdog fired")); err != nil && !errors.Is(err, gmaps.ErrJobNotStale) {
+						log.Printf("recover stalled job %s: %v", jobID, err)
+					}
+				}
+			default:
 				log.Printf("process pid %d exited: %v", pid, err)
 			}
 		}
@@ -694,6 +761,16 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 			if err := store.DeleteJobProcess(context.Background(), jobID); err != nil {
 				log.Printf("delete job process %s: %v", jobID, err)
 			}
+		}
+		if stallExit && jobID != "" && onStallExit != nil {
+			if !allowStallAutoResume(jobID) {
+				log.Printf("stall auto-resume cap reached for job %s; leaving paused for manual resume", jobID)
+				return
+			}
+			// Give Chromium and the OS a moment to release resources before
+			// respawning; this goroutine is already off the request path.
+			time.Sleep(stallResumeDelay)
+			onStallExit(jobID)
 		}
 	}()
 	return nil

@@ -16,7 +16,8 @@ ENV GOMEMLIMIT=1500MiB GOGC=50
 RUN CGO_ENABLED=1 GOOS=linux go build -p 2 -ldflags='-s -w' -o google-maps-scraper-lite .
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+ENV PLAYWRIGHT_DRIVER_PATH=/pw-driver
+RUN go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
 
 # ── Stage 2: Minimal runtime ──────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -68,8 +69,10 @@ WORKDIR /app
 
 COPY --from=builder /build/google-maps-scraper-lite .
 COPY --from=builder /ms-playwright /ms-playwright
+COPY --from=builder /pw-driver /pw-driver
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_DRIVER_PATH=/pw-driver
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # tini as PID 1 reaps orphaned Chromium/Node driver processes left behind when a

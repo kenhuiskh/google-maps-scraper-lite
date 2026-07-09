@@ -3,21 +3,54 @@ package gmaps
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
+	"os"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 	"golang.org/x/sync/errgroup"
 )
 
+// ErrScrapeDeadline is returned when a single place scrape exceeds the
+// per-scrape watchdog deadline. The page has been closed to unblock the wedged
+// playwright call, so the same page object can never be retried.
+var ErrScrapeDeadline = errors.New("scraper: scrape watchdog deadline exceeded")
+
+// scrapeDeadline is the default hard cap on a single place scrape.
+// playwright-go calls do not honor Go contexts, so without it a wedged call
+// blocks a worker forever.
+const scrapeDeadline = 4 * time.Minute
+
+// heartbeatInterval and stallTimeout are the stall-monitor defaults applied
+// when the corresponding Config fields are zero.
+const (
+	heartbeatInterval = 5 * time.Minute
+	stallTimeout      = 15 * time.Minute
+)
+
+// ExitCodeStallWatchdog is the exit code used when the stall monitor detects
+// no pipeline progress for StallTimeout. The job has already been marked
+// paused with its in-progress URLs reset, so control.go's spawnProcess
+// auto-resumes the subprocess (control.go keeps its own local
+// exitCodeStallWatchdog constant; the two values must stay in sync).
+const ExitCodeStallWatchdog = 3
+
+// stallExit is os.Exit, swappable so tests can intercept the watchdog exit.
+var stallExit = os.Exit
+
 // isTransientNavError reports whether err is a transient navigation/page error
 // that warrants a fast in-process retry rather than the long recovery pause.
+// ErrScrapeDeadline is excluded: the watchdog closed the page, so the claim
+// must go back through the requeue path instead of a same-page retry.
 func isTransientNavError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, ErrScrapeDeadline) {
 		return false
 	}
 	msg := err.Error()
@@ -28,32 +61,35 @@ func isTransientNavError(err error) bool {
 
 // Config controls what the Scraper extracts.
 type Config struct {
-	Concurrency      int
-	MaxConcurrency   int
-	ConcurrencyMode  string
-	ConcurrencyValue int
-	QueueWaitMinutes int
-	Depth            int
-	Lang             string
-	Geo              string
-	Radius           float64 // meters; 0 = no filter
-	ExtractEmail     bool
-	ExtraReviews     int
-	Limit            int // max places to scrape; 0 = no limit
-	JobID            string
-	OutputMode       string // "database" or "file"; metadata for UI resume
-	JSONOut          bool
-	OutDir           string
-	AutoRecover      bool
-	RecoveryMinDelay time.Duration
-	RecoveryMaxDelay time.Duration
-	BrowseStartDelay time.Duration
-	DedupScope       string // "" (off) | "run" (same strategy run) | "all" (any prior job)
+	Concurrency       int
+	MaxConcurrency    int
+	ConcurrencyMode   string
+	ConcurrencyValue  int
+	QueueWaitMinutes  int
+	Depth             int
+	Lang              string
+	Geo               string
+	Radius            float64       // meters; 0 = no filter
+	HeartbeatInterval time.Duration // monitor heartbeat log period; 0 = heartbeatInterval default
+	StallTimeout      time.Duration // no-progress watchdog exit threshold; 0 = stallTimeout default
+	ExtractEmail      bool
+	ExtraReviews      int
+	Limit             int // max places to scrape; 0 = no limit
+	JobID             string
+	OutputMode        string // "database" or "file"; metadata for UI resume
+	JSONOut           bool
+	OutDir            string
+	AutoRecover       bool
+	RecoveryMinDelay  time.Duration
+	RecoveryMaxDelay  time.Duration
+	BrowseStartDelay  time.Duration
+	DedupScope        string        // "" (off) | "run" (same strategy run) | "all" (any prior job)
+	ScrapeDeadline    time.Duration // per-scrape watchdog; 0 = scrapeDeadline default
 }
 
 // PagePool provides playwright pages to workers.
 type PagePool interface {
-	AcquirePage() playwright.Page
+	AcquirePage(ctx context.Context) (playwright.Page, error)
 	ReleasePage(playwright.Page)
 }
 
@@ -155,6 +191,13 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	var consecFails int64
 	recovery := newRecoveryCoordinator(s.Store, jobID, s.Config)
 
+	// Stall-monitor state: lastProgress is bumped on every successful claim
+	// and every finished scrape (success or handled failure); inflight names
+	// what each worker currently holds for heartbeat/stall diagnostics.
+	var lastProgress atomic.Int64
+	lastProgress.Store(time.Now().UnixNano())
+	inflight := newInflightRegistry()
+
 	g, gctx := errgroup.WithContext(ctx)
 	for i := 0; i < conc; i++ {
 		workerID := i
@@ -188,6 +231,9 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					}
 				}
 
+				inflight.set(workerID, claimed.URL)
+				lastProgress.Store(time.Now().UnixNano())
+
 				delay := s.Config.BrowseStartDelay
 				if delay <= 0 {
 					delay = time.Duration(rng.Intn(1000)) * time.Millisecond
@@ -204,18 +250,29 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					claimOpts.LangCode = langs[0]
 				}
 
-				page := s.Pool.AcquirePage()
-				entry, err := scrapePlace(gctx, page, claimed.URL, claimOpts)
+				// An acquire failure means the browser is dead: end the run so
+				// finishJob persists the job state instead of hanging workers.
+				page, err := s.Pool.AcquirePage(gctx)
+				if err != nil {
+					return err
+				}
+				entry, err := s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
 				for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
 					s.Pool.ReleasePage(page)
 					if err := sleepContext(gctx, time.Duration(retry*2)*time.Second); err != nil {
 						return err
 					}
-					page = s.Pool.AcquirePage()
-					entry, err = scrapePlace(gctx, page, claimed.URL, claimOpts)
+					page, err = s.Pool.AcquirePage(gctx)
+					if err != nil {
+						return err
+					}
+					entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
 				}
 				s.Pool.ReleasePage(page)
 				if err != nil {
+					// A handled failure still counts as pipeline progress.
+					inflight.clear(workerID)
+					lastProgress.Store(time.Now().UnixNano())
 					if s.Config.AutoRecover {
 						_ = s.Store.RequeueURL(context.Background(), claimed.ID, err)
 						log.Printf("place scrape error %s: %v", claimed.URL, err)
@@ -245,6 +302,8 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 				}
 
 				atomic.StoreInt64(&consecFails, 0)
+				inflight.clear(workerID)
+				lastProgress.Store(time.Now().UnixNano())
 				done := atomic.AddInt64(&completed, 1)
 				if done%10 == 0 {
 					stats, _ := s.Store.JobStats(gctx, jobID)
@@ -271,7 +330,18 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 		})
 	}
 
+	// The monitor lives only while workers run; Run blocks on monitorStopped
+	// so a normal completion never leaks the goroutine.
+	monitorDone := make(chan struct{})
+	monitorStopped := make(chan struct{})
+	go func() {
+		defer close(monitorStopped)
+		s.runStallMonitor(ctx, monitorDone, jobID, recovery, inflight, &lastProgress)
+	}()
+
 	err = g.Wait()
+	close(monitorDone)
+	<-monitorStopped
 
 	// Emit radius-filtered results even if the session was blocked mid-run.
 	if useRadiusFilter && (err == nil || errors.Is(err, context.Canceled) || errors.Is(err, ErrSessionBlocked) || errors.Is(err, ErrJobPaused)) {
@@ -314,6 +384,159 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 		return err
 	}
 	return nil
+}
+
+// scrapeWithDeadline runs one place scrape under a hard watchdog. playwright-go
+// calls do not honor ctx, so on deadline (or cancellation) the page is closed to
+// force the wedged call inside the scrape to error out. The result channel is
+// buffered so the scrape goroutine can always deliver and never leaks.
+func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error), page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+	deadline := s.Config.ScrapeDeadline
+	if deadline <= 0 {
+		deadline = scrapeDeadline
+	}
+	type scrapeResult struct {
+		entry *Entry
+		err   error
+	}
+	res := make(chan scrapeResult, 1)
+	go func() {
+		entry, err := scrape(ctx, page, placeURL, opts)
+		res <- scrapeResult{entry, err}
+	}()
+
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+	select {
+	case r := <-res:
+		return r.entry, r.err
+	case <-ctx.Done():
+		if page != nil {
+			_ = page.Close()
+		}
+		return nil, ctx.Err()
+	case <-timer.C:
+		if page != nil {
+			_ = page.Close()
+		}
+		log.Printf("scrape watchdog: %s exceeded %s — page closed", placeURL, deadline)
+		return nil, ErrScrapeDeadline
+	}
+}
+
+// runStallMonitor logs a periodic heartbeat and, when the pipeline makes no
+// progress for StallTimeout while work is still claimed or queued, dumps all
+// goroutine stacks, marks the job paused with its in-progress URLs reset, and
+// exits the process with ExitCodeStallWatchdog so control.go auto-resumes it.
+// Stall detection is skipped while a recovery pause is active: a 10-60min
+// recovery sleep is intentional no-progress.
+func (s *Scraper) runStallMonitor(ctx context.Context, done <-chan struct{}, jobID string, recovery *recoveryCoordinator, inflight *inflightRegistry, lastProgress *atomic.Int64) {
+	hb := s.Config.HeartbeatInterval
+	if hb <= 0 {
+		hb = heartbeatInterval
+	}
+	stall := s.Config.StallTimeout
+	if stall <= 0 {
+		stall = stallTimeout
+	}
+	ticker := time.NewTicker(hb)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+		}
+
+		// One JobStats query per tick serves both the heartbeat line and the
+		// pending-work half of the stall condition.
+		stats, statsErr := s.Store.JobStats(ctx, jobID)
+		if statsErr != nil {
+			log.Printf("heartbeat: stats unavailable (%v) inflight=%s", statsErr, inflight.snapshot())
+		} else {
+			log.Printf("heartbeat: done=%d/%d inflight=%s", stats.Done, stats.Total, inflight.snapshot())
+		}
+
+		idle := time.Since(time.Unix(0, lastProgress.Load()))
+		if idle <= stall || recovery.isActive() {
+			continue
+		}
+		hasWork := inflight.size() > 0 || (statsErr == nil && (stats.Pending > 0 || stats.InProgress > 0))
+		if !hasWork {
+			continue
+		}
+
+		log.Printf("STALL DETECTED: no progress for %s; dumping goroutine stacks; inflight=%s", idle.Round(time.Second), inflight.snapshot())
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		log.Printf("%s", buf[:n])
+
+		stallErr := fmt.Errorf("scraper: stall watchdog: no progress for %s", idle.Round(time.Second))
+		if err := s.Store.ResetInProgress(context.Background(), jobID); err != nil {
+			log.Printf("stall watchdog: reset in-progress URLs for job %s: %v", jobID, err)
+		}
+		if err := s.Store.SetJobStatus(context.Background(), jobID, JobStatusPaused, stallErr); err != nil {
+			log.Printf("stall watchdog: set job %s paused: %v", jobID, err)
+		}
+		stallExit(ExitCodeStallWatchdog)
+		return // reached only when tests swap stallExit
+	}
+}
+
+// inflightRegistry tracks the URL each worker currently holds so heartbeat and
+// stall diagnostics can name the wedged claims.
+type inflightRegistry struct {
+	mu      sync.Mutex
+	entries map[int]inflightClaim
+}
+
+type inflightClaim struct {
+	url     string
+	started time.Time
+}
+
+func newInflightRegistry() *inflightRegistry {
+	return &inflightRegistry{entries: make(map[int]inflightClaim)}
+}
+
+func (r *inflightRegistry) set(worker int, url string) {
+	r.mu.Lock()
+	r.entries[worker] = inflightClaim{url: url, started: time.Now()}
+	r.mu.Unlock()
+}
+
+func (r *inflightRegistry) clear(worker int) {
+	r.mu.Lock()
+	delete(r.entries, worker)
+	r.mu.Unlock()
+}
+
+func (r *inflightRegistry) size() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.entries)
+}
+
+// snapshot renders "[0: <url> 35s, 1: <url> 12s]" ordered by worker id.
+func (r *inflightRegistry) snapshot() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]int, 0, len(r.entries))
+	for id := range r.entries {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		claim := r.entries[id]
+		fmt.Fprintf(&b, "%d: %s %s", id, claim.url, time.Since(claim.started).Round(time.Second))
+	}
+	b.WriteByte(']')
+	return b.String()
 }
 
 type recoveryCoordinator struct {
@@ -538,7 +761,13 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 	for i, q := range queries {
 		log.Printf("Query %d/%d %q — starting", i+1, total, q)
 		start := time.Now()
-		page := s.Pool.AcquirePage()
+		page, err := s.Pool.AcquirePage(ctx)
+		if err != nil {
+			// The feed phase cannot proceed without a page; a dead browser
+			// must abort the run rather than skip queries silently.
+			log.Printf("Query %d/%d %q — acquire page: %v", i+1, total, q, err)
+			return feedCollection{}, err
+		}
 		urls, err := scrapeFeed(ctx, page, q, feedOpts)
 		s.Pool.ReleasePage(page)
 		if err != nil {
