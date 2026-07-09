@@ -597,7 +597,10 @@ func runURLsOnly(ctx context.Context, outFile, queries string, depth int, lang, 
 	for i, q := range qs {
 		q = strings.TrimSpace(q)
 		log.Printf("Query %d/%d %q — collecting URLs", i+1, len(qs), q)
-		page := br.AcquirePage()
+		page, err := br.AcquirePage(ctx)
+		if err != nil {
+			log.Fatalf("acquire page: %v", err)
+		}
 		urls, err := gmaps.ScrapeFeed(ctx, page, q, feedOpts)
 		br.ReleasePage(page)
 		if err != nil {

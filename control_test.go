@@ -1981,7 +1981,7 @@ func TestSpawnProcessTimeoutRecoversJob(t *testing.T) {
 	}
 
 	logPath := filepath.Join(t.TempDir(), "job.log")
-	if err := spawnProcess(store, jobID, "/bin/sh", []string{"-c", "sleep 2"}, logPath); err != nil {
+	if err := spawnProcess(store, jobID, "/bin/sh", []string{"-c", "sleep 2"}, logPath, nil); err != nil {
 		t.Fatalf("spawn process: %v", err)
 	}
 
@@ -2002,6 +2002,139 @@ func TestSpawnProcessTimeoutRecoversJob(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("timed-out process did not recover job; last state: %s", last)
+}
+
+func TestAllowStallAutoResumeCap(t *testing.T) {
+	jobID := "cap-" + t.Name()
+	for i := 0; i < maxStallAutoResumes; i++ {
+		if !allowStallAutoResume(jobID) {
+			t.Fatalf("attempt %d denied, want allowed (cap %d)", i+1, maxStallAutoResumes)
+		}
+	}
+	if allowStallAutoResume(jobID) {
+		t.Fatalf("attempt %d allowed, want denied past cap", maxStallAutoResumes+1)
+	}
+	// Other jobs have their own budget.
+	if !allowStallAutoResume(jobID + "-other") {
+		t.Fatal("fresh job denied, want allowed")
+	}
+}
+
+func TestSpawnProcessStallExitAutoResumes(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh is required for subprocess stall test")
+	}
+	oldDelay := stallResumeDelay
+	stallResumeDelay = 10 * time.Millisecond
+	t.Cleanup(func() { stallResumeDelay = oldDelay })
+
+	ctx := context.Background()
+	store := newStartStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start job: %v", err)
+	}
+	if _, err := store.ClaimNextURL(ctx, jobID); err != nil {
+		t.Fatalf("claim url: %v", err)
+	}
+
+	resumed := make(chan string, 1)
+	logPath := filepath.Join(t.TempDir(), "job.log")
+	cmd := []string{"-c", fmt.Sprintf("exit %d", exitCodeStallWatchdog)}
+	if err := spawnProcess(store, jobID, "/bin/sh", cmd, logPath, func(id string) { resumed <- id }); err != nil {
+		t.Fatalf("spawn process: %v", err)
+	}
+
+	select {
+	case id := <-resumed:
+		if id != jobID {
+			t.Fatalf("onStallExit job = %q, want %q", id, jobID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("onStallExit was not called after stall-watchdog exit")
+	}
+
+	// Recovery and cleanup run before the resume hook, so the job must
+	// already be paused with its in-progress URL reset and its registry
+	// row dropped.
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.Status != gmaps.JobStatusPaused {
+		t.Fatalf("status = %s, want %s", job.Status, gmaps.JobStatusPaused)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Pending != 1 || stats.InProgress != 0 {
+		t.Fatalf("stats = pending %d in_progress %d, want 1/0", stats.Pending, stats.InProgress)
+	}
+	procs, err := store.ListJobProcesses(ctx)
+	if err != nil {
+		t.Fatalf("list procs: %v", err)
+	}
+	if len(procs) != 0 {
+		t.Fatalf("job process rows = %d, want 0", len(procs))
+	}
+}
+
+func TestSpawnProcessStallExitRespectsCap(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh is required for subprocess stall test")
+	}
+	oldDelay := stallResumeDelay
+	stallResumeDelay = 10 * time.Millisecond
+	t.Cleanup(func() { stallResumeDelay = oldDelay })
+
+	ctx := context.Background()
+	store := newStartStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, gmaps.URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := store.StartJob(ctx, jobID); err != nil {
+		t.Fatalf("start job: %v", err)
+	}
+
+	// Exhaust the auto-resume budget up front.
+	stallResumesMu.Lock()
+	stallResumes[jobID] = maxStallAutoResumes
+	stallResumesMu.Unlock()
+
+	resumed := make(chan string, 1)
+	logPath := filepath.Join(t.TempDir(), "job.log")
+	cmd := []string{"-c", fmt.Sprintf("exit %d", exitCodeStallWatchdog)}
+	if err := spawnProcess(store, jobID, "/bin/sh", cmd, logPath, func(id string) { resumed <- id }); err != nil {
+		t.Fatalf("spawn process: %v", err)
+	}
+
+	// Wait for the wait-goroutine to finish cleanup, then confirm the hook
+	// never fired and the job was still recovered to paused.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		procs, err := store.ListJobProcesses(ctx)
+		if err == nil && len(procs) == 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	select {
+	case id := <-resumed:
+		t.Fatalf("onStallExit fired for job %q despite cap", id)
+	case <-time.After(200 * time.Millisecond):
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.Status != gmaps.JobStatusPaused {
+		t.Fatalf("status = %s, want %s", job.Status, gmaps.JobStatusPaused)
+	}
 }
 
 func TestJobsPanelRendersBatchSelectUI(t *testing.T) {

@@ -1,6 +1,50 @@
 package browser
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/mxschmitt/playwright-go"
+)
+
+// TestAcquirePageCancelledContextReturnsPromptly simulates a saturated pool
+// (created == max, no page checked in): AcquirePage must fail fast on a
+// cancelled context instead of blocking on the pool channel forever.
+func TestAcquirePageCancelledContextReturnsPromptly(t *testing.T) {
+	b := &Browser{
+		pages:   make(chan playwright.Page, 1),
+		created: 1,
+		max:     1,
+		uses:    make(map[playwright.Page]int),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	type result struct {
+		page playwright.Page
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		page, err := b.AcquirePage(ctx)
+		done <- result{page, err}
+	}()
+
+	select {
+	case res := <-done:
+		if !errors.Is(res.err, context.Canceled) {
+			t.Fatalf("AcquirePage error = %v, want context.Canceled", res.err)
+		}
+		if res.page != nil {
+			t.Fatalf("AcquirePage page = %v, want nil on error", res.page)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AcquirePage blocked on cancelled context with empty pool")
+	}
+}
 
 func TestDefaultUserAgents(t *testing.T) {
 	if got := len(defaultUserAgents); got < 3 || got > 5 {

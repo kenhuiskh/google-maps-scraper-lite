@@ -1,19 +1,35 @@
 package gmaps
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
+
+// captureLog redirects the global logger into a buffer for the test's
+// duration. The buffer must only be read after all Run goroutines have
+// stopped (Run waits for its monitor before returning).
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
 
 type fakePagePool struct{}
 
-func (fakePagePool) AcquirePage() playwright.Page     { return nil }
-func (fakePagePool) ReleasePage(page playwright.Page) {}
+func (fakePagePool) AcquirePage(ctx context.Context) (playwright.Page, error) { return nil, nil }
+func (fakePagePool) ReleasePage(page playwright.Page)                         {}
 
 func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
 	ctx := context.Background()
@@ -345,6 +361,229 @@ func TestScraperBotBlockTriggersRecovery(t *testing.T) {
 	}
 	if es.RetryEvents < 1 {
 		t.Fatalf("RetryEvents = %d, want >= 1 (bot-block requeue)", es.RetryEvents)
+	}
+}
+
+func TestScrapeDeadlineIsNotTransient(t *testing.T) {
+	if isTransientNavError(ErrScrapeDeadline) {
+		t.Fatal("ErrScrapeDeadline must not qualify for a same-page fast retry: the watchdog closed the page")
+	}
+}
+
+func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1", "u2"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	block := make(chan struct{})
+	defer close(block)
+	var mu sync.Mutex
+	attempts := make(map[string]int)
+	s := Scraper{
+		Config: Config{
+			Concurrency:      1,
+			JobID:            jobID,
+			AutoRecover:      true,
+			RecoveryMinDelay: time.Millisecond,
+			RecoveryMaxDelay: time.Millisecond,
+			BrowseStartDelay: time.Millisecond,
+			ScrapeDeadline:   50 * time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			mu.Lock()
+			attempts[placeURL]++
+			n := attempts[placeURL]
+			mu.Unlock()
+			if placeURL == "u1" && n == 1 {
+				<-block // wedged playwright call: never returns on its own
+				return nil, errors.New("unblocked by test teardown")
+			}
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 4)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for result := range out {
+			if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+				t.Errorf("mark done: %v", err)
+			}
+		}
+	}()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run error = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not terminate: watchdog failed to fire on stuck scrape")
+	}
+	<-drained
+	mu.Lock()
+	gotU1, gotU2 := attempts["u1"], attempts["u2"]
+	mu.Unlock()
+	if gotU1 != 2 || gotU2 != 1 {
+		t.Fatalf("attempts = u1:%d u2:%d, want u1 requeued once and u2 once", gotU1, gotU2)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 2 || stats.Pending != 0 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want 2 done / 0 pending / 0 failed", stats)
+	}
+	es, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("exec stats: %v", err)
+	}
+	if es.RetryEvents < 1 {
+		t.Fatalf("RetryEvents = %d, want >= 1 (watchdog requeue)", es.RetryEvents)
+	}
+}
+
+func TestScraperMonitorHeartbeat(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1", "u2", "u3"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	buf := captureLog(t)
+
+	s := Scraper{
+		Config: Config{
+			Concurrency:       1,
+			JobID:             jobID,
+			BrowseStartDelay:  time.Millisecond,
+			HeartbeatInterval: 20 * time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			// Keep the run alive across several heartbeat ticks.
+			time.Sleep(30 * time.Millisecond)
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 4)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	// Run blocks on the monitor's stopped channel, so a return here proves the
+	// monitor goroutine exited with the workers.
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, "heartbeat: done=") {
+		t.Fatalf("logs missing heartbeat line:\n%s", logs)
+	}
+	if !strings.Contains(logs, "inflight=") {
+		t.Fatalf("logs missing inflight registry in heartbeat:\n%s", logs)
+	}
+	if strings.Contains(logs, "STALL DETECTED") {
+		t.Fatalf("stall watchdog fired on a healthy run:\n%s", logs)
+	}
+}
+
+func TestScraperStallWatchdogPausesJobAndExits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	buf := captureLog(t)
+
+	exitCode := make(chan int, 1)
+	prevExit := stallExit
+	stallExit = func(code int) { exitCode <- code }
+	t.Cleanup(func() { stallExit = prevExit })
+
+	block := make(chan struct{})
+	defer close(block)
+
+	s := Scraper{
+		Config: Config{
+			Concurrency:       1,
+			JobID:             jobID,
+			BrowseStartDelay:  time.Millisecond,
+			ScrapeDeadline:    time.Hour, // per-scrape watchdog must not fire first
+			HeartbeatInterval: 10 * time.Millisecond,
+			StallTimeout:      50 * time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			<-block // wedged claim: only the stall watchdog can react
+			return nil, errors.New("unblocked by test teardown")
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for range out {
+		}
+	}()
+
+	select {
+	case code := <-exitCode:
+		if code != ExitCodeStallWatchdog {
+			t.Fatalf("exit code = %d, want %d", code, ExitCodeStallWatchdog)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stall watchdog did not request an exit")
+	}
+
+	// Unwedge the run and wait for Run to return before reading shared state;
+	// finishJob leaves the paused status alone on context.Canceled.
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	<-drained
+
+	job, err := store.GetJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.Status != JobStatusPaused {
+		t.Fatalf("job status = %q, want %q", job.Status, JobStatusPaused)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, "STALL DETECTED: no progress for") {
+		t.Fatalf("logs missing stall line:\n%s", logs)
+	}
+	if !strings.Contains(logs, "u1") {
+		t.Fatalf("logs missing in-flight URL in stall diagnostics:\n%s", logs)
+	}
+	if !strings.Contains(logs, "goroutine ") {
+		t.Fatalf("logs missing goroutine stack dump:\n%s", logs)
 	}
 }
 
