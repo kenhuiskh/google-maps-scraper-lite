@@ -242,6 +242,61 @@ func TestScraperAutoRecoverRequeuesFailedURL(t *testing.T) {
 	}
 }
 
+func TestScraperAutoRecoverStopsAtMaxURLAttempts(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1", "u2"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	attempts := make(map[string]int)
+	s := Scraper{
+		Config: Config{
+			Concurrency:      1,
+			JobID:            jobID,
+			AutoRecover:      true,
+			MaxURLAttempts:   2,
+			RecoveryMinDelay: time.Millisecond,
+			RecoveryMaxDelay: time.Millisecond,
+			BrowseStartDelay: time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			attempts[placeURL]++
+			if placeURL == "u1" {
+				return nil, errors.New("permanent parse failure")
+			}
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if attempts["u1"] != 2 || attempts["u2"] != 1 {
+		t.Fatalf("attempts = %#v, want u1 twice and u2 once", attempts)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Failed != 1 || stats.Pending != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 1 failed / 0 pending", stats)
+	}
+}
+
 func TestScraperTransientNavErrorRetriesNoRecovery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)

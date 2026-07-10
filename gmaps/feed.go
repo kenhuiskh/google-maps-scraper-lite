@@ -27,10 +27,14 @@ func PlaceIDToURL(placeID string) string {
 func scrapePlaceID(ctx context.Context, page playwright.Page, id string) ([]string, error) {
 	target := PlaceIDToURL(id)
 
-	if _, err := page.Goto(target, playwright.PageGotoOptions{
+	resp, err := page.Goto(target, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateCommit,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("goto place-ID URL: %w", err)
+	}
+	if berr := detectBotBlock(page, resp); berr != nil {
+		return nil, berr
 	}
 
 	clickRejectCookiesPlaywright(page)
@@ -63,10 +67,14 @@ func ScrapeFeed(ctx context.Context, page playwright.Page, query string, opts Fe
 
 	fullURL := buildFeedURL(query, opts)
 
-	if _, err := page.Goto(fullURL, playwright.PageGotoOptions{
+	resp, err := page.Goto(fullURL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateCommit,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("goto feed URL: %w", err)
+	}
+	if berr := detectBotBlock(page, resp); berr != nil {
+		return nil, berr
 	}
 
 	clickRejectCookiesPlaywright(page)

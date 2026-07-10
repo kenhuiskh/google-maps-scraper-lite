@@ -85,6 +85,7 @@ type Config struct {
 	BrowseStartDelay  time.Duration
 	DedupScope        string        // "" (off) | "run" (same strategy run) | "all" (any prior job)
 	ScrapeDeadline    time.Duration // per-scrape watchdog; 0 = scrapeDeadline default
+	MaxURLAttempts    int           // DB claims per queued URL before final failure; 0 = no cap
 }
 
 // PagePool provides playwright pages to workers.
@@ -258,7 +259,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 				}
 				entry, err := s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
 				for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
-					s.Pool.ReleasePage(page)
+					s.releaseScrapePage(page, err)
 					if err := sleepContext(gctx, time.Duration(retry*2)*time.Second); err != nil {
 						return err
 					}
@@ -268,12 +269,18 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					}
 					entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
 				}
-				s.Pool.ReleasePage(page)
+				s.releaseScrapePage(page, err)
 				if err != nil {
 					// A handled failure still counts as pipeline progress.
 					inflight.clear(workerID)
 					lastProgress.Store(time.Now().UnixNano())
 					if s.Config.AutoRecover {
+						if s.urlAttemptsExhausted(claimed) {
+							_ = s.Store.IncrementJobStat(context.Background(), jobID, "scrape_errors", 1)
+							_ = s.Store.MarkURLFailed(context.Background(), claimed.ID, err)
+							log.Printf("place scrape error %s: %v — attempts exhausted (%d/%d)", claimed.URL, err, claimed.Attempts, s.Config.MaxURLAttempts)
+							continue
+						}
 						_ = s.Store.RequeueURL(context.Background(), claimed.ID, err)
 						log.Printf("place scrape error %s: %v", claimed.URL, err)
 						if errors.Is(err, ErrBotBlocked) {

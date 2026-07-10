@@ -45,9 +45,11 @@ type Browser struct {
 
 // Options configures the browser.
 type Options struct {
-	Concurrency int
-	Headless    bool
-	Lang        string
+	Concurrency             int
+	Headless                bool
+	Lang                    string
+	DisableResourceBlocking bool
+	BlockedResourceTypes    []string
 }
 
 // New launches playwright, creates a browser and a shared context. Pages are
@@ -108,6 +110,14 @@ func New(opts Options) (*Browser, error) {
 		_ = pw.Stop()
 		return nil, fmt.Errorf("add init script: %w", err)
 	}
+	if !opts.DisableResourceBlocking {
+		if err := installResourceBlocking(ctx, opts.BlockedResourceTypes); err != nil {
+			_ = ctx.Close()
+			_ = br.Close()
+			_ = pw.Stop()
+			return nil, fmt.Errorf("install resource blocking: %w", err)
+		}
+	}
 
 	if opts.Concurrency < 1 {
 		opts.Concurrency = 1
@@ -132,6 +142,23 @@ func New(opts Options) (*Browser, error) {
 func configurePage(page playwright.Page) {
 	page.SetDefaultTimeout(30_000)
 	page.SetDefaultNavigationTimeout(60_000)
+}
+
+func installResourceBlocking(ctx playwright.BrowserContext, blockedTypes []string) error {
+	if len(blockedTypes) == 0 {
+		blockedTypes = []string{"image", "media", "font"}
+	}
+	blocked := make(map[string]struct{}, len(blockedTypes))
+	for _, typ := range blockedTypes {
+		blocked[typ] = struct{}{}
+	}
+	return ctx.Route("**/*", func(route playwright.Route) {
+		if _, ok := blocked[route.Request().ResourceType()]; ok {
+			_ = route.Abort()
+			return
+		}
+		_ = route.Continue()
+	})
 }
 
 // AcquirePage takes a page from the pool, creating a new tab lazily until the
@@ -226,6 +253,20 @@ func (b *Browser) ReleasePage(page playwright.Page) {
 		return
 	}
 	b.pages <- page
+}
+
+// RetirePage closes a tainted page instead of returning it to the pool. Use it
+// after bot blocks, watchdog timeouts, or page crashes so the next claim gets a
+// clean tab in the shared context.
+func (b *Browser) RetirePage(page playwright.Page) {
+	if page == nil {
+		return
+	}
+	_ = page.Close()
+	b.mu.Lock()
+	delete(b.uses, page)
+	b.mu.Unlock()
+	b.replenish()
 }
 
 // replenish creates a fresh page taking over the created slot of a dead or

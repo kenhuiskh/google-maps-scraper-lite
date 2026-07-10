@@ -316,6 +316,7 @@ func main() {
 			RecoveryMaxDelay: 60 * time.Minute,
 			BrowseStartDelay: 500 * time.Millisecond,
 			DedupScope:       dedupScope,
+			MaxURLAttempts:   3,
 		},
 		Pool:       br,
 		Store:      store,
