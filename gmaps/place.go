@@ -469,15 +469,21 @@ func extractPlaceJSON(ctx context.Context, page playwright.Page) ([]byte, error)
 	const maxAttempts = 3
 
 	for attempt := range maxAttempts {
+		if berr := detectBotBlock(page, nil); berr != nil {
+			return nil, berr
+		}
 		raw, err := getRawPlaceJSON(ctx, page)
 		if err != nil || raw == nil {
 			if attempt < maxAttempts-1 {
 				// Brief pause before reload to avoid immediately re-hitting a
 				// rate-limited or bot-detected response.
 				page.WaitForTimeout(float64(2000 * (attempt + 1)))
-				if _, reloadErr := page.Reload(playwright.PageReloadOptions{
+				if resp, reloadErr := page.Reload(playwright.PageReloadOptions{
 					WaitUntil: playwright.WaitUntilStateCommit,
 				}); reloadErr == nil {
+					if berr := detectBotBlock(page, resp); berr != nil {
+						return nil, berr
+					}
 					continue
 				}
 			}
