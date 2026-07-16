@@ -50,7 +50,7 @@ func main() {
 	urlsOnly := flag.String("urls-only", "", "debug: collect feed URLs only and write to this file (no place scraping)")
 	limit := flag.Int("limit", 0, "max number of places to scrape (0 = no limit)")
 	dedupScraped := flag.String("dedup-scraped", "", "skip already-scraped place URLs: \"run\" (same strategy run) or \"all\" (any prior job)")
-	noHTTP := flag.Bool("no-http", false, "disable HTTP-first place scraping; always use the browser")
+	httpFirst := flag.Bool("http-first", false, "opt in to HTTP-first place scraping (faster but returns a REDUCED field set — no reviews, images, popular times, or full hours; use the default browser path for full fidelity)")
 	flag.Parse()
 
 	explicitTables := map[string]bool{}
@@ -318,7 +318,7 @@ func main() {
 			BrowseStartDelay: 500 * time.Millisecond,
 			DedupScope:       dedupScope,
 			MaxURLAttempts:   3,
-			DisableHTTPFirst: *noHTTP,
+			EnableHTTPFirst:  *httpFirst,
 		},
 		Pool:       br,
 		Store:      store,

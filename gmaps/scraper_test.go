@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -744,15 +745,16 @@ func TestScraperHTTPFirstSkipsBrowser(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
+	var browserCalled atomic.Bool
 	s := Scraper{
-		Config: Config{Concurrency: 1, JobID: jobID},
+		Config: Config{Concurrency: 1, JobID: jobID, EnableHTTPFirst: true},
 		Pool:   fakePagePool{},
 		Store:  store,
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return &Entry{PlaceID: "http:" + placeURL}, nil
 		},
 		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
-			t.Fatal("browser ScrapePlace should not be called when HTTP succeeds")
+			browserCalled.Store(true)
 			return nil, nil
 		},
 	}
@@ -771,6 +773,9 @@ func TestScraperHTTPFirstSkipsBrowser(t *testing.T) {
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("run error = %v, want nil", err)
+	}
+	if browserCalled.Load() {
+		t.Errorf("browser ScrapePlace should not be called when HTTP succeeds")
 	}
 	if len(results) != 1 || results[0].Entry.PlaceID != "http:u1" {
 		t.Fatalf("results = %#v, want single entry from HTTP stub", results)
@@ -793,7 +798,7 @@ func TestScraperHTTPUnavailableFallsBackToBrowser(t *testing.T) {
 	}
 
 	s := Scraper{
-		Config: Config{Concurrency: 1, JobID: jobID},
+		Config: Config{Concurrency: 1, JobID: jobID, EnableHTTPFirst: true},
 		Pool:   fakePagePool{},
 		Store:  store,
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
@@ -840,7 +845,7 @@ func TestScraperHTTPBotBlockFallsBackToBrowser(t *testing.T) {
 	}
 
 	s := Scraper{
-		Config: Config{Concurrency: 1, JobID: jobID},
+		Config: Config{Concurrency: 1, JobID: jobID, EnableHTTPFirst: true},
 		Pool:   fakePagePool{},
 		Store:  store,
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
@@ -886,12 +891,13 @@ func TestScraperExtraReviewsBypassesHTTP(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
+	var httpCalled atomic.Bool
 	s := Scraper{
-		Config: Config{Concurrency: 1, JobID: jobID, ExtraReviews: 1},
+		Config: Config{Concurrency: 1, JobID: jobID, EnableHTTPFirst: true, ExtraReviews: 1},
 		Pool:   fakePagePool{},
 		Store:  store,
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
-			t.Fatal("ScrapePlaceHTTP should not be called when ExtraReviews > 0")
+			httpCalled.Store(true)
 			return nil, nil
 		},
 		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
@@ -912,9 +918,12 @@ func TestScraperExtraReviewsBypassesHTTP(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("run error = %v, want nil", err)
 	}
+	if httpCalled.Load() {
+		t.Errorf("ScrapePlaceHTTP should not be called when ExtraReviews > 0")
+	}
 }
 
-func TestScraperDisableHTTPFirstBypassesHTTP(t *testing.T) {
+func TestScraperDefaultUsesBrowserNotHTTP(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
 	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
@@ -922,12 +931,13 @@ func TestScraperDisableHTTPFirstBypassesHTTP(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
+	var httpCalled atomic.Bool
 	s := Scraper{
-		Config: Config{Concurrency: 1, JobID: jobID, DisableHTTPFirst: true},
+		Config: Config{Concurrency: 1, JobID: jobID},
 		Pool:   fakePagePool{},
 		Store:  store,
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
-			t.Fatal("ScrapePlaceHTTP should not be called when DisableHTTPFirst is set")
+			httpCalled.Store(true)
 			return nil, nil
 		},
 		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
@@ -940,12 +950,20 @@ func TestScraperDisableHTTPFirstBypassesHTTP(t *testing.T) {
 	go func() {
 		errCh <- s.Run(ctx, nil, out)
 	}()
+	var results []PlaceResult
 	for result := range out {
+		results = append(results, result)
 		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
 			t.Fatalf("mark done: %v", err)
 		}
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("run error = %v, want nil", err)
+	}
+	if httpCalled.Load() {
+		t.Errorf("ScrapePlaceHTTP should not be called when EnableHTTPFirst is unset (default off)")
+	}
+	if len(results) != 1 || results[0].Entry.PlaceID != "browser:u1" {
+		t.Fatalf("results = %#v, want single entry from browser stub", results)
 	}
 }

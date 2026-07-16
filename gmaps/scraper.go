@@ -73,7 +73,7 @@ type Config struct {
 	StallTimeout      time.Duration // no-progress watchdog exit threshold; 0 = stallTimeout default
 	ExtractEmail      bool
 	ExtraReviews      int
-	DisableHTTPFirst  bool // true = skip the HTTP-first place path and always use the browser
+	EnableHTTPFirst   bool // true = opt in to the HTTP-first place path; default is the browser
 	Limit             int  // max places to scrape; 0 = no limit
 	JobID             string
 	OutputMode        string // "database" or "file"; metadata for UI resume
@@ -146,8 +146,8 @@ type Scraper struct {
 	Store       *JobStore
 	ScrapePlace func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error)
 	// ScrapePlaceHTTP fetches place details over HTTP without a browser page.
-	// It is tried first for each place (unless Config.DisableHTTPFirst or the
-	// claim needs ExtraReviews); ScrapePlace is the fallback.
+	// It is tried first for each place when Config.EnableHTTPFirst is set (and
+	// the claim does not need ExtraReviews); ScrapePlace is the fallback.
 	ScrapePlaceHTTP func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error)
 	ScrapeFeed      func(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error)
 	OnJobReady      func(jobID string)
@@ -261,7 +261,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 
 				var entry *Entry
 				usedHTTP := false
-				if !s.Config.DisableHTTPFirst && claimOpts.ExtraReviews == 0 {
+				if s.Config.EnableHTTPFirst && claimOpts.ExtraReviews == 0 {
 					entry, err = scrapePlaceHTTP(gctx, claimed.URL, claimOpts)
 					if err == nil {
 						usedHTTP = true
