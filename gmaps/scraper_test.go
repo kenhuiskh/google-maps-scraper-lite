@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/mxschmitt/playwright-go"
 )
 
 // captureLog redirects the global logger into a buffer for the test's
@@ -28,15 +26,15 @@ func captureLog(t *testing.T) *bytes.Buffer {
 
 type fakePagePool struct{}
 
-func (fakePagePool) AcquirePage(ctx context.Context) (playwright.Page, error) { return nil, nil }
-func (fakePagePool) ReleasePage(page playwright.Page)                         {}
+func (fakePagePool) AcquirePage(ctx context.Context) (Page, error) { return nil, nil }
+func (fakePagePool) ReleasePage(page Page)                         {}
 
 func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
 	ctx := context.Background()
 	var gotQueries []string
 	s := Scraper{
 		Pool: fakePagePool{},
-		ScrapeFeed: func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+		ScrapeFeed: func(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error) {
 			gotQueries = append(gotQueries, query)
 			switch query {
 			case "place_id:ChIJ123":
@@ -78,7 +76,7 @@ func TestCollectPlaceURLsFallsBackForPlaceIDFeedError(t *testing.T) {
 	ctx := context.Background()
 	s := Scraper{
 		Pool: fakePagePool{},
-		ScrapeFeed: func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+		ScrapeFeed: func(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error) {
 			return nil, errors.New("feed selector timeout")
 		},
 	}
@@ -119,7 +117,7 @@ func TestCollectPlaceURLsSkipsAlreadyScraped(t *testing.T) {
 	s := Scraper{
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapeFeed: func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+		ScrapeFeed: func(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error) {
 			return []string{seededURL, newURL}, nil
 		},
 		Config: Config{DedupScope: "all"},
@@ -154,7 +152,7 @@ func TestScraperGracefulPauseFinishesCurrentURL(t *testing.T) {
 		Config: Config{Concurrency: 1, JobID: jobID},
 		Pool:   fakePagePool{},
 		Store:  store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			seen++
 			if seen == 7 {
 				if err := store.RequestPause(context.Background(), jobID); err != nil {
@@ -208,7 +206,7 @@ func TestScraperAutoRecoverRequeuesFailedURL(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			attempts[placeURL]++
 			if placeURL == "u1" && attempts[placeURL] == 1 {
 				return nil, errors.New("temporary tab error")
@@ -263,7 +261,7 @@ func TestScraperAutoRecoverStopsAtMaxURLAttempts(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			attempts[placeURL]++
 			if placeURL == "u1" {
 				return nil, errors.New("permanent parse failure")
@@ -317,7 +315,7 @@ func TestScraperTransientNavErrorRetriesNoRecovery(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			attempts++
 			if attempts == 1 {
 				return nil, errors.New("Frame.Goto: Timeout 30000ms exceeded")
@@ -380,7 +378,7 @@ func TestScraperBotBlockTriggersRecovery(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			attempts[placeURL]++
 			if !firstBlocked {
 				firstBlocked = true
@@ -449,13 +447,13 @@ func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			mu.Lock()
 			attempts[placeURL]++
 			n := attempts[placeURL]
 			mu.Unlock()
 			if placeURL == "u1" && n == 1 {
-				<-block // wedged playwright call: never returns on its own
+				<-block // wedged page-driver call: never returns on its own
 				return nil, errors.New("unblocked by test teardown")
 			}
 			return &Entry{PlaceID: placeURL}, nil
@@ -525,7 +523,7 @@ func TestScraperMonitorHeartbeat(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			// Keep the run alive across several heartbeat ticks.
 			time.Sleep(30 * time.Millisecond)
 			return &Entry{PlaceID: placeURL}, nil
@@ -588,7 +586,7 @@ func TestScraperStallWatchdogPausesJobAndExits(t *testing.T) {
 		},
 		Pool:  fakePagePool{},
 		Store: store,
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			<-block // wedged claim: only the stall watchdog can react
 			return nil, errors.New("unblocked by test teardown")
 		},
@@ -659,7 +657,7 @@ func TestScraperConsecutiveFailuresBackstop(t *testing.T) {
 			Config: Config{Concurrency: 1, JobID: jobID},
 			Pool:   fakePagePool{},
 			Store:  store,
-			ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 				return nil, errors.New("parse entry JSON: boom")
 			},
 		}
@@ -696,7 +694,7 @@ func TestScraperConsecutiveFailuresBackstop(t *testing.T) {
 			},
 			Pool:  fakePagePool{},
 			Store: store,
-			ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 				attempts++
 				if attempts <= int(blockThreshold) {
 					return nil, errors.New("parse entry JSON: boom")
@@ -753,7 +751,7 @@ func TestScraperHTTPFirstSkipsBrowser(t *testing.T) {
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return &Entry{PlaceID: "http:" + placeURL}, nil
 		},
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			t.Fatal("browser ScrapePlace should not be called when HTTP succeeds")
 			return nil, nil
 		},
@@ -801,7 +799,7 @@ func TestScraperHTTPUnavailableFallsBackToBrowser(t *testing.T) {
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return nil, ErrHTTPPlaceUnavailable
 		},
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return &Entry{PlaceID: "browser:" + placeURL}, nil
 		},
 	}
@@ -848,7 +846,7 @@ func TestScraperHTTPBotBlockFallsBackToBrowser(t *testing.T) {
 		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return nil, fmt.Errorf("bot block: HTTP 429: %w", ErrBotBlocked)
 		},
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return &Entry{PlaceID: "browser:" + placeURL}, nil
 		},
 	}
@@ -896,7 +894,7 @@ func TestScraperExtraReviewsBypassesHTTP(t *testing.T) {
 			t.Fatal("ScrapePlaceHTTP should not be called when ExtraReviews > 0")
 			return nil, nil
 		},
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return &Entry{PlaceID: "browser:" + placeURL}, nil
 		},
 	}
@@ -932,7 +930,7 @@ func TestScraperDisableHTTPFirstBypassesHTTP(t *testing.T) {
 			t.Fatal("ScrapePlaceHTTP should not be called when DisableHTTPFirst is set")
 			return nil, nil
 		},
-		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 			return &Entry{PlaceID: "browser:" + placeURL}, nil
 		},
 	}

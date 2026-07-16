@@ -14,17 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mxschmitt/playwright-go"
 	"golang.org/x/sync/errgroup"
 )
 
 // ErrScrapeDeadline is returned when a single place scrape exceeds the
 // per-scrape watchdog deadline. The page has been closed to unblock the wedged
-// playwright call, so the same page object can never be retried.
+// underlying page-driver call, so the same page object can never be retried.
 var ErrScrapeDeadline = errors.New("scraper: scrape watchdog deadline exceeded")
 
 // scrapeDeadline is the default hard cap on a single place scrape.
-// playwright-go calls do not honor Go contexts, so without it a wedged call
+// Page-driver calls do not honor Go contexts, so without it a wedged call
 // blocks a worker forever.
 const scrapeDeadline = 4 * time.Minute
 
@@ -89,10 +88,10 @@ type Config struct {
 	MaxURLAttempts    int           // DB claims per queued URL before final failure; 0 = no cap
 }
 
-// PagePool provides playwright pages to workers.
+// PagePool provides browser pages to workers.
 type PagePool interface {
-	AcquirePage(ctx context.Context) (playwright.Page, error)
-	ReleasePage(playwright.Page)
+	AcquirePage(ctx context.Context) (Page, error)
+	ReleasePage(Page)
 }
 
 type PlaceResult struct {
@@ -145,12 +144,12 @@ type Scraper struct {
 	Config      Config
 	Pool        PagePool
 	Store       *JobStore
-	ScrapePlace func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error)
+	ScrapePlace func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error)
 	// ScrapePlaceHTTP fetches place details over HTTP without a browser page.
 	// It is tried first for each place (unless Config.DisableHTTPFirst or the
 	// claim needs ExtraReviews); ScrapePlace is the fallback.
 	ScrapePlaceHTTP func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error)
-	ScrapeFeed      func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error)
+	ScrapeFeed      func(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error)
 	OnJobReady      func(jobID string)
 }
 
@@ -426,11 +425,11 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	return nil
 }
 
-// scrapeWithDeadline runs one place scrape under a hard watchdog. playwright-go
+// scrapeWithDeadline runs one place scrape under a hard watchdog. Page-driver
 // calls do not honor ctx, so on deadline (or cancellation) the page is closed to
 // force the wedged call inside the scrape to error out. The result channel is
 // buffered so the scrape goroutine can always deliver and never leaks.
-func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error), page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error), page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 	deadline := s.Config.ScrapeDeadline
 	if deadline <= 0 {
 		deadline = scrapeDeadline

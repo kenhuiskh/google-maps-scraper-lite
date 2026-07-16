@@ -3,15 +3,13 @@ package gmaps
 import (
 	"errors"
 	"strings"
-
-	"github.com/mxschmitt/playwright-go"
 )
 
 type pageRetirer interface {
-	RetirePage(playwright.Page)
+	RetirePage(Page)
 }
 
-func (s *Scraper) releaseScrapePage(page playwright.Page, scrapeErr error) {
+func (s *Scraper) releaseScrapePage(page Page, scrapeErr error) {
 	if page == nil {
 		return
 	}
