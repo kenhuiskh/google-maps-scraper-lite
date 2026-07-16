@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosom/google-maps-scraper-lite/browser"
 	"github.com/gosom/google-maps-scraper-lite/gmaps"
 	"github.com/gosom/google-maps-scraper-lite/output"
 )
@@ -199,7 +198,7 @@ func main() {
 		}
 	}()
 
-	br, err := browser.New(browser.Options{
+	br, err := newBrowserEngine(browserOptions{
 		Concurrency: *concurrency,
 		Headless:    *headless,
 		Lang:        *lang,
@@ -208,6 +207,7 @@ func main() {
 		log.Fatalf("browser init: %v", err)
 	}
 	defer br.Close()
+	log.Printf("browser engine: %s", engineName)
 
 	ts := time.Now().Format("2006-01-02_15-04-05")
 
@@ -581,7 +581,7 @@ func determineLangs(ctx context.Context, store *gmaps.JobStore, jobID, cliLang s
 // runURLsOnly collects feed URLs for all queries and writes them one-per-line
 // to outFile. No place detail scraping is performed.
 func runURLsOnly(ctx context.Context, outFile, queries string, depth int, lang, geo string) {
-	br, err := browser.New(browser.Options{Concurrency: 1, Headless: true, Lang: lang})
+	br, err := newBrowserEngine(browserOptions{Concurrency: 1, Headless: true, Lang: lang})
 	if err != nil {
 		log.Fatalf("browser init: %v", err)
 	}

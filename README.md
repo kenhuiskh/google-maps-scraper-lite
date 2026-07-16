@@ -60,6 +60,20 @@ go run github.com/playwright-community/playwright-go/cmd/playwright install chro
 CGO_ENABLED=1 go build -o google-maps-scraper-lite .
 ```
 
+### Browser Engine (build tags)
+
+The browser engine is selected at compile time. The default binary uses Playwright; an
+alternate build uses go-rod to drive Chromium via CDP directly, with no Node/playwright
+driver required at runtime:
+
+```bash
+# Default (playwright) binary
+go build -o google-maps-scraper-lite .
+
+# go-rod binary (no Node/playwright driver at runtime)
+go build -tags gorod -o google-maps-scraper-lite.go-rod .
+```
+
 ## How It Works
 
 The scraper follows a **Feed → Place → Details** pipeline:
