@@ -222,3 +222,21 @@ func FetchPlaceHTTP(ctx context.Context, placeURL string, lang string) (*Entry, 
 
 	return &entry, nil
 }
+
+// ScrapePlaceHTTP fetches place details over HTTP (no browser) and, when opts
+// requests it, extracts emails — mirroring ScrapePlace's post-parse email step.
+// It cannot fetch extra reviews; callers wanting opts.ExtraReviews>0 must use the
+// browser path.
+func ScrapePlaceHTTP(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
+	entry, err := FetchPlaceHTTP(ctx, placeURL, opts.LangCode)
+	if err != nil {
+		return nil, err
+	}
+	if opts.ExtractEmail && entry.IsWebsiteValidForEmail() {
+		websiteURL := normalizeGoogleURL(entry.WebSite)
+		if emails, eerr := ExtractEmails(ctx, websiteURL); eerr == nil {
+			entry.Emails = emails
+		}
+	}
+	return entry, nil
+}

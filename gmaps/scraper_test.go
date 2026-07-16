@@ -737,3 +737,217 @@ func TestScraperConsecutiveFailuresBackstop(t *testing.T) {
 		}
 	})
 }
+
+func TestScraperHTTPFirstSkipsBrowser(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	s := Scraper{
+		Config: Config{Concurrency: 1, JobID: jobID},
+		Pool:   fakePagePool{},
+		Store:  store,
+		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return &Entry{PlaceID: "http:" + placeURL}, nil
+		},
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			t.Fatal("browser ScrapePlace should not be called when HTTP succeeds")
+			return nil, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	var results []PlaceResult
+	for result := range out {
+		results = append(results, result)
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if len(results) != 1 || results[0].Entry.PlaceID != "http:u1" {
+		t.Fatalf("results = %#v, want single entry from HTTP stub", results)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 0 failed", stats)
+	}
+}
+
+func TestScraperHTTPUnavailableFallsBackToBrowser(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	s := Scraper{
+		Config: Config{Concurrency: 1, JobID: jobID},
+		Pool:   fakePagePool{},
+		Store:  store,
+		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return nil, ErrHTTPPlaceUnavailable
+		},
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return &Entry{PlaceID: "browser:" + placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	var results []PlaceResult
+	for result := range out {
+		results = append(results, result)
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if len(results) != 1 || results[0].Entry.PlaceID != "browser:u1" {
+		t.Fatalf("results = %#v, want single entry from browser stub", results)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 0 failed", stats)
+	}
+}
+
+func TestScraperHTTPBotBlockFallsBackToBrowser(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	s := Scraper{
+		Config: Config{Concurrency: 1, JobID: jobID},
+		Pool:   fakePagePool{},
+		Store:  store,
+		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return nil, fmt.Errorf("bot block: HTTP 429: %w", ErrBotBlocked)
+		},
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return &Entry{PlaceID: "browser:" + placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	var results []PlaceResult
+	for result := range out {
+		results = append(results, result)
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if len(results) != 1 || results[0].Entry.PlaceID != "browser:u1" {
+		t.Fatalf("results = %#v, want single entry from browser stub (HTTP bot-block must degrade, not fail)", results)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 0 failed (URL must not be failed by an HTTP-side bot block)", stats)
+	}
+}
+
+func TestScraperExtraReviewsBypassesHTTP(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	s := Scraper{
+		Config: Config{Concurrency: 1, JobID: jobID, ExtraReviews: 1},
+		Pool:   fakePagePool{},
+		Store:  store,
+		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
+			t.Fatal("ScrapePlaceHTTP should not be called when ExtraReviews > 0")
+			return nil, nil
+		},
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return &Entry{PlaceID: "browser:" + placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+}
+
+func TestScraperDisableHTTPFirstBypassesHTTP(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	s := Scraper{
+		Config: Config{Concurrency: 1, JobID: jobID, DisableHTTPFirst: true},
+		Pool:   fakePagePool{},
+		Store:  store,
+		ScrapePlaceHTTP: func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error) {
+			t.Fatal("ScrapePlaceHTTP should not be called when DisableHTTPFirst is set")
+			return nil, nil
+		},
+		ScrapePlace: func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			return &Entry{PlaceID: "browser:" + placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, nil, out)
+	}()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+}

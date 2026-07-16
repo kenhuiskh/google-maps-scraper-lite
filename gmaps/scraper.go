@@ -74,7 +74,8 @@ type Config struct {
 	StallTimeout      time.Duration // no-progress watchdog exit threshold; 0 = stallTimeout default
 	ExtractEmail      bool
 	ExtraReviews      int
-	Limit             int // max places to scrape; 0 = no limit
+	DisableHTTPFirst  bool // true = skip the HTTP-first place path and always use the browser
+	Limit             int  // max places to scrape; 0 = no limit
 	JobID             string
 	OutputMode        string // "database" or "file"; metadata for UI resume
 	JSONOut           bool
@@ -145,8 +146,12 @@ type Scraper struct {
 	Pool        PagePool
 	Store       *JobStore
 	ScrapePlace func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error)
-	ScrapeFeed  func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error)
-	OnJobReady  func(jobID string)
+	// ScrapePlaceHTTP fetches place details over HTTP without a browser page.
+	// It is tried first for each place (unless Config.DisableHTTPFirst or the
+	// claim needs ExtraReviews); ScrapePlace is the fallback.
+	ScrapePlaceHTTP func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error)
+	ScrapeFeed      func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error)
+	OnJobReady      func(jobID string)
 }
 
 // Run scrapes all queries and sends results to out. Run closes out when done.
@@ -159,6 +164,10 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	scrapePlace := s.ScrapePlace
 	if scrapePlace == nil {
 		scrapePlace = ScrapePlace
+	}
+	scrapePlaceHTTP := s.ScrapePlaceHTTP
+	if scrapePlaceHTTP == nil {
+		scrapePlaceHTTP = ScrapePlaceHTTP
 	}
 
 	langs := normalizeLangs(s.Config.Lang)
@@ -251,25 +260,49 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					claimOpts.LangCode = langs[0]
 				}
 
-				// An acquire failure means the browser is dead: end the run so
-				// finishJob persists the job state instead of hanging workers.
-				page, err := s.Pool.AcquirePage(gctx)
-				if err != nil {
-					return err
-				}
-				entry, err := s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
-				for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
-					s.releaseScrapePage(page, err)
-					if err := sleepContext(gctx, time.Duration(retry*2)*time.Second); err != nil {
-						return err
+				var entry *Entry
+				usedHTTP := false
+				if !s.Config.DisableHTTPFirst && claimOpts.ExtraReviews == 0 {
+					entry, err = scrapePlaceHTTP(gctx, claimed.URL, claimOpts)
+					if err == nil {
+						usedHTTP = true
 					}
-					page, err = s.Pool.AcquirePage(gctx)
-					if err != nil {
-						return err
+					// Any HTTP error (unavailable, bot-block, or otherwise) is not
+					// surfaced here — it always degrades to the browser path below,
+					// it never fails the URL by itself.
+				}
+				if !usedHTTP {
+					// An acquire failure means the browser is dead: end the run so
+					// finishJob persists the job state instead of hanging workers.
+					page, aerr := s.Pool.AcquirePage(gctx)
+					if aerr != nil {
+						return aerr
 					}
 					entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
+					for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
+						s.releaseScrapePage(page, err)
+						if serr := sleepContext(gctx, time.Duration(retry*2)*time.Second); serr != nil {
+							return serr
+						}
+						page, aerr = s.Pool.AcquirePage(gctx)
+						if aerr != nil {
+							return aerr
+						}
+						entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
+					}
+					s.releaseScrapePage(page, err)
 				}
-				s.releaseScrapePage(page, err)
+				if err == nil {
+					// Lightweight operator visibility into the HTTP-first split.
+					// IncrementJobStat's field whitelist doesn't cover
+					// http_scrapes/browser_scrapes, so this is a log line rather
+					// than a DB counter (see task-2 brief §4).
+					if usedHTTP {
+						log.Printf("scrape via http: %s", claimed.URL)
+					} else {
+						log.Printf("scrape via browser: %s", claimed.URL)
+					}
+				}
 				if err != nil {
 					// A handled failure still counts as pipeline progress.
 					inflight.clear(workerID)
