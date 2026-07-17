@@ -44,16 +44,22 @@ func TestRodPage_IsClosed_NilPageIsSafe(t *testing.T) {
 
 // TestRodPage_Close_RunsTeardownEvenIfCrashFlaggedFirst guards the ordering
 // bug the naive fix would reintroduce: if Close's idempotency guard were the
-// closed atomic itself (as it was before this fix), a page that watchCrash
-// already flagged as closed would make Close's CompareAndSwap(false, true)
-// fail and skip router.Stop/page.Close entirely — leaking the router.
-// closeOnce decouples "is the page reported dead" (closed) from "has teardown
-// run" (closeOnce), so Close still attempts teardown here even though closed
-// is already true, and a second Close call is a safe no-op rather than a
-// panic or double-run. This calls the real Close() (p.page stays nil, which
-// Close now guards, so router.Stop/page.Close are skipped but the function
-// itself proves the once-guard and the pre-set-closed path don't interact
-// badly).
+// closed atomic itself (as it was before this fix — a plain
+// closed.CompareAndSwap(false, true)), a page that watchCrash already flagged
+// as closed would make that CAS fail and skip router.Stop/page.Close
+// entirely — leaking the router. closeOnce decouples "is the page reported
+// dead" (closed) from "has teardown run" (closeOnce), so Close still attempts
+// teardown here even though closed is already true.
+//
+// p.page and p.router are left nil (Close's nil guards make the actual
+// Stop/Close calls safe no-ops), and p.teardownRuns — incremented inside the
+// sync.Once closure, right where the real router.Stop/page.Close teardown
+// happens — is the observable proof that the closure body ran. Two calls to
+// Close() must only run the closure once. This is the test seam: against the
+// current sync.Once-guarded Close it passes (teardownRuns == 1); against the
+// old CAS-guarded Close it would fail (teardownRuns == 0, because the
+// pre-set closed flag makes the CAS fail immediately and the closure body —
+// where the counter lives — never runs).
 func TestRodPage_Close_RunsTeardownEvenIfCrashFlaggedFirst(t *testing.T) {
 	p := &rodPage{}
 	p.closed.Store(true) // simulate watchCrash winning the race before Close runs
@@ -63,6 +69,10 @@ func TestRodPage_Close_RunsTeardownEvenIfCrashFlaggedFirst(t *testing.T) {
 	}
 	if err := p.Close(); err != nil { // second call (e.g. RetirePage after discard) must be a no-op
 		t.Fatalf("second Close() error = %v", err)
+	}
+
+	if got := p.teardownRuns.Load(); got != 1 {
+		t.Fatalf("teardownRuns = %d, want 1 (teardown must run exactly once even when closed was pre-set)", got)
 	}
 	if !p.IsClosed() {
 		t.Fatal("expected IsClosed() == true throughout")

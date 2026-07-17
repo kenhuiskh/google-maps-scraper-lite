@@ -258,8 +258,13 @@ func (b *Browser) AcquirePage(ctx context.Context) (gmaps.Page, error) {
 }
 
 // discardPage forgets a dead page: its use count is dropped and its created
-// slot is released so a replacement can be created lazily.
+// slot is released so a replacement can be created lazily. page.Close() is
+// called best-effort so a crashed page's hijack-router goroutine and CDP
+// session are torn down instead of leaking — IsClosed() can be true here
+// because Chromium crashed the tab out from under us, not only because we
+// already closed it ourselves.
 func (b *Browser) discardPage(page gmaps.Page) {
+	_ = page.Close()
 	b.mu.Lock()
 	delete(b.uses, page)
 	if b.created > 0 {
@@ -273,6 +278,11 @@ func (b *Browser) discardPage(page gmaps.Page) {
 // drains and tab memory stays bounded.
 func (b *Browser) ReleasePage(page gmaps.Page) {
 	if page.IsClosed() {
+		// Best-effort teardown: IsClosed() true here can mean a Chromium-side
+		// crash, not just an already-closed page, so page.Close() still needs
+		// to run to stop the hijack-router goroutine and release the CDP
+		// session (idempotent — see rodPage.Close).
+		_ = page.Close()
 		b.mu.Lock()
 		delete(b.uses, page)
 		b.mu.Unlock()

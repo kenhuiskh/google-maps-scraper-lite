@@ -27,6 +27,13 @@ type rodPage struct {
 	router    *rod.HijackRouter // resource-blocking router; stopped on Close
 	closed    atomic.Bool
 	closeOnce sync.Once
+
+	// teardownRuns counts how many times the sync.Once closure inside Close
+	// actually executed its body (router.Stop + page.Close). It exists purely
+	// as a test seam: it lets rodpage_test.go assert teardown ran exactly once
+	// even when closed was pre-set (crash-first) before Close was ever called,
+	// which is the scenario the old CAS-guarded Close got wrong.
+	teardownRuns atomic.Int32
 }
 
 // watchCrash runs for the life of the page on its own event loop (started
@@ -196,6 +203,7 @@ func (p *rodPage) Close() error {
 		if p.page != nil {
 			_ = p.page.Close()
 		}
+		p.teardownRuns.Add(1)
 	})
 	return nil
 }
