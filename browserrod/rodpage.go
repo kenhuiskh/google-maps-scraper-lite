@@ -1,6 +1,7 @@
 package browserrod
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,10 +16,40 @@ const navTimeout = 60 * time.Second
 
 // rodPage adapts a *rod.Page to the engine-neutral gmaps.Page interface. All
 // rod-specific option structs live here so the gmaps package stays engine-neutral.
+//
+// closed can be set two ways: our own Close() call, or asynchronously by
+// watchCrash's event handler when Chromium's renderer crashes out from under
+// us. Because either can happen first, Close's teardown (router.Stop +
+// page.Close) is guarded by closeOnce rather than by closed itself — see
+// Close's doc comment.
 type rodPage struct {
-	page   *rod.Page
-	router *rod.HijackRouter // resource-blocking router; stopped on Close
-	closed atomic.Bool
+	page      *rod.Page
+	router    *rod.HijackRouter // resource-blocking router; stopped on Close
+	closed    atomic.Bool
+	closeOnce sync.Once
+}
+
+// watchCrash runs for the life of the page on its own event loop (started
+// once from newPage) and flips closed when Chromium's renderer crashes
+// (OOM, sad-tab, etc). This is distinct from a clean tab close/destroy: rod's
+// own internal event loop (Page.initEvents) already reacts to
+// proto.TargetTargetDestroyed / proto.TargetDetachedFromTarget by canceling
+// the page's session context, which IsClosed's cheap fallback below already
+// observes via p.page.GetContext().Err() — so we don't need to subscribe to
+// those ourselves. A renderer crash, however, does not necessarily destroy or
+// detach the target, so without this explicit subscription IsClosed would
+// never see it.
+//
+// This EachEvent loop shares no goroutine with Goto/Reload's per-navigation
+// EachEvent calls (those are short-lived, ending when navigation completes);
+// this one lives for the page's lifetime and exits on its own once the page's
+// session context is canceled (on crash detection, or on any close), so it
+// never leaks.
+func (p *rodPage) watchCrash() {
+	p.page.EachEvent(func(*proto.InspectorTargetCrashed) bool {
+		p.closed.Store(true)
+		return true
+	})()
 }
 
 // gmaps.Page compile-time assertion.
@@ -144,19 +175,43 @@ func (p *rodPage) Sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
-// Close is idempotent. It stops the resource-blocking router (if any) and closes
-// the tab. IsClosed reflects the closed flag since rod has no IsClosed of its own
-// and the pool relies on it for dead-page detection.
+// Close is idempotent, guarded by closeOnce rather than the closed atomic:
+// watchCrash's handler can flip closed to true before Close is ever called
+// (the pool discards a crashed page by calling IsClosed, not Close, so the
+// eventual Close on discard/retire must still run teardown even though closed
+// is already true). closeOnce guarantees router.Stop + page.Close run exactly
+// once regardless of which of Close/watchCrash observes the dead tab first.
+// Errors from Stop/page.Close are ignored: both are expected to error on an
+// already-dead target (crashed or externally destroyed — e.g. rod's own
+// Page.Close waits for a TargetTargetDestroyed that already fired), and no
+// caller in this codebase inspects Close's return value.
 func (p *rodPage) Close() error {
-	if !p.closed.CompareAndSwap(false, true) {
-		return nil
-	}
-	if p.router != nil {
-		_ = p.router.Stop()
-	}
-	return p.page.Close()
+	p.closeOnce.Do(func() {
+		p.closed.Store(true)
+		if p.router != nil {
+			_ = p.router.Stop()
+		}
+		// page is nil only in unit tests that exercise Close's idempotency
+		// without a live browser; newPage always sets it in production.
+		if p.page != nil {
+			_ = p.page.Close()
+		}
+	})
+	return nil
 }
 
+// IsClosed reports true once WE have closed the page, once watchCrash has
+// observed a renderer crash, or — the cheap liveness fallback — once rod's
+// own internal event loop has canceled the page's session context in
+// response to the underlying CDP target being destroyed or detached (see
+// watchCrash's doc comment). GetContext().Err() is a simple field read with
+// no network round-trip, safe to call on every pool acquire/release.
 func (p *rodPage) IsClosed() bool {
-	return p.closed.Load()
+	if p.closed.Load() {
+		return true
+	}
+	if p.page == nil {
+		return false
+	}
+	return p.page.GetContext().Err() != nil
 }

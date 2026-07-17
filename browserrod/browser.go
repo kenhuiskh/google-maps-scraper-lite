@@ -178,6 +178,10 @@ func (b *Browser) newPage() (*rodPage, error) {
 	}
 
 	rp := &rodPage{page: page}
+	// One persistent event loop for the life of the page, detecting Chromium-
+	// side tab death (renderer crash) that our own Close() would never
+	// observe. See rodPage.watchCrash's doc comment.
+	go rp.watchCrash()
 
 	if !b.disableBlocking {
 		router := page.HijackRequests()
