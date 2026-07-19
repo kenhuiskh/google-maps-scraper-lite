@@ -21,6 +21,16 @@ import (
 	"github.com/gosom/google-maps-scraper-lite/output"
 )
 
+var mainStageTimingsEnabled = os.Getenv("GMAPS_TIMINGS") == "1"
+
+func logMainStageTiming(stage string, started time.Time) {
+	if !mainStageTimingsEnabled {
+		return
+	}
+
+	log.Printf("TIMING stage=%s duration=%s", stage, time.Since(started))
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "suggest-zoom" {
 		runSuggestZoom(os.Args[2:])
@@ -286,7 +296,7 @@ func main() {
 			}
 			writers[postgresLanguageSuffix(lang)] = fw
 			file := f
-			closeFns = append(closeFns, fw.Close, file.Close)
+			closeFns = append(closeFns, file.Close, fw.Close)
 		}
 	}
 
@@ -401,8 +411,12 @@ func main() {
 			}
 			continue
 		}
-		if err := w.Write(entry); err != nil {
-			log.Printf("write error: %v", err)
+		writeStarted := time.Now()
+		writeErr := w.Write(entry)
+		logMainStageTiming("output.write", writeStarted)
+
+		if writeErr != nil {
+			log.Printf("write error: %v", writeErr)
 			if result.URLID != 0 {
 				_ = store.MarkURLFailed(context.Background(), result.URLID, err)
 			}
@@ -454,7 +468,9 @@ func main() {
 		}
 	}
 
+	closeStarted := time.Now()
 	closeAll()
+	logMainStageTiming("output.close", closeStarted)
 }
 
 func controlUIOnly(jobID, queries, placeIDs string) bool {

@@ -39,45 +39,73 @@ type PlaceOptions struct {
 // ScrapePlace navigates to placeURL, extracts the place's JSON data, parses it
 // into an Entry, and optionally extracts email addresses from the place's website.
 func ScrapePlace(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+	placeStarted := time.Now()
+	defer func() {
+		logStageTiming("place.total", placeStarted)
+	}()
+
 	fullURL := placeURLWithLang(placeURL, opts.LangCode)
 
+	stageStarted := time.Now()
 	status, err := page.Goto(fullURL)
+	logStageTiming("place.goto", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("goto place URL: %w", err)
 	}
 
-	if berr := detectBotBlock(page, status); berr != nil {
+	stageStarted = time.Now()
+	berr := detectBotBlock(page, status)
+	logStageTiming("place.bot_check", stageStarted)
+	if berr != nil {
 		return nil, berr
 	}
 
+	stageStarted = time.Now()
 	clickRejectCookiesPlaywright(page)
-	canonicalURL := waitForRichPlacePage(ctx, page)
-	expandOpeningHours(page)
+	logStageTiming("place.cookies", stageStarted)
 
+	stageStarted = time.Now()
+	canonicalURL := waitForRichPlacePage(ctx, page)
+	logStageTiming("place.wait_rich", stageStarted)
+
+	stageStarted = time.Now()
+	expandOpeningHours(page)
+	logStageTiming("place.expand_hours", stageStarted)
+
+	stageStarted = time.Now()
 	raw, err := extractPlaceJSON(ctx, page)
+	logStageTiming("place.extract_json", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("extract place JSON: %w", err)
 	}
 
+	stageStarted = time.Now()
 	entry, err := EntryFromJSON(raw)
+	logStageTiming("place.parse_json", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("parse entry JSON: %w", err)
 	}
 
+	stageStarted = time.Now()
 	entry.ReviewTags = extractReviewTags(page)
+	logStageTiming("place.review_tags", stageStarted)
+
 	entry.Link = choosePlaceLink(entry.Link, canonicalURL, fullURL)
 
 	if opts.ExtraReviews > 0 {
+		stageStarted = time.Now()
 		if err := scrapeExtraReviews(ctx, page, &entry, opts.ExtraReviews); err != nil {
-			// Non-fatal: log and continue with whatever reviews were collected.
 			log.Printf("extra reviews scrape warning for %s: %v", placeURL, err)
 		}
+		logStageTiming("place.extra_reviews", stageStarted)
 		entry.SortAndCapReviews(opts.ExtraReviews)
 	}
 
 	if opts.ExtractEmail && entry.IsWebsiteValidForEmail() {
+		stageStarted = time.Now()
 		websiteURL := normalizeGoogleURL(entry.WebSite)
 		emails, err := ExtractEmails(ctx, websiteURL)
+		logStageTiming("place.email", stageStarted)
 		if err == nil {
 			entry.Emails = emails
 		}
@@ -524,7 +552,7 @@ func expandOpeningHours(page Page) {
 		// Force: true bypasses Playwright's actionability checks (visibility, viewport position,
 		// stability). The click is still sent via CDP and produces isTrusted=true, so Google
 		// Maps' React event handlers respond to it — unlike JS dispatchEvent (isTrusted=false).
-		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
+		if err := page.ClickForce(sel, 250*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
 		}
 
@@ -538,9 +566,10 @@ func expandOpeningHours(page Page) {
 // each tag with its mention count. The "All" chip and "View N more Topics" button
 // are skipped. Count is nil when no number can be parsed.
 func extractReviewTags(page Page) []ReviewTag {
-	// The "Refine reviews" chip bar renders after React hydration, which happens
-	// later than the JSON blob extraction. Wait up to 5s for it to attach.
-	if err := page.WaitSelector(`[aria-label="Refine reviews"]`, 5000*time.Millisecond); err != nil {
+	// By this stage the rich page, opening hours, and JSON state have already had
+	// time to hydrate. Keep a short grace period for late review chips, but do not
+	// stall every cold tab or place without review tags for several seconds.
+	if err := page.WaitSelector(`[aria-label="Refine reviews"]`, 500*time.Millisecond); err != nil {
 		return []ReviewTag{}
 	}
 

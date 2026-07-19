@@ -62,9 +62,16 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 		return scrapePlaceID(ctx, page, id)
 	}
 
+	feedStarted := time.Now()
+	defer func() {
+		logStageTiming("feed.total", feedStarted)
+	}()
+
 	fullURL := buildFeedURL(query, opts)
 
+	stageStarted := time.Now()
 	status, err := page.Goto(fullURL)
+	logStageTiming("feed.goto", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("goto feed URL: %w", err)
 	}
@@ -78,8 +85,9 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 	// Poll the URL for ~3 seconds to detect that case.
 	const feedSelector = `div[role='feed']`
 
+	stageStarted = time.Now()
 	waitErr := page.WaitSelector(feedSelector, 10*time.Second)
-
+	logStageTiming("feed.wait_selector", stageStarted)
 	var singlePlace bool
 
 	if waitErr != nil {
@@ -97,17 +105,24 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 	}
 
 	// Scroll the feed.
-	if err := scrollFeed(ctx, page, opts.MaxDepth, feedSelector); err != nil {
-		return nil, fmt.Errorf("scroll feed: %w", err)
+	stageStarted = time.Now()
+	scrollErr := scrollFeed(ctx, page, opts.MaxDepth, feedSelector)
+	logStageTiming("feed.scroll", stageStarted)
+	if scrollErr != nil {
+		return nil, fmt.Errorf("scroll feed: %w", scrollErr)
 	}
 
 	// Parse the page HTML and extract place URLs.
+	stageStarted = time.Now()
 	content, err := page.Content()
+	logStageTiming("feed.page_content", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("get page content: %w", err)
 	}
 
+	stageStarted = time.Now()
 	urls, err := extractPlaceURLs(content)
+	logStageTiming("feed.extract_urls", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("extract place URLs: %w", err)
 	}
