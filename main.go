@@ -17,10 +17,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosom/google-maps-scraper-lite/browser"
 	"github.com/gosom/google-maps-scraper-lite/gmaps"
 	"github.com/gosom/google-maps-scraper-lite/output"
 )
+
+var mainStageTimingsEnabled = os.Getenv("GMAPS_TIMINGS") == "1"
+
+func logMainStageTiming(stage string, started time.Time) {
+	if !mainStageTimingsEnabled {
+		return
+	}
+
+	log.Printf("TIMING stage=%s duration=%s", stage, time.Since(started))
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "suggest-zoom" {
@@ -51,6 +60,7 @@ func main() {
 	urlsOnly := flag.String("urls-only", "", "debug: collect feed URLs only and write to this file (no place scraping)")
 	limit := flag.Int("limit", 0, "max number of places to scrape (0 = no limit)")
 	dedupScraped := flag.String("dedup-scraped", "", "skip already-scraped place URLs: \"run\" (same strategy run) or \"all\" (any prior job)")
+	httpFirst := flag.Bool("http-first", false, "opt in to HTTP-first place scraping (faster but returns a REDUCED field set — no reviews, images, popular times, or full hours; use the default browser path for full fidelity)")
 	flag.Parse()
 
 	explicitTables := map[string]bool{}
@@ -198,7 +208,7 @@ func main() {
 		}
 	}()
 
-	br, err := browser.New(browser.Options{
+	br, err := newBrowserEngine(browserOptions{
 		Concurrency: *concurrency,
 		Headless:    *headless,
 		Lang:        *lang,
@@ -207,6 +217,7 @@ func main() {
 		log.Fatalf("browser init: %v", err)
 	}
 	defer br.Close()
+	log.Printf("browser engine: %s", engineName)
 
 	ts := time.Now().Format("2006-01-02_15-04-05")
 
@@ -285,7 +296,7 @@ func main() {
 			}
 			writers[postgresLanguageSuffix(lang)] = fw
 			file := f
-			closeFns = append(closeFns, fw.Close, file.Close)
+			closeFns = append(closeFns, file.Close, fw.Close)
 		}
 	}
 
@@ -317,6 +328,7 @@ func main() {
 			BrowseStartDelay: 500 * time.Millisecond,
 			DedupScope:       dedupScope,
 			MaxURLAttempts:   3,
+			EnableHTTPFirst:  *httpFirst,
 		},
 		Pool:       br,
 		Store:      store,
@@ -399,8 +411,12 @@ func main() {
 			}
 			continue
 		}
-		if err := w.Write(entry); err != nil {
-			log.Printf("write error: %v", err)
+		writeStarted := time.Now()
+		writeErr := w.Write(entry)
+		logMainStageTiming("output.write", writeStarted)
+
+		if writeErr != nil {
+			log.Printf("write error: %v", writeErr)
 			if result.URLID != 0 {
 				_ = store.MarkURLFailed(context.Background(), result.URLID, err)
 			}
@@ -452,7 +468,9 @@ func main() {
 		}
 	}
 
+	closeStarted := time.Now()
 	closeAll()
+	logMainStageTiming("output.close", closeStarted)
 }
 
 func controlUIOnly(jobID, queries, placeIDs string) bool {
@@ -579,7 +597,7 @@ func determineLangs(ctx context.Context, store *gmaps.JobStore, jobID, cliLang s
 // runURLsOnly collects feed URLs for all queries and writes them one-per-line
 // to outFile. No place detail scraping is performed.
 func runURLsOnly(ctx context.Context, outFile, queries string, depth int, lang, geo string) {
-	br, err := browser.New(browser.Options{Concurrency: 1, Headless: true, Lang: lang})
+	br, err := newBrowserEngine(browserOptions{Concurrency: 1, Headless: true, Lang: lang})
 	if err != nil {
 		log.Fatalf("browser init: %v", err)
 	}

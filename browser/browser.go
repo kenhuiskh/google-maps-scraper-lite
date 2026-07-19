@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gosom/google-maps-scraper-lite/gmaps"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -36,11 +37,11 @@ type Browser struct {
 	pw      *playwright.Playwright
 	browser playwright.Browser
 	context playwright.BrowserContext
-	pages   chan playwright.Page
+	pages   chan gmaps.Page
 	mu      sync.Mutex
 	created int
 	max     int
-	uses    map[playwright.Page]int // scrapes served per page; guarded by mu
+	uses    map[gmaps.Page]int // scrapes served per page; guarded by mu
 }
 
 // Options configures the browser.
@@ -123,7 +124,7 @@ func New(opts Options) (*Browser, error) {
 		opts.Concurrency = 1
 	}
 
-	pool := make(chan playwright.Page, opts.Concurrency)
+	pool := make(chan gmaps.Page, opts.Concurrency)
 	page, err := ctx.NewPage()
 	if err != nil {
 		_ = ctx.Close()
@@ -132,9 +133,10 @@ func New(opts Options) (*Browser, error) {
 		return nil, fmt.Errorf("new page: %w", err)
 	}
 	configurePage(page)
-	pool <- page
+	var gp gmaps.Page = &pwPage{page: page}
+	pool <- gp
 
-	return &Browser{pw: pw, browser: br, context: ctx, pages: pool, created: 1, max: opts.Concurrency, uses: make(map[playwright.Page]int)}, nil
+	return &Browser{pw: pw, browser: br, context: ctx, pages: pool, created: 1, max: opts.Concurrency, uses: make(map[gmaps.Page]int)}, nil
 }
 
 // configurePage sets default timeouts so playwright operations error out
@@ -164,10 +166,10 @@ func installResourceBlocking(ctx playwright.BrowserContext, blockedTypes []strin
 // AcquirePage takes a page from the pool, creating a new tab lazily until the
 // configured maximum is reached. It never blocks past acquireTimeout: a dead
 // browser must surface an error rather than wedge every worker silently.
-func (b *Browser) AcquirePage(ctx context.Context) (playwright.Page, error) {
+func (b *Browser) AcquirePage(ctx context.Context) (gmaps.Page, error) {
 	// Fast path: take a pooled page without blocking, discarding dead ones.
 	for {
-		var page playwright.Page
+		var page gmaps.Page
 		select {
 		case page = <-b.pages:
 		default:
@@ -194,7 +196,7 @@ func (b *Browser) AcquirePage(ctx context.Context) (playwright.Page, error) {
 			return nil, fmt.Errorf("acquire page: %w", err)
 		}
 		configurePage(page)
-		return page, nil
+		return &pwPage{page: page}, nil
 	}
 	b.mu.Unlock()
 
@@ -218,7 +220,7 @@ func (b *Browser) AcquirePage(ctx context.Context) (playwright.Page, error) {
 
 // discardPage forgets a dead page: its use count is dropped and its created
 // slot is released so a replacement can be created lazily.
-func (b *Browser) discardPage(page playwright.Page) {
+func (b *Browser) discardPage(page gmaps.Page) {
 	b.mu.Lock()
 	delete(b.uses, page)
 	if b.created > 0 {
@@ -230,7 +232,7 @@ func (b *Browser) discardPage(page playwright.Page) {
 // ReleasePage returns a page to the pool. Dead pages and pages that served
 // maxPageUses scrapes are replaced with fresh ones so the pool never silently
 // drains and tab memory stays bounded.
-func (b *Browser) ReleasePage(page playwright.Page) {
+func (b *Browser) ReleasePage(page gmaps.Page) {
 	if page.IsClosed() {
 		b.mu.Lock()
 		delete(b.uses, page)
@@ -258,7 +260,7 @@ func (b *Browser) ReleasePage(page playwright.Page) {
 // RetirePage closes a tainted page instead of returning it to the pool. Use it
 // after bot blocks, watchdog timeouts, or page crashes so the next claim gets a
 // clean tab in the shared context.
-func (b *Browser) RetirePage(page playwright.Page) {
+func (b *Browser) RetirePage(page gmaps.Page) {
 	if page == nil {
 		return
 	}
@@ -284,11 +286,12 @@ func (b *Browser) replenish() {
 		return
 	}
 	configurePage(page)
+	gp := gmaps.Page(&pwPage{page: page})
 	select {
-	case b.pages <- page:
+	case b.pages <- gp:
 	default:
 		// Pool already at capacity; the slot was double-counted.
-		_ = page.Close()
+		_ = gp.Close()
 		b.mu.Lock()
 		if b.created > 0 {
 			b.created--
@@ -304,7 +307,7 @@ func (b *Browser) Close() error {
 		_ = page.Close()
 	}
 	b.mu.Lock()
-	b.uses = make(map[playwright.Page]int)
+	b.uses = make(map[gmaps.Page]int)
 	b.mu.Unlock()
 	_ = b.context.Close()
 	_ = b.browser.Close()

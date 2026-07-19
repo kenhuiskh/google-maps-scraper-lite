@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/mxschmitt/playwright-go"
 )
 
 var (
@@ -40,48 +38,74 @@ type PlaceOptions struct {
 
 // ScrapePlace navigates to placeURL, extracts the place's JSON data, parses it
 // into an Entry, and optionally extracts email addresses from the place's website.
-func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+func ScrapePlace(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+	placeStarted := time.Now()
+	defer func() {
+		logStageTiming("place.total", placeStarted)
+	}()
+
 	fullURL := placeURLWithLang(placeURL, opts.LangCode)
 
-	resp, err := page.Goto(fullURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateCommit,
-	})
+	stageStarted := time.Now()
+	status, err := page.Goto(fullURL)
+	logStageTiming("place.goto", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("goto place URL: %w", err)
 	}
 
-	if berr := detectBotBlock(page, resp); berr != nil {
+	stageStarted = time.Now()
+	berr := detectBotBlock(page, status)
+	logStageTiming("place.bot_check", stageStarted)
+	if berr != nil {
 		return nil, berr
 	}
 
+	stageStarted = time.Now()
 	clickRejectCookiesPlaywright(page)
-	canonicalURL := waitForRichPlacePage(ctx, page)
-	expandOpeningHours(page)
+	logStageTiming("place.cookies", stageStarted)
 
+	stageStarted = time.Now()
+	canonicalURL := waitForRichPlacePage(ctx, page)
+	logStageTiming("place.wait_rich", stageStarted)
+
+	stageStarted = time.Now()
+	expandOpeningHours(page)
+	logStageTiming("place.expand_hours", stageStarted)
+
+	stageStarted = time.Now()
 	raw, err := extractPlaceJSON(ctx, page)
+	logStageTiming("place.extract_json", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("extract place JSON: %w", err)
 	}
 
+	stageStarted = time.Now()
 	entry, err := EntryFromJSON(raw)
+	logStageTiming("place.parse_json", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("parse entry JSON: %w", err)
 	}
 
+	stageStarted = time.Now()
 	entry.ReviewTags = extractReviewTags(page)
+	logStageTiming("place.review_tags", stageStarted)
+
 	entry.Link = choosePlaceLink(entry.Link, canonicalURL, fullURL)
 
 	if opts.ExtraReviews > 0 {
+		stageStarted = time.Now()
 		if err := scrapeExtraReviews(ctx, page, &entry, opts.ExtraReviews); err != nil {
-			// Non-fatal: log and continue with whatever reviews were collected.
 			log.Printf("extra reviews scrape warning for %s: %v", placeURL, err)
 		}
+		logStageTiming("place.extra_reviews", stageStarted)
 		entry.SortAndCapReviews(opts.ExtraReviews)
 	}
 
 	if opts.ExtractEmail && entry.IsWebsiteValidForEmail() {
+		stageStarted = time.Now()
 		websiteURL := normalizeGoogleURL(entry.WebSite)
 		emails, err := ExtractEmails(ctx, websiteURL)
+		logStageTiming("place.email", stageStarted)
 		if err == nil {
 			entry.Emails = emails
 		}
@@ -93,14 +117,14 @@ func ScrapePlace(ctx context.Context, page playwright.Page, placeURL string, opt
 // detectBotBlock returns a non-nil error wrapping ErrBotBlocked when the page
 // shows a Google captcha/consent/sorry wall, a 429 response, or "unusual
 // traffic" / "automated queries" text. Returns nil otherwise.
-func detectBotBlock(page playwright.Page, resp playwright.Response) error {
+func detectBotBlock(page Page, status int) error {
 	curURL := page.URL()
 	for _, marker := range []string{"/sorry/", "consent.google", "ipv4.google.com/sorry"} {
 		if strings.Contains(curURL, marker) {
 			return fmt.Errorf("bot block: url %q: %w", curURL, ErrBotBlocked)
 		}
 	}
-	if resp != nil && resp.Status() == 429 {
+	if status == 429 {
 		return fmt.Errorf("bot block: HTTP 429: %w", ErrBotBlocked)
 	}
 	if content, err := page.Content(); err == nil {
@@ -133,7 +157,7 @@ func placeURLWithLang(placeURL, lang string) string {
 	return parsed.String()
 }
 
-func waitForRichPlacePage(ctx context.Context, page playwright.Page) string {
+func waitForRichPlacePage(ctx context.Context, page Page) string {
 	canonicalURL := waitForPlaceIDResolution(ctx, page, 20*time.Second)
 
 	selectors := []string{
@@ -143,11 +167,7 @@ func waitForRichPlacePage(ctx context.Context, page playwright.Page) string {
 		`[role="main"]`,
 	}
 	for _, sel := range selectors {
-		loc := page.Locator(sel).First()
-		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
-			State:   playwright.WaitForSelectorStateAttached,
-			Timeout: playwright.Float(2500),
-		}); err == nil {
+		if err := page.WaitSelector(sel, 2500*time.Millisecond); err == nil {
 			return canonicalURL
 		}
 	}
@@ -155,7 +175,7 @@ func waitForRichPlacePage(ctx context.Context, page playwright.Page) string {
 	return canonicalURL
 }
 
-func waitForPlaceIDResolution(ctx context.Context, page playwright.Page, timeout time.Duration) string {
+func waitForPlaceIDResolution(ctx context.Context, page Page, timeout time.Duration) string {
 	if canonical := canonicalPlaceURL(page.URL()); canonical != "" && !isPlaceIDQueryURL(page.URL()) {
 		return canonical
 	}
@@ -224,7 +244,7 @@ func canonicalPlaceURL(rawURL string) string {
 // scrapeExtraReviews opens the reviews dialog, sorts by newest, scrolls the DOM
 // feed, and extracts visible review cards until entry has at least targetReviews
 // reviews or scrolling stops revealing new cards.
-func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry, targetReviews int) error {
+func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetReviews int) error {
 	const (
 		maxStaleScrolls = 3
 		scrollPauseMs   = 1800
@@ -238,28 +258,14 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 		`a[href*="reviews"]`,
 	}
 	for _, sel := range reviewSelectors {
-		loc := page.Locator(sel).First()
-		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
-			State:   playwright.WaitForSelectorStateAttached,
-			Timeout: playwright.Float(3000),
-		}); err != nil {
+		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
 		}
-		if err := loc.Click(playwright.LocatorClickOptions{
-			Timeout: playwright.Float(2000),
-			Force:   playwright.Bool(true),
-		}); err != nil {
-			continue
-		}
-		page.WaitForTimeout(float64(scrollPauseMs))
+		page.Sleep(scrollPauseMs * time.Millisecond)
 		break
 	}
 
-	reviewsPanelLocator := page.Locator("[data-review-id], .jftiEf, .wiI7pd")
-	_ = reviewsPanelLocator.First().WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateAttached,
-		Timeout: playwright.Float(5000),
-	})
+	_ = page.WaitSelector("[data-review-id], .jftiEf, .wiI7pd", 5000*time.Millisecond)
 
 	// Sort by "Newest". In current Maps UI this usually requires opening the sort
 	// menu first, then clicking the "Newest" option.
@@ -269,20 +275,10 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 		`[data-value="Sort reviews"]`,
 	}
 	for _, sel := range sortButtonSelectors {
-		loc := page.Locator(sel).First()
-		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
-			State:   playwright.WaitForSelectorStateAttached,
-			Timeout: playwright.Float(3000),
-		}); err != nil {
+		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
 		}
-		if err := loc.Click(playwright.LocatorClickOptions{
-			Timeout: playwright.Float(2000),
-			Force:   playwright.Bool(true),
-		}); err != nil {
-			continue
-		}
-		page.WaitForTimeout(float64(scrollPauseMs))
+		page.Sleep(scrollPauseMs * time.Millisecond)
 		break
 	}
 
@@ -293,20 +289,10 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 		`[data-value="2"]`,
 	}
 	for _, sel := range newestSelectors {
-		loc := page.Locator(sel).First()
-		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
-			State:   playwright.WaitForSelectorStateAttached,
-			Timeout: playwright.Float(3000),
-		}); err != nil {
+		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
 		}
-		if err := loc.Click(playwright.LocatorClickOptions{
-			Timeout: playwright.Float(2000),
-			Force:   playwright.Bool(true),
-		}); err != nil {
-			continue
-		}
-		page.WaitForTimeout(float64(scrollPauseMs))
+		page.Sleep(scrollPauseMs * time.Millisecond)
 		break
 	}
 
@@ -353,7 +339,7 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 
 		// Scroll the reviews panel.
 		_, _ = page.Evaluate(scrollReviewsFeedJS)
-		page.WaitForTimeout(float64(scrollPauseMs))
+		page.Sleep(scrollPauseMs * time.Millisecond)
 
 		if newCount == 0 {
 			staleCount++
@@ -368,7 +354,7 @@ func scrapeExtraReviews(ctx context.Context, page playwright.Page, entry *Entry,
 	return nil
 }
 
-func extractDOMReviews(page playwright.Page) ([]Review, error) {
+func extractDOMReviews(page Page) ([]Review, error) {
 	result, err := page.Evaluate(extractDOMReviewsJS)
 	if err != nil {
 		return nil, err
@@ -465,11 +451,11 @@ func relativeToAbsoluteDate(s string) string {
 
 // extractPlaceJSON retries up to 3 times to extract the APP_INITIALIZATION_STATE
 // JSON from the current page, reloading between attempts on failure.
-func extractPlaceJSON(ctx context.Context, page playwright.Page) ([]byte, error) {
+func extractPlaceJSON(ctx context.Context, page Page) ([]byte, error) {
 	const maxAttempts = 3
 
 	for attempt := range maxAttempts {
-		if berr := detectBotBlock(page, nil); berr != nil {
+		if berr := detectBotBlock(page, 0); berr != nil {
 			return nil, berr
 		}
 		raw, err := getRawPlaceJSON(ctx, page)
@@ -477,11 +463,9 @@ func extractPlaceJSON(ctx context.Context, page playwright.Page) ([]byte, error)
 			if attempt < maxAttempts-1 {
 				// Brief pause before reload to avoid immediately re-hitting a
 				// rate-limited or bot-detected response.
-				page.WaitForTimeout(float64(2000 * (attempt + 1)))
-				if resp, reloadErr := page.Reload(playwright.PageReloadOptions{
-					WaitUntil: playwright.WaitUntilStateCommit,
-				}); reloadErr == nil {
-					if berr := detectBotBlock(page, resp); berr != nil {
+				page.Sleep(time.Duration(2000*(attempt+1)) * time.Millisecond)
+				if status, reloadErr := page.Reload(); reloadErr == nil {
+					if berr := detectBotBlock(page, status); berr != nil {
 						return nil, berr
 					}
 					continue
@@ -512,7 +496,7 @@ func extractPlaceJSON(ctx context.Context, page playwright.Page) ([]byte, error)
 
 // getRawPlaceJSON polls page.Evaluate with the APP_INITIALIZATION_STATE JS extractor
 // until a non-empty result is returned or ctx is cancelled.
-func getRawPlaceJSON(ctx context.Context, page playwright.Page) (any, error) {
+func getRawPlaceJSON(ctx context.Context, page Page) (any, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -523,17 +507,17 @@ func getRawPlaceJSON(ctx context.Context, page playwright.Page) (any, error) {
 		default:
 			raw, err := page.Evaluate(placeJS)
 			if err != nil {
-				page.WaitForTimeout(float64(200))
+				page.Sleep(200 * time.Millisecond)
 				continue
 			}
 
 			if raw == nil {
-				page.WaitForTimeout(float64(200))
+				page.Sleep(200 * time.Millisecond)
 				continue
 			}
 
 			if str, ok := raw.(string); ok && str == "" {
-				page.WaitForTimeout(float64(200))
+				page.Sleep(200 * time.Millisecond)
 				continue
 			}
 
@@ -548,7 +532,7 @@ func getRawPlaceJSON(ctx context.Context, page playwright.Page) (any, error) {
 //
 // Uses Force: true on Click to bypass Playwright's actionability checks (visibility,
 // viewport position) while still sending a trusted CDP click (isTrusted=true).
-func expandOpeningHours(page playwright.Page) {
+func expandOpeningHours(page Page) {
 	selectors := []string{
 		// Prefer exact data-item-id used for the opening hours row
 		`[data-item-id="oh"]`,
@@ -565,28 +549,15 @@ func expandOpeningHours(page playwright.Page) {
 	}
 
 	for _, sel := range selectors {
-		loc := page.Locator(sel).First()
-
-		// Wait for element to be attached to DOM (does not need to be visible or in viewport).
-		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
-			State:   playwright.WaitForSelectorStateAttached,
-			Timeout: playwright.Float(3000),
-		}); err != nil {
-			continue
-		}
-
 		// Force: true bypasses Playwright's actionability checks (visibility, viewport position,
 		// stability). The click is still sent via CDP and produces isTrusted=true, so Google
 		// Maps' React event handlers respond to it — unlike JS dispatchEvent (isTrusted=false).
-		if err := loc.Click(playwright.LocatorClickOptions{
-			Timeout: playwright.Float(2000),
-			Force:   playwright.Bool(true),
-		}); err != nil {
+		if err := page.ClickForce(sel, 250*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
 		}
 
 		// Give the DOM a moment to update before JSON extraction.
-		page.WaitForTimeout(500)
+		page.Sleep(500 * time.Millisecond)
 		return
 	}
 }
@@ -594,14 +565,11 @@ func expandOpeningHours(page playwright.Page) {
 // extractReviewTags reads the "Refine reviews" chip bar from the DOM and returns
 // each tag with its mention count. The "All" chip and "View N more Topics" button
 // are skipped. Count is nil when no number can be parsed.
-func extractReviewTags(page playwright.Page) []ReviewTag {
-	// The "Refine reviews" chip bar renders after React hydration, which happens
-	// later than the JSON blob extraction. Wait up to 5s for it to attach.
-	loc := page.Locator(`[aria-label="Refine reviews"]`)
-	if err := loc.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateAttached,
-		Timeout: playwright.Float(5000),
-	}); err != nil {
+func extractReviewTags(page Page) []ReviewTag {
+	// By this stage the rich page, opening hours, and JSON state have already had
+	// time to hydrate. Keep a short grace period for late review chips, but do not
+	// stall every cold tab or place without review tags for several seconds.
+	if err := page.WaitSelector(`[aria-label="Refine reviews"]`, 500*time.Millisecond); err != nil {
 		return []ReviewTag{}
 	}
 

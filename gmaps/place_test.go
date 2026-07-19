@@ -1,10 +1,59 @@
 package gmaps
 
 import (
+	"errors"
 	"net/url"
 	"reflect"
 	"testing"
+	"time"
 )
+
+type reviewTagsTestPage struct {
+	waitSelector string
+	waitTimeout  time.Duration
+	waitErr      error
+	evaluate     any
+}
+
+func (p *reviewTagsTestPage) Goto(string) (int, error)     { return 200, nil }
+func (p *reviewTagsTestPage) Reload() (int, error)         { return 200, nil }
+func (p *reviewTagsTestPage) Content() (string, error)     { return "", nil }
+func (p *reviewTagsTestPage) Evaluate(string) (any, error) { return p.evaluate, nil }
+func (p *reviewTagsTestPage) ClickForce(string, time.Duration, time.Duration) error {
+	return nil
+}
+func (p *reviewTagsTestPage) URL() string         { return "" }
+func (p *reviewTagsTestPage) Sleep(time.Duration) {}
+func (p *reviewTagsTestPage) Close() error        { return nil }
+func (p *reviewTagsTestPage) IsClosed() bool      { return false }
+func (p *reviewTagsTestPage) WaitSelector(selector string, timeout time.Duration) error {
+	p.waitSelector = selector
+	p.waitTimeout = timeout
+	return p.waitErr
+}
+
+func TestExtractReviewTagsUsesShortHydrationGrace(t *testing.T) {
+	page := &reviewTagsTestPage{waitErr: errors.New("not found")}
+	if got := extractReviewTags(page); len(got) != 0 {
+		t.Fatalf("extractReviewTags() = %#v, want empty", got)
+	}
+	if page.waitSelector != `[aria-label="Refine reviews"]` {
+		t.Fatalf("selector = %q", page.waitSelector)
+	}
+	if page.waitTimeout != 500*time.Millisecond {
+		t.Fatalf("timeout = %s, want 500ms", page.waitTimeout)
+	}
+}
+
+func TestExtractReviewTagsParsesAttachedChips(t *testing.T) {
+	page := &reviewTagsTestPage{evaluate: []any{
+		map[string]any{"tag": "coffee", "count": float64(12)},
+	}}
+	got := extractReviewTags(page)
+	if len(got) != 1 || got[0].Tag != "coffee" || got[0].Count == nil || *got[0].Count != 12 {
+		t.Fatalf("extractReviewTags() = %#v", got)
+	}
+}
 
 func TestPlaceURLWithLangDoesNotDuplicateExistingHL(t *testing.T) {
 	got := placeURLWithLang("https://www.google.com/maps/place/Test?authuser=0&hl=en&rclk=1", "en")

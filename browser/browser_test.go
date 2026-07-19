@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mxschmitt/playwright-go"
+	"github.com/gosom/google-maps-scraper-lite/gmaps"
 )
 
 // TestAcquirePageCancelledContextReturnsPromptly simulates a saturated pool
@@ -14,17 +14,17 @@ import (
 // cancelled context instead of blocking on the pool channel forever.
 func TestAcquirePageCancelledContextReturnsPromptly(t *testing.T) {
 	b := &Browser{
-		pages:   make(chan playwright.Page, 1),
+		pages:   make(chan gmaps.Page, 1),
 		created: 1,
 		max:     1,
-		uses:    make(map[playwright.Page]int),
+		uses:    make(map[gmaps.Page]int),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	type result struct {
-		page playwright.Page
+		page gmaps.Page
 		err  error
 	}
 	done := make(chan result, 1)

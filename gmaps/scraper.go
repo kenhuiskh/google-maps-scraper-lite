@@ -14,17 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mxschmitt/playwright-go"
 	"golang.org/x/sync/errgroup"
 )
 
 // ErrScrapeDeadline is returned when a single place scrape exceeds the
 // per-scrape watchdog deadline. The page has been closed to unblock the wedged
-// playwright call, so the same page object can never be retried.
+// underlying page-driver call, so the same page object can never be retried.
 var ErrScrapeDeadline = errors.New("scraper: scrape watchdog deadline exceeded")
 
 // scrapeDeadline is the default hard cap on a single place scrape.
-// playwright-go calls do not honor Go contexts, so without it a wedged call
+// Page-driver calls do not honor Go contexts, so without it a wedged call
 // blocks a worker forever.
 const scrapeDeadline = 4 * time.Minute
 
@@ -74,7 +73,8 @@ type Config struct {
 	StallTimeout      time.Duration // no-progress watchdog exit threshold; 0 = stallTimeout default
 	ExtractEmail      bool
 	ExtraReviews      int
-	Limit             int // max places to scrape; 0 = no limit
+	EnableHTTPFirst   bool // true = opt in to the HTTP-first place path; default is the browser
+	Limit             int  // max places to scrape; 0 = no limit
 	JobID             string
 	OutputMode        string // "database" or "file"; metadata for UI resume
 	JSONOut           bool
@@ -88,10 +88,10 @@ type Config struct {
 	MaxURLAttempts    int           // DB claims per queued URL before final failure; 0 = no cap
 }
 
-// PagePool provides playwright pages to workers.
+// PagePool provides browser pages to workers.
 type PagePool interface {
-	AcquirePage(ctx context.Context) (playwright.Page, error)
-	ReleasePage(playwright.Page)
+	AcquirePage(ctx context.Context) (Page, error)
+	ReleasePage(Page)
 }
 
 type PlaceResult struct {
@@ -144,9 +144,13 @@ type Scraper struct {
 	Config      Config
 	Pool        PagePool
 	Store       *JobStore
-	ScrapePlace func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error)
-	ScrapeFeed  func(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error)
-	OnJobReady  func(jobID string)
+	ScrapePlace func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error)
+	// ScrapePlaceHTTP fetches place details over HTTP without a browser page.
+	// It is tried first for each place when Config.EnableHTTPFirst is set (and
+	// the claim does not need ExtraReviews); ScrapePlace is the fallback.
+	ScrapePlaceHTTP func(ctx context.Context, placeURL string, opts PlaceOptions) (*Entry, error)
+	ScrapeFeed      func(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error)
+	OnJobReady      func(jobID string)
 }
 
 // Run scrapes all queries and sends results to out. Run closes out when done.
@@ -159,6 +163,10 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	scrapePlace := s.ScrapePlace
 	if scrapePlace == nil {
 		scrapePlace = ScrapePlace
+	}
+	scrapePlaceHTTP := s.ScrapePlaceHTTP
+	if scrapePlaceHTTP == nil {
+		scrapePlaceHTTP = ScrapePlaceHTTP
 	}
 
 	langs := normalizeLangs(s.Config.Lang)
@@ -251,25 +259,49 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					claimOpts.LangCode = langs[0]
 				}
 
-				// An acquire failure means the browser is dead: end the run so
-				// finishJob persists the job state instead of hanging workers.
-				page, err := s.Pool.AcquirePage(gctx)
-				if err != nil {
-					return err
-				}
-				entry, err := s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
-				for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
-					s.releaseScrapePage(page, err)
-					if err := sleepContext(gctx, time.Duration(retry*2)*time.Second); err != nil {
-						return err
+				var entry *Entry
+				usedHTTP := false
+				if s.Config.EnableHTTPFirst && claimOpts.ExtraReviews == 0 {
+					entry, err = scrapePlaceHTTP(gctx, claimed.URL, claimOpts)
+					if err == nil {
+						usedHTTP = true
 					}
-					page, err = s.Pool.AcquirePage(gctx)
-					if err != nil {
-						return err
+					// Any HTTP error (unavailable, bot-block, or otherwise) is not
+					// surfaced here — it always degrades to the browser path below,
+					// it never fails the URL by itself.
+				}
+				if !usedHTTP {
+					// An acquire failure means the browser is dead: end the run so
+					// finishJob persists the job state instead of hanging workers.
+					page, aerr := s.Pool.AcquirePage(gctx)
+					if aerr != nil {
+						return aerr
 					}
 					entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
+					for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
+						s.releaseScrapePage(page, err)
+						if serr := sleepContext(gctx, time.Duration(retry*2)*time.Second); serr != nil {
+							return serr
+						}
+						page, aerr = s.Pool.AcquirePage(gctx)
+						if aerr != nil {
+							return aerr
+						}
+						entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
+					}
+					s.releaseScrapePage(page, err)
 				}
-				s.releaseScrapePage(page, err)
+				if err == nil {
+					// Lightweight operator visibility into the HTTP-first split.
+					// IncrementJobStat's field whitelist doesn't cover
+					// http_scrapes/browser_scrapes, so this is a log line rather
+					// than a DB counter (see task-2 brief §4).
+					if usedHTTP {
+						log.Printf("scrape via http: %s", claimed.URL)
+					} else {
+						log.Printf("scrape via browser: %s", claimed.URL)
+					}
+				}
 				if err != nil {
 					// A handled failure still counts as pipeline progress.
 					inflight.clear(workerID)
@@ -393,11 +425,11 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 	return nil
 }
 
-// scrapeWithDeadline runs one place scrape under a hard watchdog. playwright-go
+// scrapeWithDeadline runs one place scrape under a hard watchdog. Page-driver
 // calls do not honor ctx, so on deadline (or cancellation) the page is closed to
 // force the wedged call inside the scrape to error out. The result channel is
 // buffered so the scrape goroutine can always deliver and never leaks.
-func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error), page playwright.Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error), page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
 	deadline := s.Config.ScrapeDeadline
 	if deadline <= 0 {
 		deadline = scrapeDeadline

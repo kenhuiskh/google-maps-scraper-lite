@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/mxschmitt/playwright-go"
 )
 
 // PlaceIDToURL converts a Google Maps place ID to a direct place detail URL.
@@ -24,16 +23,14 @@ func PlaceIDToURL(placeID string) string {
 // returns the canonical /maps/place/ URL once Google redirects to it. Unlike a
 // search-text query, the query_place_id parameter makes Google resolve the place
 // reliably, so this skips the feed-selector wait entirely.
-func scrapePlaceID(ctx context.Context, page playwright.Page, id string) ([]string, error) {
+func scrapePlaceID(ctx context.Context, page Page, id string) ([]string, error) {
 	target := PlaceIDToURL(id)
 
-	resp, err := page.Goto(target, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateCommit,
-	})
+	status, err := page.Goto(target)
 	if err != nil {
 		return nil, fmt.Errorf("goto place-ID URL: %w", err)
 	}
-	if berr := detectBotBlock(page, resp); berr != nil {
+	if berr := detectBotBlock(page, status); berr != nil {
 		return nil, berr
 	}
 
@@ -60,20 +57,25 @@ type FeedOptions struct {
 // ScrapeFeed navigates to the Google Maps search feed for query, scrolls it to
 // the configured depth, and returns a deduplicated slice of place URLs found in
 // the feed.
-func ScrapeFeed(ctx context.Context, page playwright.Page, query string, opts FeedOptions) ([]string, error) {
+func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) ([]string, error) {
 	if id, ok := strings.CutPrefix(query, "place_id:"); ok {
 		return scrapePlaceID(ctx, page, id)
 	}
 
+	feedStarted := time.Now()
+	defer func() {
+		logStageTiming("feed.total", feedStarted)
+	}()
+
 	fullURL := buildFeedURL(query, opts)
 
-	resp, err := page.Goto(fullURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateCommit,
-	})
+	stageStarted := time.Now()
+	status, err := page.Goto(fullURL)
+	logStageTiming("feed.goto", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("goto feed URL: %w", err)
 	}
-	if berr := detectBotBlock(page, resp); berr != nil {
+	if berr := detectBotBlock(page, status); berr != nil {
 		return nil, berr
 	}
 
@@ -83,10 +85,9 @@ func ScrapeFeed(ctx context.Context, page playwright.Page, query string, opts Fe
 	// Poll the URL for ~3 seconds to detect that case.
 	const feedSelector = `div[role='feed']`
 
-	_, waitErr := page.WaitForSelector(feedSelector, playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(10000),
-	})
-
+	stageStarted = time.Now()
+	waitErr := page.WaitSelector(feedSelector, 10*time.Second)
+	logStageTiming("feed.wait_selector", stageStarted)
 	var singlePlace bool
 
 	if waitErr != nil {
@@ -104,17 +105,24 @@ func ScrapeFeed(ctx context.Context, page playwright.Page, query string, opts Fe
 	}
 
 	// Scroll the feed.
-	if err := scrollFeed(ctx, page, opts.MaxDepth, feedSelector); err != nil {
-		return nil, fmt.Errorf("scroll feed: %w", err)
+	stageStarted = time.Now()
+	scrollErr := scrollFeed(ctx, page, opts.MaxDepth, feedSelector)
+	logStageTiming("feed.scroll", stageStarted)
+	if scrollErr != nil {
+		return nil, fmt.Errorf("scroll feed: %w", scrollErr)
 	}
 
 	// Parse the page HTML and extract place URLs.
+	stageStarted = time.Now()
 	content, err := page.Content()
+	logStageTiming("feed.page_content", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("get page content: %w", err)
 	}
 
+	stageStarted = time.Now()
 	urls, err := extractPlaceURLs(content)
+	logStageTiming("feed.extract_urls", stageStarted)
 	if err != nil {
 		return nil, fmt.Errorf("extract place URLs: %w", err)
 	}
@@ -144,7 +152,7 @@ func buildFeedURL(query string, opts FeedOptions) string {
 
 // clickRejectCookiesPlaywright runs the consent/cookie-rejection JavaScript.
 // Errors are intentionally ignored — the page may not have a cookie banner.
-func clickRejectCookiesPlaywright(page playwright.Page) {
+func clickRejectCookiesPlaywright(page Page) {
 	_, _ = page.Evaluate(`() => {
 		// Try consent form buttons first
 		const consentForm = document.querySelector('form[action*="consent.google"]');
@@ -170,7 +178,7 @@ func clickRejectCookiesPlaywright(page playwright.Page) {
 
 // waitUntilURLContainsPlaywright polls page.URL() until it contains s or the
 // deadline is reached.
-func waitUntilURLContainsPlaywright(ctx context.Context, page playwright.Page, s string, timeout time.Duration) bool {
+func waitUntilURLContainsPlaywright(ctx context.Context, page Page, s string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
@@ -191,7 +199,7 @@ func waitUntilURLContainsPlaywright(ctx context.Context, page playwright.Page, s
 }
 
 // scrollFeed scrolls the feed element repeatedly up to maxDepth times.
-func scrollFeed(ctx context.Context, page playwright.Page, maxDepth int, scrollSelector string) error {
+func scrollFeed(ctx context.Context, page Page, maxDepth int, scrollSelector string) error {
 	expr := `async () => {
 		const el = document.querySelector("` + scrollSelector + `");
 		el.scrollTop = el.scrollHeight;
@@ -248,7 +256,7 @@ func scrollFeed(ctx context.Context, page playwright.Page, maxDepth int, scrollS
 		default:
 		}
 
-		page.WaitForTimeout(waitTime)
+		page.Sleep(time.Duration(waitTime) * time.Millisecond)
 
 		waitTime *= 1.5
 		if waitTime > maxWait2 {

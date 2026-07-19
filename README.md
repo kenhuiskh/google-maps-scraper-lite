@@ -60,6 +60,20 @@ go run github.com/playwright-community/playwright-go/cmd/playwright install chro
 CGO_ENABLED=1 go build -o google-maps-scraper-lite .
 ```
 
+### Browser Engine (build tags)
+
+The browser engine is selected at compile time. The default binary uses Playwright; an
+alternate build uses go-rod to drive Chromium via CDP directly, with no Node/playwright
+driver required at runtime:
+
+```bash
+# Default (playwright) binary
+go build -o google-maps-scraper-lite .
+
+# go-rod binary (no Node/playwright driver at runtime)
+go build -tags gorod -o google-maps-scraper-lite.go-rod .
+```
+
 ## How It Works
 
 The scraper follows a **Feed → Place → Details** pipeline:
@@ -240,6 +254,7 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
 | `-geo` | string | `""` | Search center in `lat,lng,zoomz` format, e.g. `43.6532,-79.3832,17z`. |
 | `-radius` | float | `0` | Keep only results within this many meters of the `-geo` center. Requires `-geo`. |
 | `-headless` | bool | `true` | Run browser headless. |
+| `-http-first` | bool | `false` | Opt in to HTTP-first place scraping (faster, no browser page per place). **Returns a reduced field set** — no reviews, images, popular times, or full hours. The default browser path is full-fidelity; only enable this when speed matters more than completeness. Falls back to the browser automatically on failure, bot-block, or when `-reviews` requires deep review pagination. |
 | `-error-log` | string | `""` | Append application logs to a file as well as stderr. |
 | `-urls-only` | string | `""` | Debug: collect feed URLs only and write them to this file. No place scraping is performed. |
 

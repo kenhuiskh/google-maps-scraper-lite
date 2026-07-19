@@ -131,3 +131,4 @@ secrets.json
 
 geo/testdata/*
 gmaps/testdata/*
+!gmaps/testdata/place_rpc_*.json
