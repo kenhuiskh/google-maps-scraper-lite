@@ -1,6 +1,32 @@
 package browserrod
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/go-rod/rod/lib/proto"
+)
+
+func TestRodPageEvaluateTimesOutUnansweredCDPCall(t *testing.T) {
+	p := &rodPage{
+		callTimeout: 10 * time.Millisecond,
+		eval: func(ctx context.Context, _ string) (*proto.RuntimeRemoteObject, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	started := time.Now()
+	_, err := p.Evaluate(`() => 1`)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Evaluate error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Evaluate returned after %s, want bounded return", elapsed)
+	}
+}
 
 // TestRodPage_IsClosed_ReflectsCrashFlag proves the core of the fix: IsClosed
 // must report true once the crash-detection path (watchCrash's event handler

@@ -1,6 +1,7 @@
 package browserrod
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +14,12 @@ import (
 // navTimeout bounds navigation, matching the playwright engine's 60s navigation
 // timeout (browser.go configurePage SetDefaultNavigationTimeout).
 const navTimeout = 60 * time.Second
+
+// cdpCallTimeout bounds page operations that wait for a Chrome DevTools
+// Protocol response. Chromium can occasionally leave Runtime.callFunctionOn
+// unanswered while the websocket itself remains open; without a deadline an
+// Evaluate call then blocks the entire feed phase until the outer job timeout.
+const cdpCallTimeout = 30 * time.Second
 
 // rodPage adapts a *rod.Page to the engine-neutral gmaps.Page interface. All
 // rod-specific option structs live here so the gmaps package stays engine-neutral.
@@ -27,6 +34,11 @@ type rodPage struct {
 	router    *rod.HijackRouter // resource-blocking router; stopped on Close
 	closed    atomic.Bool
 	closeOnce sync.Once
+
+	// callTimeout and eval are test seams. Production pages use the defaults:
+	// cdpCallTimeout and (*rod.Page).Eval.
+	callTimeout time.Duration
+	eval        func(context.Context, string) (*proto.RuntimeRemoteObject, error)
 
 	// teardownRuns counts how many times the sync.Once closure inside Close
 	// actually executed its body (router.Stop + page.Close). It exists purely
@@ -118,7 +130,9 @@ func (p *rodPage) Reload() (int, error) {
 }
 
 func (p *rodPage) Content() (string, error) {
-	return p.page.HTML()
+	page := p.operationPage()
+	defer page.CancelTimeout()
+	return page.HTML()
 }
 
 // Evaluate runs a gmaps JS blob and returns its result decoded to native Go
@@ -136,7 +150,19 @@ func (p *rodPage) Content() (string, error) {
 // so the existing json.Marshal round-trips are unchanged.
 func (p *rodPage) Evaluate(js string) (any, error) {
 	wrapped := "() => { const __r = (" + js + "); return (typeof __r === 'function') ? __r() : __r; }"
-	obj, err := p.page.Eval(wrapped)
+	parent := context.Background()
+	if p.page != nil {
+		parent = p.page.GetContext()
+	}
+	ctx, cancel := context.WithTimeout(parent, p.operationTimeout())
+	defer cancel()
+	eval := p.eval
+	if eval == nil {
+		eval = func(ctx context.Context, js string) (*proto.RuntimeRemoteObject, error) {
+			return p.page.Context(ctx).Eval(js)
+		}
+	}
+	obj, err := eval(ctx, wrapped)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +170,17 @@ func (p *rodPage) Evaluate(js string) (any, error) {
 		return nil, nil
 	}
 	return obj.Value.Val(), nil
+}
+
+func (p *rodPage) operationPage() *rod.Page {
+	return p.page.Timeout(p.operationTimeout())
+}
+
+func (p *rodPage) operationTimeout() time.Duration {
+	if p.callTimeout > 0 {
+		return p.callTimeout
+	}
+	return cdpCallTimeout
 }
 
 // WaitSelector waits up to timeout for selector to be attached to the DOM. rod's
@@ -171,7 +208,9 @@ func (p *rodPage) ClickForce(selector string, waitTimeout, clickTimeout time.Dur
 }
 
 func (p *rodPage) URL() string {
-	info, err := p.page.Info()
+	page := p.operationPage()
+	defer page.CancelTimeout()
+	info, err := page.Info()
 	if err != nil {
 		return ""
 	}
