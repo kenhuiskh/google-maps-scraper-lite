@@ -1189,6 +1189,32 @@ func TestJobStoreResumesTimedOutDiscoveryFromStarting(t *testing.T) {
 	}
 }
 
+func TestJobStoreResumesInterruptedDiscoveryFromStarting(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, jobID, errors.New("process restarted; job interrupted")); err != nil {
+		t.Fatalf("recover interrupted discovery: %v", err)
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get recovered job: %v", err)
+	}
+	if job.Status != JobStatusFailed || job.Stats.Total != 0 {
+		t.Fatalf("recovered discovery = %s with %d URLs, want failed with no queued URLs", job.Status, job.Stats.Total)
+	}
+	job, err = store.ClaimResume(ctx, jobID)
+	if err != nil {
+		t.Fatalf("claim interrupted discovery resume: %v", err)
+	}
+	if job.Status != JobStatusStarting {
+		t.Fatalf("resumed discovery status = %q, want starting", job.Status)
+	}
+}
+
 func TestBatchDeleteJobsPartial(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)

@@ -101,6 +101,9 @@ CLAUDE.md
 .codex-go*
 .codex
 
+# Local consolidated project notes
+docs/
+
 # Skills
 .agents/
 

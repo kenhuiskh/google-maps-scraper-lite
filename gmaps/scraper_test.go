@@ -40,6 +40,43 @@ func (p *trackingFeedPagePool) AcquirePage(context.Context) (Page, error) { retu
 func (p *trackingFeedPagePool) ReleasePage(Page)                          { p.released++ }
 func (p *trackingFeedPagePool) RetirePage(Page)                           { p.retired++ }
 
+func TestEnsureJobRerunsInterruptedDiscoveryBeforeStartingWorkers(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, jobID, errors.New("process restarted; job interrupted")); err != nil {
+		t.Fatalf("recover interrupted discovery: %v", err)
+	}
+	if _, err := store.ClaimResume(ctx, jobID); err != nil {
+		t.Fatalf("claim resume: %v", err)
+	}
+
+	const placeURL = "https://www.google.com/maps/place/Coffee/data=!4m2!3m1!1s0x1:0x2"
+	var feedCalls int
+	s := Scraper{
+		Config: Config{JobID: jobID},
+		Pool:   fakePagePool{},
+		Store:  store,
+		ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+			feedCalls++
+			return []string{placeURL}, nil
+		},
+	}
+	if _, err := s.ensureJob(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, []string{"en"}); err != nil {
+		t.Fatalf("ensure job: %v", err)
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get resumed job: %v", err)
+	}
+	if feedCalls != 1 || job.Status != JobStatusRunning || job.Stats.Pending != 1 {
+		t.Fatalf("resumed discovery calls/status/pending = %d/%s/%d, want 1/running/1", feedCalls, job.Status, job.Stats.Pending)
+	}
+}
+
 func TestCollectPlaceURLsRetiresPageAfterFeedError(t *testing.T) {
 	pool := &trackingFeedPagePool{page: &reviewTagsTestPage{}}
 	s := Scraper{

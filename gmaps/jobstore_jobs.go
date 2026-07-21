@@ -549,7 +549,7 @@ func (s *JobStore) ClaimResume(ctx context.Context, jobID string) (*Job, error) 
 	now := time.Now().UTC()
 	row := s.db.QueryRowContext(ctx, `UPDATE jobs
 		SET status = CASE
-				WHEN last_error = ? AND NOT EXISTS (SELECT 1 FROM job_urls WHERE job_id = jobs.id) THEN ?
+				WHEN NOT EXISTS (SELECT 1 FROM job_urls WHERE job_id = jobs.id) THEN ?
 				ELSE ?
 			END,
 			pause_requested = 0,
@@ -559,7 +559,7 @@ func (s *JobStore) ClaimResume(ctx context.Context, jobID string) (*Job, error) 
 		RETURNING id, queries_json, config_json, status, pause_requested,
 			template_id, strategy_id, strategy_run_id,
 			created_at, started_at, updated_at, finished_at, last_error`,
-		JobTimeoutError, JobStatusStarting, JobStatusRunning, now, now, jobID, JobStatusStarting, JobStatusRunning, JobStatusDone)
+		JobStatusStarting, JobStatusRunning, now, now, jobID, JobStatusStarting, JobStatusRunning, JobStatusDone)
 	var j Job
 	var queriesJSON string
 	var pause int
