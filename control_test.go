@@ -1715,6 +1715,34 @@ func TestRunJobQueueOnceAutoResumesTimeoutPausedJob(t *testing.T) {
 	}
 }
 
+func TestRunJobQueueOnceAutoResumesTimedOutDiscovery(t *testing.T) {
+	oldDelay := timeoutAutoResumeDelay
+	timeoutAutoResumeDelay = func() time.Duration { return 0 }
+	t.Cleanup(func() { timeoutAutoResumeDelay = oldDelay })
+
+	store := newStartStore(t)
+	ctx := context.Background()
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, gmaps.Config{OutputMode: "file"})
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, jobID, errors.New(gmaps.JobTimeoutError)); err != nil {
+		t.Fatalf("recover timeout: %v", err)
+	}
+
+	var resumed string
+	resume := resumeLauncher(func(_ context.Context, id string) error {
+		resumed = id
+		return nil
+	})
+	if err := runJobQueueOnce(ctx, store, "gmdata/scraper-state.sqlite", resume, noopStartLauncher); err != nil {
+		t.Fatalf("run queue: %v", err)
+	}
+	if resumed != jobID {
+		t.Fatalf("resumed = %q, want %q", resumed, jobID)
+	}
+}
+
 func TestRunJobQueueOnceDoesNotAutoResumeManualPause(t *testing.T) {
 	oldDelay := timeoutAutoResumeDelay
 	timeoutAutoResumeDelay = func() time.Duration { return 0 }

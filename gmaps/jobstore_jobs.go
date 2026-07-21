@@ -217,7 +217,10 @@ func (s *JobStore) NextTimeoutPausedJob(ctx context.Context) (*Job, error) {
 		WHERE j.status = ?
 			AND j.last_error = ?
 			AND NOT EXISTS (SELECT 1 FROM jobs WHERE status IN (?, ?))
-			AND EXISTS (SELECT 1 FROM job_urls ju WHERE ju.job_id = j.id AND ju.status = ?)
+			AND (
+				EXISTS (SELECT 1 FROM job_urls ju WHERE ju.job_id = j.id AND ju.status = ?)
+				OR NOT EXISTS (SELECT 1 FROM job_urls ju WHERE ju.job_id = j.id)
+			)
 		ORDER BY j.updated_at ASC, j.created_at ASC
 		LIMIT 1`,
 		JobStatusPaused, JobTimeoutError, JobStatusStarting, JobStatusRunning, URLStatusPending).Scan(&id)
@@ -545,14 +548,18 @@ func (s *JobStore) StartJob(ctx context.Context, jobID string) error {
 func (s *JobStore) ClaimResume(ctx context.Context, jobID string) (*Job, error) {
 	now := time.Now().UTC()
 	row := s.db.QueryRowContext(ctx, `UPDATE jobs
-		SET status = ?, pause_requested = 0,
+		SET status = CASE
+				WHEN last_error = ? AND NOT EXISTS (SELECT 1 FROM job_urls WHERE job_id = jobs.id) THEN ?
+				ELSE ?
+			END,
+			pause_requested = 0,
 			started_at = COALESCE(started_at, ?), updated_at = ?,
 			finished_at = NULL, last_error = NULL
 		WHERE id = ? AND status NOT IN (?, ?, ?)
 		RETURNING id, queries_json, config_json, status, pause_requested,
 			template_id, strategy_id, strategy_run_id,
 			created_at, started_at, updated_at, finished_at, last_error`,
-		JobStatusRunning, now, now, jobID, JobStatusStarting, JobStatusRunning, JobStatusDone)
+		JobTimeoutError, JobStatusStarting, JobStatusRunning, now, now, jobID, JobStatusStarting, JobStatusRunning, JobStatusDone)
 	var j Job
 	var queriesJSON string
 	var pause int
@@ -609,8 +616,19 @@ func (s *JobStore) RecoverStaleActiveJob(ctx context.Context, jobID string, stal
 			if err := s.SetJobStatus(ctx, jobID, JobStatusPaused, staleErr); err != nil {
 				return err
 			}
-		} else if err := s.SetJobStatus(ctx, jobID, JobStatusFailed, staleErr); err != nil {
-			return err
+		} else {
+			// Discovery is deliberately persisted only after every feed has been
+			// collected. A wall-clock timeout during that phase therefore has no
+			// URLs to resume yet; preserve it as a paused job so ClaimResume can
+			// put it back in starting and rerun discovery. Other startup failures
+			// remain failed for operator attention.
+			status := JobStatusFailed
+			if staleErr != nil && staleErr.Error() == JobTimeoutError {
+				status = JobStatusPaused
+			}
+			if err := s.SetJobStatus(ctx, jobID, status, staleErr); err != nil {
+				return err
+			}
 		}
 	default:
 		return ErrJobNotStale

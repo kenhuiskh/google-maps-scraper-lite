@@ -1163,6 +1163,32 @@ func TestJobStoreClaimResumeRejectsStartingJob(t *testing.T) {
 	}
 }
 
+func TestJobStoreResumesTimedOutDiscoveryFromStarting(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+	if err := store.RecoverStaleActiveJob(ctx, jobID, errors.New(JobTimeoutError)); err != nil {
+		t.Fatalf("recover timed-out discovery: %v", err)
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get recovered job: %v", err)
+	}
+	if job.Status != JobStatusPaused || !job.LastError.Valid || job.LastError.String != JobTimeoutError {
+		t.Fatalf("recovered discovery = %s/%v, want paused timeout", job.Status, job.LastError)
+	}
+	job, err = store.ClaimResume(ctx, jobID)
+	if err != nil {
+		t.Fatalf("claim timed-out discovery resume: %v", err)
+	}
+	if job.Status != JobStatusStarting {
+		t.Fatalf("resumed discovery status = %q, want starting", job.Status)
+	}
+}
+
 func TestBatchDeleteJobsPartial(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
