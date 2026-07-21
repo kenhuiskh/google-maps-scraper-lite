@@ -808,7 +808,7 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 			return feedCollection{}, err
 		}
 		urls, err := scrapeFeed(ctx, page, q, feedOpts)
-		s.Pool.ReleasePage(page)
+		s.releaseFeedPage(page, err)
 		if err != nil {
 			if id, ok := strings.CutPrefix(q, "place_id:"); ok {
 				fallbackURL := PlaceIDToURL(id)

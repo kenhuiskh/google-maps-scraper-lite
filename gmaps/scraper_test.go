@@ -30,6 +30,33 @@ type fakePagePool struct{}
 func (fakePagePool) AcquirePage(ctx context.Context) (Page, error) { return nil, nil }
 func (fakePagePool) ReleasePage(page Page)                         {}
 
+type trackingFeedPagePool struct {
+	page     Page
+	released int
+	retired  int
+}
+
+func (p *trackingFeedPagePool) AcquirePage(context.Context) (Page, error) { return p.page, nil }
+func (p *trackingFeedPagePool) ReleasePage(Page)                          { p.released++ }
+func (p *trackingFeedPagePool) RetirePage(Page)                           { p.retired++ }
+
+func TestCollectPlaceURLsRetiresPageAfterFeedError(t *testing.T) {
+	pool := &trackingFeedPagePool{page: &reviewTagsTestPage{}}
+	s := Scraper{
+		Pool: pool,
+		ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+			return nil, context.DeadlineExceeded
+		},
+	}
+
+	if _, err := s.collectPlaceURLs(context.Background(), []string{"bars"}, FeedOptions{LangCode: "en"}, "", []string{"en"}); err != nil {
+		t.Fatalf("collectPlaceURLs: %v", err)
+	}
+	if pool.retired != 1 || pool.released != 0 {
+		t.Fatalf("pool retired/released = %d/%d, want 1/0", pool.retired, pool.released)
+	}
+}
+
 func TestCollectPlaceURLsResolvesPlaceIDsThroughFeed(t *testing.T) {
 	ctx := context.Background()
 	var gotQueries []string
