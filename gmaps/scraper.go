@@ -731,7 +731,18 @@ func (s *Scraper) ensureJob(ctx context.Context, queries []string, feedOpts Feed
 			return "", err
 		}
 		if job.Status == JobStatusStarting {
-			collected, err := s.collectPlaceURLs(ctx, queries, feedOpts, job.StrategyRunID.String, langs)
+			tracker := newFeedProgressTracker()
+			monitorDone := make(chan struct{})
+			monitorStopped := make(chan struct{})
+			go func() {
+				defer close(monitorStopped)
+				s.runFeedDiscoveryMonitor(ctx, monitorDone, s.Config.JobID, tracker)
+			}()
+
+			collected, err := s.collectPlaceURLs(withFeedProgress(ctx, tracker), queries, feedOpts, job.StrategyRunID.String, langs)
+			tracker.complete()
+			close(monitorDone)
+			<-monitorStopped
 			if err != nil {
 				return "", err
 			}
@@ -797,9 +808,17 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 
 	var feedURLs []string
 	total := len(queries)
+	tracker := feedProgressFromContext(ctx)
+	if tracker != nil {
+		defer tracker.complete()
+	}
 	for i, q := range queries {
+		if tracker != nil {
+			tracker.beginQuery(i+1, total, q)
+		}
 		log.Printf("Query %d/%d %q — starting", i+1, total, q)
 		start := time.Now()
+		reportFeedProgress(ctx, feedStageAcquirePage, 0)
 		page, err := s.Pool.AcquirePage(ctx)
 		if err != nil {
 			// The feed phase cannot proceed without a page; a dead browser
@@ -807,7 +826,13 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 			log.Printf("Query %d/%d %q — acquire page: %v", i+1, total, q, err)
 			return feedCollection{}, err
 		}
+		reportFeedProgress(ctx, feedStageScrapeFeed, 0)
 		urls, err := scrapeFeed(ctx, page, q, feedOpts)
+		if err != nil {
+			reportFeedProgress(ctx, feedStageRetirePage, 0)
+		} else {
+			reportFeedProgress(ctx, feedStageReleasePage, 0)
+		}
 		s.releaseFeedPage(page, err)
 		if err != nil {
 			if id, ok := strings.CutPrefix(q, "place_id:"); ok {
@@ -829,6 +854,7 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 		}
 		log.Printf("Query %d/%d %q — %d URLs found (%ds)", i+1, total, q, len(urls), int(time.Since(start).Seconds()))
 		feedURLs = append(feedURLs, urls...)
+		reportFeedProgress(ctx, feedStageComplete, 0)
 	}
 
 	feedURLsFound := len(feedURLs)

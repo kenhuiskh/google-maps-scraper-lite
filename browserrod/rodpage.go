@@ -39,6 +39,11 @@ type rodPage struct {
 	// cdpCallTimeout and (*rod.Page).Eval.
 	callTimeout time.Duration
 	eval        func(context.Context, string) (*proto.RuntimeRemoteObject, error)
+	// routerStop and pageClose are test seams for teardown calls that can wait
+	// on an unhealthy CDP connection. Production uses HijackRouter.Stop and a
+	// context-bound rod Page.Close.
+	routerStop func() error
+	pageClose  func(context.Context) error
 
 	// teardownRuns counts how many times the sync.Once closure inside Close
 	// actually executed its body (router.Stop + page.Close). It exists purely
@@ -234,13 +239,47 @@ func (p *rodPage) Sleep(d time.Duration) {
 func (p *rodPage) Close() error {
 	p.closeOnce.Do(func() {
 		p.closed.Store(true)
-		if p.router != nil {
-			_ = p.router.Stop()
+
+		// HijackRouter.Stop sends Fetch.disable using the page's original CDP
+		// context and has no timeout argument. Run it separately so a missing
+		// CDP response cannot trap the caller forever. The page close below uses
+		// the same total teardown deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), p.operationTimeout())
+		defer cancel()
+		stopRouter := p.routerStop
+		if stopRouter == nil && p.router != nil {
+			stopRouter = p.router.Stop
 		}
+		if stopRouter != nil {
+			stopped := make(chan struct{}, 1)
+			go func() {
+				_ = stopRouter()
+				stopped <- struct{}{}
+			}()
+			select {
+			case <-stopped:
+			case <-ctx.Done():
+			}
+		}
+
 		// page is nil only in unit tests that exercise Close's idempotency
 		// without a live browser; newPage always sets it in production.
-		if p.page != nil {
-			_ = p.page.Close()
+		closePage := p.pageClose
+		if closePage == nil && p.page != nil {
+			closePage = func(closeCtx context.Context) error {
+				return p.page.Context(closeCtx).Close()
+			}
+		}
+		if closePage != nil {
+			closed := make(chan struct{}, 1)
+			go func() {
+				_ = closePage(ctx)
+				closed <- struct{}{}
+			}()
+			select {
+			case <-closed:
+			case <-ctx.Done():
+			}
 		}
 		p.teardownRuns.Add(1)
 	})

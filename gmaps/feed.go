@@ -26,6 +26,7 @@ func PlaceIDToURL(placeID string) string {
 func scrapePlaceID(ctx context.Context, page Page, id string) ([]string, error) {
 	target := PlaceIDToURL(id)
 
+	reportFeedProgress(ctx, feedStageNavigate, 0)
 	status, err := page.Goto(target)
 	if err != nil {
 		return nil, fmt.Errorf("goto place-ID URL: %w", err)
@@ -34,8 +35,10 @@ func scrapePlaceID(ctx context.Context, page Page, id string) ([]string, error) 
 		return nil, berr
 	}
 
+	reportFeedProgress(ctx, feedStageConsent, 0)
 	clickRejectCookiesPlaywright(page)
 
+	reportFeedProgress(ctx, feedStageWaitFeed, 0)
 	if waitUntilURLContainsPlaywright(ctx, page, "/maps/place/", 15*time.Second) {
 		return []string{page.URL()}, nil
 	}
@@ -70,6 +73,7 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 	fullURL := buildFeedURL(query, opts)
 
 	stageStarted := time.Now()
+	reportFeedProgress(ctx, feedStageNavigate, 0)
 	status, err := page.Goto(fullURL)
 	logStageTiming("feed.goto", stageStarted)
 	if err != nil {
@@ -79,6 +83,7 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 		return nil, berr
 	}
 
+	reportFeedProgress(ctx, feedStageConsent, 0)
 	clickRejectCookiesPlaywright(page)
 
 	// When Google Maps finds only 1 result it redirects straight to the place page.
@@ -86,6 +91,7 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 	const feedSelector = `div[role='feed']`
 
 	stageStarted = time.Now()
+	reportFeedProgress(ctx, feedStageWaitFeed, 0)
 	waitErr := page.WaitSelector(feedSelector, 10*time.Second)
 	logStageTiming("feed.wait_selector", stageStarted)
 	var singlePlace bool
@@ -106,6 +112,7 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 
 	// Scroll the feed.
 	stageStarted = time.Now()
+	reportFeedProgress(ctx, feedStageScrollFeed, 0)
 	scrollErr := scrollFeed(ctx, page, opts.MaxDepth, feedSelector)
 	logStageTiming("feed.scroll", stageStarted)
 	if scrollErr != nil {
@@ -114,6 +121,7 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 
 	// Parse the page HTML and extract place URLs.
 	stageStarted = time.Now()
+	reportFeedProgress(ctx, feedStageReadContent, 0)
 	content, err := page.Content()
 	logStageTiming("feed.page_content", stageStarted)
 	if err != nil {
@@ -121,6 +129,7 @@ func ScrapeFeed(ctx context.Context, page Page, query string, opts FeedOptions) 
 	}
 
 	stageStarted = time.Now()
+	reportFeedProgress(ctx, feedStageExtractURLs, 0)
 	urls, err := extractPlaceURLs(content)
 	logStageTiming("feed.extract_urls", stageStarted)
 	if err != nil {
@@ -228,10 +237,12 @@ func scrollFeed(ctx context.Context, page Page, maxDepth int, scrollSelector str
 			waitTime2 = maxWait2
 		}
 
+		reportFeedProgress(ctx, feedStageScrollFeed, cnt)
 		result, err := page.Evaluate(fmt.Sprintf(expr, waitTime2))
 		if err != nil {
 			return fmt.Errorf("scroll evaluate (iter %d): %w", i, err)
 		}
+		reportFeedProgress(ctx, feedStageScrollFeed, cnt)
 
 		var height int
 

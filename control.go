@@ -706,8 +706,9 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 	// exec.CommandContext sends SIGKILL when the context expires, so a stuck
 	// subprocess (and the Chromium it owns) cannot linger past the timeout.
 	procCtx, cancel := context.WithCancel(context.Background())
-	if to := jobTimeout(); to > 0 {
-		procCtx, cancel = context.WithTimeout(context.Background(), to)
+	procTimeout := jobTimeout()
+	if procTimeout > 0 {
+		procCtx, cancel = context.WithTimeout(context.Background(), procTimeout)
 	}
 	cmd := exec.CommandContext(procCtx, exe, args...)
 	// Own process group so the whole group (Go subprocess + Chromium children)
@@ -742,7 +743,11 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 	}
 	pid := cmd.Process.Pid
 	pgid := processGroupID(pid)
-	log.Printf("started process: %s %s (pid %d pgid %d)", exe, strings.Join(args, " "), pid, pgid)
+	if procTimeout > 0 {
+		log.Printf("started process: %s %s (pid %d pgid %d job_timeout=%s)", exe, strings.Join(args, " "), pid, pgid, procTimeout)
+	} else {
+		log.Printf("started process: %s %s (pid %d pgid %d job_timeout=disabled)", exe, strings.Join(args, " "), pid, pgid)
+	}
 	if store != nil && jobID != "" {
 		if err := store.RecordJobProcess(context.Background(), jobID, pid, pgid); err != nil {
 			log.Printf("record job process %s: %v", jobID, err)
@@ -756,10 +761,11 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 			}
 		}()
 		stallExit := false
+		unexpectedExit := false
 		if err := cmd.Wait(); err != nil {
 			switch {
 			case procCtx.Err() == context.DeadlineExceeded:
-				log.Printf("process pid %d killed: exceeded job timeout; recovering job %s", pid, jobID)
+				log.Printf("process pid %d killed after %s: exceeded job timeout; recovering job %s", pid, procTimeout, jobID)
 				if store != nil && jobID != "" {
 					if err := store.RecoverStaleActiveJob(context.Background(), jobID, errors.New(gmaps.JobTimeoutError)); err != nil {
 						log.Printf("recover timed-out job %s: %v", jobID, err)
@@ -777,7 +783,20 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 					}
 				}
 			default:
+				unexpectedExit = true
 				log.Printf("process pid %d exited: %v", pid, err)
+			}
+		} else {
+			// The scraper currently reports Run failures through logs and then
+			// returns from main with exit code 0. If it exits before persisting a
+			// terminal job state, recover that stale starting/running row so it
+			// cannot block the queue forever.
+			unexpectedExit = true
+		}
+		if unexpectedExit && store != nil && jobID != "" {
+			exitErr := errors.New("scraper process exited before completing active job")
+			if err := store.RecoverStaleActiveJob(context.Background(), jobID, exitErr); err != nil && !errors.Is(err, gmaps.ErrJobNotStale) {
+				log.Printf("recover unexpectedly exited job %s: %v", jobID, err)
 			}
 		}
 		// Clean exit: belt-and-suspenders kill of any stragglers in our group,

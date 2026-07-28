@@ -104,3 +104,59 @@ func TestRodPage_Close_RunsTeardownEvenIfCrashFlaggedFirst(t *testing.T) {
 		t.Fatal("expected IsClosed() == true throughout")
 	}
 }
+
+func TestRodPageCloseBoundsBlockedRouterTeardown(t *testing.T) {
+	routerBlock := make(chan struct{})
+	t.Cleanup(func() { close(routerBlock) })
+	pageCloseCalled := make(chan struct{}, 1)
+	p := &rodPage{
+		callTimeout: 20 * time.Millisecond,
+		routerStop: func() error {
+			<-routerBlock
+			return nil
+		},
+		pageClose: func(ctx context.Context) error {
+			pageCloseCalled <- struct{}{}
+			return ctx.Err()
+		},
+	}
+
+	started := time.Now()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Close returned after %s, want bounded teardown", elapsed)
+	}
+	select {
+	case <-pageCloseCalled:
+	case <-time.After(time.Second):
+		t.Fatal("page close was not attempted after router teardown timed out")
+	}
+	if got := p.teardownRuns.Load(); got != 1 {
+		t.Fatalf("teardownRuns = %d, want 1", got)
+	}
+}
+
+func TestRodPageCloseBoundsBlockedPageTeardown(t *testing.T) {
+	pageBlock := make(chan struct{})
+	t.Cleanup(func() { close(pageBlock) })
+	p := &rodPage{
+		callTimeout: 20 * time.Millisecond,
+		pageClose: func(context.Context) error {
+			<-pageBlock
+			return nil
+		},
+	}
+
+	started := time.Now()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Close returned after %s, want bounded page teardown", elapsed)
+	}
+	if got := p.teardownRuns.Load(); got != 1 {
+		t.Fatalf("teardownRuns = %d, want 1", got)
+	}
+}
