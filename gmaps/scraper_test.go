@@ -40,6 +40,24 @@ func (p *trackingFeedPagePool) AcquirePage(context.Context) (Page, error) { retu
 func (p *trackingFeedPagePool) ReleasePage(Page)                          { p.released++ }
 func (p *trackingFeedPagePool) RetirePage(Page)                           { p.retired++ }
 
+type blockingRetireFeedPagePool struct {
+	page          Page
+	retireStarted chan struct{}
+	unblock       chan struct{}
+	startedOnce   sync.Once
+}
+
+func (p *blockingRetireFeedPagePool) AcquirePage(context.Context) (Page, error) {
+	return p.page, nil
+}
+
+func (p *blockingRetireFeedPagePool) ReleasePage(Page) {}
+
+func (p *blockingRetireFeedPagePool) RetirePage(Page) {
+	p.startedOnce.Do(func() { close(p.retireStarted) })
+	<-p.unblock
+}
+
 func TestEnsureJobRerunsInterruptedDiscoveryBeforeStartingWorkers(t *testing.T) {
 	ctx := context.Background()
 	store := newTestJobStore(t)
@@ -74,6 +92,200 @@ func TestEnsureJobRerunsInterruptedDiscoveryBeforeStartingWorkers(t *testing.T) 
 	}
 	if feedCalls != 1 || job.Status != JobStatusRunning || job.Stats.Pending != 1 {
 		t.Fatalf("resumed discovery calls/status/pending = %d/%s/%d, want 1/running/1", feedCalls, job.Status, job.Stats.Pending)
+	}
+}
+
+func TestFeedDiscoveryStallWatchdogPausesStartingJobAndExits(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+
+	block := make(chan struct{})
+	var unblock sync.Once
+	releaseBlock := func() { unblock.Do(func() { close(block) }) }
+	t.Cleanup(releaseBlock)
+
+	exitCode := make(chan int, 1)
+	previousExit := stallExit
+	stallExit = func(code int) { exitCode <- code }
+	t.Cleanup(func() { stallExit = previousExit })
+
+	s := Scraper{
+		Config: Config{
+			JobID:             jobID,
+			HeartbeatInterval: 20 * time.Millisecond,
+			StallTimeout:      100 * time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+			<-block // simulate an unanswered go-rod/CDP call during discovery
+			return nil, context.Canceled
+		},
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, runErr := s.ensureJob(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, []string{"en"})
+		runDone <- runErr
+	}()
+
+	select {
+	case code := <-exitCode:
+		if code != ExitCodeStallWatchdog {
+			t.Fatalf("exit code = %d, want %d", code, ExitCodeStallWatchdog)
+		}
+	case <-time.After(2 * time.Second):
+		releaseBlock()
+		<-runDone
+		t.Fatal("feed discovery stall did not request a watchdog exit")
+	}
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get stalled job: %v", err)
+	}
+	if job.Status != JobStatusPaused || !job.LastError.Valid {
+		t.Fatalf("stalled job = %s/%v, want paused with diagnostic", job.Status, job.LastError)
+	}
+	for _, want := range []string{"feed discovery stall", "coffee", "scrape_feed"} {
+		if !strings.Contains(job.LastError.String, want) {
+			t.Fatalf("last error %q does not contain %q", job.LastError.String, want)
+		}
+	}
+
+	releaseBlock()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("ensureJob did not return after blocked feed was released")
+	}
+}
+
+func TestFeedDiscoveryStallWatchdogIdentifiesBlockedPageRetirement(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+
+	pool := &blockingRetireFeedPagePool{
+		page:          &reviewTagsTestPage{},
+		retireStarted: make(chan struct{}),
+		unblock:       make(chan struct{}),
+	}
+	var unblock sync.Once
+	releaseRetirement := func() { unblock.Do(func() { close(pool.unblock) }) }
+	t.Cleanup(releaseRetirement)
+
+	exitCode := make(chan int, 1)
+	previousExit := stallExit
+	stallExit = func(code int) { exitCode <- code }
+	t.Cleanup(func() { stallExit = previousExit })
+
+	s := Scraper{
+		Config: Config{
+			JobID:             jobID,
+			HeartbeatInterval: 20 * time.Millisecond,
+			StallTimeout:      100 * time.Millisecond,
+		},
+		Pool:  pool,
+		Store: store,
+		ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+			return nil, context.DeadlineExceeded
+		},
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, runErr := s.ensureJob(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, []string{"en"})
+		runDone <- runErr
+	}()
+
+	select {
+	case <-pool.retireStarted:
+	case <-time.After(time.Second):
+		t.Fatal("feed page retirement did not start")
+	}
+	select {
+	case code := <-exitCode:
+		if code != ExitCodeStallWatchdog {
+			t.Fatalf("exit code = %d, want %d", code, ExitCodeStallWatchdog)
+		}
+	case <-time.After(2 * time.Second):
+		releaseRetirement()
+		<-runDone
+		t.Fatal("blocked feed page retirement did not request a watchdog exit")
+	}
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get stalled job: %v", err)
+	}
+	if job.Status != JobStatusPaused || !job.LastError.Valid || !strings.Contains(job.LastError.String, feedStageRetirePage) {
+		t.Fatalf("stalled job = %s/%q, want paused diagnostic naming %s", job.Status, job.LastError.String, feedStageRetirePage)
+	}
+
+	releaseRetirement()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("ensureJob did not return after page retirement was released")
+	}
+}
+
+func TestFeedDiscoveryStallWatchdogAllowsLongDiscoveryWithProgress(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, nil)
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+
+	exitCode := make(chan int, 1)
+	previousExit := stallExit
+	stallExit = func(code int) { exitCode <- code }
+	t.Cleanup(func() { stallExit = previousExit })
+
+	const placeURL = "https://www.google.com/maps/place/Coffee/data=!4m2!3m1!1s0x1:0x2"
+	s := Scraper{
+		Config: Config{
+			JobID:             jobID,
+			HeartbeatInterval: 20 * time.Millisecond,
+			StallTimeout:      180 * time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapeFeed: func(feedCtx context.Context, _ Page, _ string, _ FeedOptions) ([]string, error) {
+			// Total discovery time exceeds StallTimeout, but each update proves
+			// that the feed is still advancing.
+			for i := 1; i <= 6; i++ {
+				time.Sleep(60 * time.Millisecond)
+				reportFeedProgress(feedCtx, feedStageScrollFeed, i)
+			}
+			return []string{placeURL}, nil
+		},
+	}
+
+	if _, err := s.ensureJob(ctx, []string{"coffee"}, FeedOptions{LangCode: "en"}, []string{"en"}); err != nil {
+		t.Fatalf("ensure job: %v", err)
+	}
+	select {
+	case code := <-exitCode:
+		t.Fatalf("healthy progressing discovery requested exit code %d", code)
+	default:
+	}
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.Status != JobStatusRunning || job.Stats.Pending != 1 {
+		t.Fatalf("healthy discovery job = %s pending=%d, want running/1", job.Status, job.Stats.Pending)
 	}
 }
 

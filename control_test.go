@@ -2032,6 +2032,85 @@ func TestSpawnProcessTimeoutRecoversJob(t *testing.T) {
 	t.Fatalf("timed-out process did not recover job; last state: %s", last)
 }
 
+func TestSpawnProcessTimeoutRecoversStartingDiscoveryJob(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh is required for subprocess timeout test")
+	}
+	t.Setenv("SCRAPER_JOB_TIMEOUT", "100ms")
+
+	ctx := context.Background()
+	store := newStartStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, gmaps.Config{OutputMode: "file"})
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+
+	if err := spawnProcess(store, jobID, "/bin/sh", []string{"-c", "sleep 2"}, filepath.Join(t.TempDir(), "job.log"), nil); err != nil {
+		t.Fatalf("spawn process: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var recovered *gmaps.Job
+	for time.Now().Before(deadline) {
+		job, jobErr := store.GetJob(ctx, jobID)
+		procs, procsErr := store.ListJobProcesses(ctx)
+		if jobErr == nil && procsErr == nil && job.Status == gmaps.JobStatusPaused &&
+			job.LastError.Valid && job.LastError.String == gmaps.JobTimeoutError && len(procs) == 0 {
+			recovered = job
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if recovered == nil {
+		job, _ := store.GetJob(ctx, jobID)
+		t.Fatalf("timed-out discovery job = status %s error %q, want paused/%q", job.Status, job.LastError.String, gmaps.JobTimeoutError)
+	}
+
+	// The frontend does not create this wording itself: it renders the exact
+	// last_error persisted by timeout recovery.
+	mux := http.NewServeMux()
+	registerControlHandlers(mux, store, "gmdata/scraper-state.sqlite", nil, noopStartLauncher)
+	req := httptest.NewRequest(http.MethodGet, "/ui/jobs", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("jobs partial status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), gmaps.JobTimeoutError) {
+		t.Fatalf("jobs partial does not display timeout error %q", gmaps.JobTimeoutError)
+	}
+}
+
+func TestSpawnProcessCleanExitRecoversActiveStartingJob(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh is required for subprocess exit test")
+	}
+
+	ctx := context.Background()
+	store := newStartStore(t)
+	jobID, err := store.CreateStartingJob(ctx, []string{"coffee"}, gmaps.Config{OutputMode: "file"})
+	if err != nil {
+		t.Fatalf("create starting job: %v", err)
+	}
+
+	if err := spawnProcess(store, jobID, "/bin/sh", []string{"-c", "exit 0"}, filepath.Join(t.TempDir(), "job.log"), nil); err != nil {
+		t.Fatalf("spawn process: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		job, jobErr := store.GetJob(ctx, jobID)
+		procs, procsErr := store.ListJobProcesses(ctx)
+		if jobErr == nil && procsErr == nil && job.Status == gmaps.JobStatusFailed &&
+			job.LastError.Valid && strings.Contains(job.LastError.String, "process exited before completing") && len(procs) == 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	job, _ := store.GetJob(ctx, jobID)
+	t.Fatalf("cleanly exited child left job = status %s error %q; active starting jobs must be recovered", job.Status, job.LastError.String)
+}
+
 func TestAllowStallAutoResumeCap(t *testing.T) {
 	jobID := "cap-" + t.Name()
 	for i := 0; i < maxStallAutoResumes; i++ {
