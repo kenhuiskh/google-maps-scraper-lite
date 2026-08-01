@@ -136,6 +136,11 @@ func (s *JobStore) migrate(ctx context.Context) error {
 			scrape_errors INTEGER NOT NULL DEFAULT 0,
 			write_errors INTEGER NOT NULL DEFAULT 0,
 			retry_events INTEGER NOT NULL DEFAULT 0,
+			watchdog_timeouts INTEGER NOT NULL DEFAULT 0,
+			bot_block_events INTEGER NOT NULL DEFAULT 0,
+			navigation_cdp_errors INTEGER NOT NULL DEFAULT 0,
+			page_crash_events INTEGER NOT NULL DEFAULT 0,
+			stall_restarts INTEGER NOT NULL DEFAULT 0,
 			updated_at DATETIME NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS job_processes (
@@ -153,6 +158,17 @@ func (s *JobStore) migrate(ctx context.Context) error {
 	}
 	if err := s.ensureColumn(ctx, "job_execution_stats", "cross_job_duplicate_urls", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
+	}
+	for _, column := range []string{
+		"watchdog_timeouts",
+		"bot_block_events",
+		"navigation_cdp_errors",
+		"page_crash_events",
+		"stall_restarts",
+	} {
+		if err := s.ensureColumn(ctx, "job_execution_stats", column, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
 	}
 	if err := s.migrateJobURLsLang(ctx); err != nil {
 		return err

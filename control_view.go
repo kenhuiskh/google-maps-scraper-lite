@@ -75,62 +75,72 @@ type jobsFilterOption struct {
 }
 
 type jobView struct {
-	ID                 string
-	DisplayTitle       string
-	QueriesPreview     string
-	CreatedAt          string
-	UpdatedAt          string
-	StatusLabel        string
-	StatusClass        string
-	StatusHelp         string
-	Progress           string
-	ProgressPercent    int
-	Total              int
-	Pending            int
-	InProgress         int
-	Done               int
-	Failed             int
-	LastError          string
-	ActionLabel        string
-	ActionPath         string
-	ActionDisabled     bool
-	ActionClass        string
-	ActionHelp         string
-	RecoverPath        string
-	RecoverDisabled    bool
-	RecoverHelp        string
-	DeletePath         string
-	DeleteHelp         string
-	RawStatus          string
-	PauseRequested     bool
-	OutputMode         string
-	Lang               string
-	Active             bool
-	Blocked            bool
-	TemplateID         string
-	StrategyID         string
-	StrategyRunID      string
-	FeedURLsFound      int
-	FeedDuplicates     int
-	CrossJobDuplicates int
-	QueuedURLs         int
-	ScrapedURLs        int
-	DuplicatePlaces    int
-	ScrapeErrors       int
-	WriteErrors        int
-	RetryEvents        int
+	ID                  string
+	DisplayTitle        string
+	QueriesPreview      string
+	CreatedAt           string
+	UpdatedAt           string
+	StatusLabel         string
+	StatusClass         string
+	StatusHelp          string
+	Progress            string
+	ProgressPercent     int
+	Total               int
+	Pending             int
+	InProgress          int
+	Done                int
+	Failed              int
+	LastError           string
+	ActionLabel         string
+	ActionPath          string
+	ActionDisabled      bool
+	ActionClass         string
+	ActionHelp          string
+	RecoverPath         string
+	RecoverDisabled     bool
+	RecoverHelp         string
+	DeletePath          string
+	DeleteHelp          string
+	RawStatus           string
+	PauseRequested      bool
+	OutputMode          string
+	Lang                string
+	Active              bool
+	Blocked             bool
+	TemplateID          string
+	StrategyID          string
+	StrategyRunID       string
+	FeedURLsFound       int
+	FeedDuplicates      int
+	CrossJobDuplicates  int
+	QueuedURLs          int
+	ScrapedURLs         int
+	DuplicatePlaces     int
+	ScrapeErrors        int
+	WriteErrors         int
+	RetryEvents         int
+	WatchdogTimeouts    int
+	BotBlockEvents      int
+	NavigationCDPErrors int
+	PageCrashEvents     int
+	StallRestarts       int
 }
 
 type analyticsView struct {
-	FeedURLsFound      int
-	FeedDuplicates     int
-	CrossJobDuplicates int
-	QueuedURLs         int
-	ScrapedURLs        int
-	DuplicatePlaces    int
-	ScrapeErrors       int
-	WriteErrors        int
-	RetryEvents        int
+	FeedURLsFound       int
+	FeedDuplicates      int
+	CrossJobDuplicates  int
+	QueuedURLs          int
+	ScrapedURLs         int
+	DuplicatePlaces     int
+	ScrapeErrors        int
+	WriteErrors         int
+	RetryEvents         int
+	WatchdogTimeouts    int
+	BotBlockEvents      int
+	NavigationCDPErrors int
+	PageCrashEvents     int
+	StallRestarts       int
 }
 
 type controlSummaryView struct {
@@ -303,39 +313,44 @@ func newJobViewWithQueueState(job gmaps.Job, hasActiveJob bool) jobView {
 		percent = int(float64(job.Stats.Done) / float64(job.Stats.Total) * 100)
 	}
 	view := jobView{
-		ID:                 job.ID,
-		DisplayTitle:       jobDisplayTitle(job),
-		QueriesPreview:     formatQueriesPreview(job.Queries),
-		CreatedAt:          formatControlTime(job.CreatedAt),
-		UpdatedAt:          formatControlTime(job.UpdatedAt),
-		StatusLabel:        label,
-		StatusClass:        class,
-		StatusHelp:         help,
-		Progress:           formatJobProgress(job.Stats),
-		ProgressPercent:    percent,
-		Total:              job.Stats.Total,
-		Pending:            job.Stats.Pending,
-		InProgress:         job.Stats.InProgress,
-		Done:               job.Stats.Done,
-		Failed:             job.Stats.Failed,
-		RawStatus:          job.Status,
-		PauseRequested:     job.PauseRequested,
-		OutputMode:         cfg.OutputMode,
-		Lang:               cfg.Lang,
-		Active:             job.Status == gmaps.JobStatusStarting || job.Status == gmaps.JobStatusRunning,
-		Blocked:            job.Status == gmaps.JobStatusBlocked || job.Status == gmaps.JobStatusFailed,
-		TemplateID:         job.TemplateID.String,
-		StrategyID:         job.StrategyID.String,
-		StrategyRunID:      job.StrategyRunID.String,
-		FeedURLsFound:      job.ExecutionStats.FeedURLsFound,
-		FeedDuplicates:     job.ExecutionStats.FeedDuplicateURLs,
-		CrossJobDuplicates: job.ExecutionStats.CrossJobDuplicateURLs,
-		QueuedURLs:         job.ExecutionStats.QueuedURLs,
-		ScrapedURLs:        job.ExecutionStats.ScrapedURLs,
-		DuplicatePlaces:    job.ExecutionStats.DuplicatePlaces,
-		ScrapeErrors:       job.ExecutionStats.ScrapeErrors,
-		WriteErrors:        job.ExecutionStats.WriteErrors,
-		RetryEvents:        job.ExecutionStats.RetryEvents,
+		ID:                  job.ID,
+		DisplayTitle:        jobDisplayTitle(job),
+		QueriesPreview:      formatQueriesPreview(job.Queries),
+		CreatedAt:           formatControlTime(job.CreatedAt),
+		UpdatedAt:           formatControlTime(job.UpdatedAt),
+		StatusLabel:         label,
+		StatusClass:         class,
+		StatusHelp:          help,
+		Progress:            formatJobProgress(job.Stats),
+		ProgressPercent:     percent,
+		Total:               job.Stats.Total,
+		Pending:             job.Stats.Pending,
+		InProgress:          job.Stats.InProgress,
+		Done:                job.Stats.Done,
+		Failed:              job.Stats.Failed,
+		RawStatus:           job.Status,
+		PauseRequested:      job.PauseRequested,
+		OutputMode:          cfg.OutputMode,
+		Lang:                cfg.Lang,
+		Active:              job.Status == gmaps.JobStatusStarting || job.Status == gmaps.JobStatusRunning,
+		Blocked:             job.Status == gmaps.JobStatusBlocked || job.Status == gmaps.JobStatusFailed,
+		TemplateID:          job.TemplateID.String,
+		StrategyID:          job.StrategyID.String,
+		StrategyRunID:       job.StrategyRunID.String,
+		FeedURLsFound:       job.ExecutionStats.FeedURLsFound,
+		FeedDuplicates:      job.ExecutionStats.FeedDuplicateURLs,
+		CrossJobDuplicates:  job.ExecutionStats.CrossJobDuplicateURLs,
+		QueuedURLs:          job.ExecutionStats.QueuedURLs,
+		ScrapedURLs:         job.ExecutionStats.ScrapedURLs,
+		DuplicatePlaces:     job.ExecutionStats.DuplicatePlaces,
+		ScrapeErrors:        job.ExecutionStats.ScrapeErrors,
+		WriteErrors:         job.ExecutionStats.WriteErrors,
+		RetryEvents:         job.ExecutionStats.RetryEvents,
+		WatchdogTimeouts:    job.ExecutionStats.WatchdogTimeouts,
+		BotBlockEvents:      job.ExecutionStats.BotBlockEvents,
+		NavigationCDPErrors: job.ExecutionStats.NavigationCDPErrors,
+		PageCrashEvents:     job.ExecutionStats.PageCrashEvents,
+		StallRestarts:       job.ExecutionStats.StallRestarts,
 	}
 	view.ActionLabel, view.ActionPath, view.ActionDisabled, view.ActionClass, view.ActionHelp = jobLifecycleAction(job, hasActiveJob)
 	if job.LastError.Valid {
@@ -429,6 +444,11 @@ func newAnalyticsView(jobs []gmaps.Job) analyticsView {
 		view.ScrapeErrors += job.ExecutionStats.ScrapeErrors
 		view.WriteErrors += job.ExecutionStats.WriteErrors
 		view.RetryEvents += job.ExecutionStats.RetryEvents
+		view.WatchdogTimeouts += job.ExecutionStats.WatchdogTimeouts
+		view.BotBlockEvents += job.ExecutionStats.BotBlockEvents
+		view.NavigationCDPErrors += job.ExecutionStats.NavigationCDPErrors
+		view.PageCrashEvents += job.ExecutionStats.PageCrashEvents
+		view.StallRestarts += job.ExecutionStats.StallRestarts
 	}
 	return view
 }

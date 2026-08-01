@@ -34,6 +34,8 @@ type rodPage struct {
 	router    *rod.HijackRouter // resource-blocking router; stopped on Close
 	closed    atomic.Bool
 	closeOnce sync.Once
+	diagOnce  sync.Once
+	diag      *gmaps.PageDiagnosticsState
 
 	// callTimeout and eval are test seams. Production pages use the defaults:
 	// cdpCallTimeout and (*rod.Page).Eval.
@@ -72,12 +74,22 @@ type rodPage struct {
 func (p *rodPage) watchCrash() {
 	p.page.EachEvent(func(*proto.InspectorTargetCrashed) bool {
 		p.closed.Store(true)
+		p.diagnosticState().MarkCrashed()
 		return true
 	})()
 }
 
 // gmaps.Page compile-time assertion.
 var _ gmaps.Page = (*rodPage)(nil)
+
+func (p *rodPage) diagnosticState() *gmaps.PageDiagnosticsState {
+	p.diagOnce.Do(func() {
+		if p.diag == nil {
+			p.diag = gmaps.NewPageDiagnosticsState("go-rod")
+		}
+	})
+	return p.diag
+}
 
 // Goto navigates to u and returns the main-document HTTP status. rod's Navigate
 // returns as soon as the navigation is *initiated* (not committed), so unlike
@@ -87,7 +99,9 @@ var _ gmaps.Page = (*rodPage)(nil)
 // the loop once the frame commits. Because a single goroutine drains events in
 // order, the Document response is always recorded before the frame-navigated
 // event ends the wait — no cross-goroutine race on the status.
-func (p *rodPage) Goto(u string) (int, error) {
+func (p *rodPage) Goto(u string) (statusResult int, errResult error) {
+	done := p.diagnosticState().BeginOperation("goto", u)
+	defer func() { done(statusResult, errResult) }()
 	var status int32
 	page := p.page.Timeout(navTimeout)
 	frameID := page.FrameID
@@ -111,7 +125,9 @@ func (p *rodPage) Goto(u string) (int, error) {
 // Reload reloads the current page and returns the main-document status, using
 // the same ordered-event capture as Goto so the Document response status is
 // recorded before the wait ends.
-func (p *rodPage) Reload() (int, error) {
+func (p *rodPage) Reload() (statusResult int, errResult error) {
+	done := p.diagnosticState().BeginOperation("reload", "")
+	defer func() { done(statusResult, errResult) }()
 	var status int32
 	page := p.page.Timeout(navTimeout)
 	frameID := page.FrameID
@@ -134,7 +150,9 @@ func (p *rodPage) Reload() (int, error) {
 	return int(atomic.LoadInt32(&status)), nil
 }
 
-func (p *rodPage) Content() (string, error) {
+func (p *rodPage) Content() (content string, err error) {
+	done := p.diagnosticState().BeginOperation("content", "")
+	defer func() { done(0, err) }()
 	page := p.operationPage()
 	defer page.CancelTimeout()
 	return page.HTML()
@@ -153,7 +171,9 @@ func (p *rodPage) Content() (string, error) {
 // and gson decodes to string / float64 / bool / []interface{} /
 // map[string]interface{} / nil — the same shapes the playwright engine yields,
 // so the existing json.Marshal round-trips are unchanged.
-func (p *rodPage) Evaluate(js string) (any, error) {
+func (p *rodPage) Evaluate(js string) (result any, err error) {
+	done := p.diagnosticState().BeginOperation("evaluate", "")
+	defer func() { done(0, err) }()
 	wrapped := "() => { const __r = (" + js + "); return (typeof __r === 'function') ? __r() : __r; }"
 	parent := context.Background()
 	if p.page != nil {
@@ -191,8 +211,10 @@ func (p *rodPage) operationTimeout() time.Duration {
 // WaitSelector waits up to timeout for selector to be attached to the DOM. rod's
 // Element waits for the node to exist/attach, matching the playwright adapter's
 // Attached (not Visible) semantics.
-func (p *rodPage) WaitSelector(selector string, timeout time.Duration) error {
-	_, err := p.page.Timeout(timeout).Element(selector)
+func (p *rodPage) WaitSelector(selector string, timeout time.Duration) (err error) {
+	done := p.diagnosticState().BeginOperation("wait_selector", "")
+	defer func() { done(0, err) }()
+	_, err = p.page.Timeout(timeout).Element(selector)
 	return err
 }
 
@@ -202,7 +224,9 @@ func (p *rodPage) WaitSelector(selector string, timeout time.Duration) error {
 // residual non-interactable error is returned and the call sites already treat
 // every error as "skip this selector", so behavior stays equivalent to the
 // playwright Force click for the review/hours expansion selectors.
-func (p *rodPage) ClickForce(selector string, waitTimeout, clickTimeout time.Duration) error {
+func (p *rodPage) ClickForce(selector string, waitTimeout, clickTimeout time.Duration) (err error) {
+	done := p.diagnosticState().BeginOperation("click", "")
+	defer func() { done(0, err) }()
 	el, err := p.page.Timeout(waitTimeout).Element(selector)
 	if err != nil {
 		return err
@@ -213,12 +237,15 @@ func (p *rodPage) ClickForce(selector string, waitTimeout, clickTimeout time.Dur
 }
 
 func (p *rodPage) URL() string {
+	done := p.diagnosticState().BeginOperation("url", "")
 	page := p.operationPage()
 	defer page.CancelTimeout()
 	info, err := page.Info()
 	if err != nil {
+		done(0, err)
 		return ""
 	}
+	done(0, nil)
 	return info.URL
 }
 
@@ -237,6 +264,11 @@ func (p *rodPage) Sleep(d time.Duration) {
 // Page.Close waits for a TargetTargetDestroyed that already fired), and no
 // caller in this codebase inspects Close's return value.
 func (p *rodPage) Close() error {
+	done := p.diagnosticState().BeginOperation("close", "")
+	defer func() {
+		done(0, nil)
+		p.diagnosticState().MarkClosed()
+	}()
 	p.closeOnce.Do(func() {
 		p.closed.Store(true)
 
@@ -301,3 +333,14 @@ func (p *rodPage) IsClosed() bool {
 	}
 	return p.page.GetContext().Err() != nil
 }
+
+func (p *rodPage) DiagnosticSnapshot() gmaps.PageDiagnosticSnapshot {
+	return p.diagnosticState().Snapshot(p.IsClosed())
+}
+
+func (p *rodPage) ObservePageDiagnostics(class string, contentBytes int, title string) {
+	p.diagnosticState().ObservePage(class, contentBytes, title)
+}
+
+var _ gmaps.PageDiagnosticSource = (*rodPage)(nil)
+var _ gmaps.PageDiagnosticObserver = (*rodPage)(nil)

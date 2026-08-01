@@ -34,14 +34,20 @@ var defaultUserAgents = []string{
 
 // Browser manages the playwright browser instance and a pool of pages.
 type Browser struct {
-	pw      *playwright.Playwright
-	browser playwright.Browser
-	context playwright.BrowserContext
-	pages   chan gmaps.Page
-	mu      sync.Mutex
-	created int
-	max     int
-	uses    map[gmaps.Page]int // scrapes served per page; guarded by mu
+	pw       *playwright.Playwright
+	browser  playwright.Browser
+	context  playwright.BrowserContext
+	pages    chan gmaps.Page
+	mu       sync.Mutex
+	created  int
+	max      int
+	uses     map[gmaps.Page]int // scrapes served per page; guarded by mu
+	creating int
+	createAt time.Time
+
+	retirements         int64
+	replacements        int64
+	replacementFailures int64
 }
 
 // Options configures the browser.
@@ -124,19 +130,49 @@ func New(opts Options) (*Browser, error) {
 		opts.Concurrency = 1
 	}
 
-	pool := make(chan gmaps.Page, opts.Concurrency)
-	page, err := ctx.NewPage()
+	b := &Browser{
+		pw:      pw,
+		browser: br,
+		context: ctx,
+		pages:   make(chan gmaps.Page, opts.Concurrency),
+		max:     opts.Concurrency,
+		uses:    make(map[gmaps.Page]int),
+	}
+	page, err := b.newPage()
 	if err != nil {
 		_ = ctx.Close()
 		_ = br.Close()
 		_ = pw.Stop()
 		return nil, fmt.Errorf("new page: %w", err)
 	}
-	configurePage(page)
-	var gp gmaps.Page = &pwPage{page: page}
-	pool <- gp
+	b.pages <- page
+	b.created = 1
 
-	return &Browser{pw: pw, browser: br, context: ctx, pages: pool, created: 1, max: opts.Concurrency, uses: make(map[gmaps.Page]int)}, nil
+	return b, nil
+}
+
+func (b *Browser) newPage() (gmaps.Page, error) {
+	b.mu.Lock()
+	b.creating++
+	if b.creating == 1 {
+		b.createAt = time.Now()
+	}
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		b.creating--
+		if b.creating == 0 {
+			b.createAt = time.Time{}
+		}
+		b.mu.Unlock()
+	}()
+
+	page, err := b.context.NewPage()
+	if err != nil {
+		return nil, err
+	}
+	configurePage(page)
+	return newPWPage(page), nil
 }
 
 // configurePage sets default timeouts so playwright operations error out
@@ -188,15 +224,14 @@ func (b *Browser) AcquirePage(ctx context.Context) (gmaps.Page, error) {
 	if b.created < b.max {
 		b.created++
 		b.mu.Unlock()
-		page, err := b.context.NewPage()
+		page, err := b.newPage()
 		if err != nil {
 			b.mu.Lock()
 			b.created--
 			b.mu.Unlock()
 			return nil, fmt.Errorf("acquire page: %w", err)
 		}
-		configurePage(page)
-		return &pwPage{page: page}, nil
+		return page, nil
 	}
 	b.mu.Unlock()
 
@@ -222,6 +257,7 @@ func (b *Browser) AcquirePage(ctx context.Context) (gmaps.Page, error) {
 // slot is released so a replacement can be created lazily.
 func (b *Browser) discardPage(page gmaps.Page) {
 	b.mu.Lock()
+	b.retirements++
 	delete(b.uses, page)
 	if b.created > 0 {
 		b.created--
@@ -235,6 +271,7 @@ func (b *Browser) discardPage(page gmaps.Page) {
 func (b *Browser) ReleasePage(page gmaps.Page) {
 	if page.IsClosed() {
 		b.mu.Lock()
+		b.retirements++
 		delete(b.uses, page)
 		b.mu.Unlock()
 		b.replenish()
@@ -250,6 +287,9 @@ func (b *Browser) ReleasePage(page gmaps.Page) {
 	b.mu.Unlock()
 
 	if worn {
+		b.mu.Lock()
+		b.retirements++
+		b.mu.Unlock()
 		_ = page.Close()
 		b.replenish()
 		return
@@ -266,6 +306,7 @@ func (b *Browser) RetirePage(page gmaps.Page) {
 	}
 	_ = page.Close()
 	b.mu.Lock()
+	b.retirements++
 	delete(b.uses, page)
 	b.mu.Unlock()
 	b.replenish()
@@ -275,9 +316,13 @@ func (b *Browser) RetirePage(page gmaps.Page) {
 // retired one. On failure the slot is released so the pool shrinks by one
 // instead of counting a page that no longer exists.
 func (b *Browser) replenish() {
-	page, err := b.context.NewPage()
+	b.mu.Lock()
+	b.replacements++
+	b.mu.Unlock()
+	page, err := b.newPage()
 	if err != nil {
 		b.mu.Lock()
+		b.replacementFailures++
 		if b.created > 0 {
 			b.created--
 		}
@@ -285,13 +330,11 @@ func (b *Browser) replenish() {
 		log.Printf("browser pool: replacement page failed: %v", err)
 		return
 	}
-	configurePage(page)
-	gp := gmaps.Page(&pwPage{page: page})
 	select {
-	case b.pages <- gp:
+	case b.pages <- page:
 	default:
 		// Pool already at capacity; the slot was double-counted.
-		_ = gp.Close()
+		_ = page.Close()
 		b.mu.Lock()
 		if b.created > 0 {
 			b.created--
@@ -299,6 +342,27 @@ func (b *Browser) replenish() {
 		b.mu.Unlock()
 	}
 }
+
+func (b *Browser) DiagnosticSnapshot() gmaps.PoolDiagnosticSnapshot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	snap := gmaps.PoolDiagnosticSnapshot{
+		Engine:              "playwright",
+		Capacity:            b.max,
+		Created:             b.created,
+		Idle:                len(b.pages),
+		Creating:            b.creating,
+		Retirements:         b.retirements,
+		Replacements:        b.replacements,
+		ReplacementFailures: b.replacementFailures,
+	}
+	if !b.createAt.IsZero() {
+		snap.OldestCreateElapsed = time.Since(b.createAt)
+	}
+	return snap
+}
+
+var _ gmaps.PoolDiagnosticSource = (*Browser)(nil)
 
 // Close closes all pages, the browser context, the browser, and stops playwright.
 func (b *Browser) Close() error {

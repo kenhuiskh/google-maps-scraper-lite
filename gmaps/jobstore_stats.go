@@ -64,7 +64,8 @@ func (s *JobStore) IncrementJobStat(ctx context.Context, jobID, field string, de
 		return nil
 	}
 	switch field {
-	case "scraped_urls", "duplicate_places", "scrape_errors", "write_errors", "retry_events":
+	case "scraped_urls", "duplicate_places", "scrape_errors", "write_errors", "retry_events",
+		"watchdog_timeouts", "bot_block_events", "navigation_cdp_errors", "page_crash_events", "stall_restarts":
 	default:
 		return fmt.Errorf("unknown job stat field %q", field)
 	}
@@ -79,10 +80,12 @@ func (s *JobStore) IncrementJobStat(ctx context.Context, jobID, field string, de
 func (s *JobStore) JobExecutionStats(ctx context.Context, jobID string) (JobExecutionStats, error) {
 	var stats JobExecutionStats
 	err := s.db.QueryRowContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, cross_job_duplicate_urls, queued_urls,
-		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events, updated_at
+		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events,
+		watchdog_timeouts, bot_block_events, navigation_cdp_errors, page_crash_events, stall_restarts, updated_at
 		FROM job_execution_stats WHERE job_id = ?`, jobID).Scan(&stats.JobID, &stats.FeedURLsFound, &stats.FeedDuplicateURLs,
 		&stats.CrossJobDuplicateURLs, &stats.QueuedURLs, &stats.ScrapedURLs, &stats.DuplicatePlaces, &stats.ScrapeErrors, &stats.WriteErrors,
-		&stats.RetryEvents, &stats.UpdatedAt)
+		&stats.RetryEvents, &stats.WatchdogTimeouts, &stats.BotBlockEvents, &stats.NavigationCDPErrors, &stats.PageCrashEvents,
+		&stats.StallRestarts, &stats.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		stats.JobID = jobID
 		return stats, nil

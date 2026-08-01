@@ -51,6 +51,12 @@ type Browser struct {
 	created  int
 	max      int
 	uses     map[gmaps.Page]int // scrapes served per page; guarded by mu
+	creating int
+	createAt time.Time
+
+	retirements         int64
+	replacements        int64
+	replacementFailures int64
 
 	locale          string
 	disableBlocking bool
@@ -150,6 +156,21 @@ func buildBlockedSet(blockedTypes []string) map[string]struct{} {
 // newPage creates a fresh tab, applies stealth + UA/viewport, and installs
 // resource blocking. Used by New, lazy-grow, and replenish.
 func (b *Browser) newPage() (*rodPage, error) {
+	b.mu.Lock()
+	b.creating++
+	if b.creating == 1 {
+		b.createAt = time.Now()
+	}
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		b.creating--
+		if b.creating == 0 {
+			b.createAt = time.Time{}
+		}
+		b.mu.Unlock()
+	}()
+
 	// stealth.Page injects the anti-detection init script (a superset of the
 	// single navigator.webdriver override the playwright engine uses) on every
 	// new document, before any navigation. Real Chromium + this script is what
@@ -177,7 +198,7 @@ func (b *Browser) newPage() (*rodPage, error) {
 		return nil, fmt.Errorf("set viewport: %w", err)
 	}
 
-	rp := &rodPage{page: page}
+	rp := &rodPage{page: page, diag: gmaps.NewPageDiagnosticsState("go-rod")}
 	// One persistent event loop for the life of the page, detecting Chromium-
 	// side tab death (renderer crash) that our own Close() would never
 	// observe. See rodPage.watchCrash's doc comment.
@@ -266,6 +287,7 @@ func (b *Browser) AcquirePage(ctx context.Context) (gmaps.Page, error) {
 func (b *Browser) discardPage(page gmaps.Page) {
 	_ = page.Close()
 	b.mu.Lock()
+	b.retirements++
 	delete(b.uses, page)
 	if b.created > 0 {
 		b.created--
@@ -284,6 +306,7 @@ func (b *Browser) ReleasePage(page gmaps.Page) {
 		// session (idempotent — see rodPage.Close).
 		_ = page.Close()
 		b.mu.Lock()
+		b.retirements++
 		delete(b.uses, page)
 		b.mu.Unlock()
 		b.replenish()
@@ -299,6 +322,9 @@ func (b *Browser) ReleasePage(page gmaps.Page) {
 	b.mu.Unlock()
 
 	if worn {
+		b.mu.Lock()
+		b.retirements++
+		b.mu.Unlock()
 		_ = page.Close()
 		b.replenish()
 		return
@@ -315,6 +341,7 @@ func (b *Browser) RetirePage(page gmaps.Page) {
 	}
 	_ = page.Close()
 	b.mu.Lock()
+	b.retirements++
 	delete(b.uses, page)
 	b.mu.Unlock()
 	b.replenish()
@@ -324,9 +351,13 @@ func (b *Browser) RetirePage(page gmaps.Page) {
 // retired one. On failure the slot is released so the pool shrinks by one
 // instead of counting a page that no longer exists.
 func (b *Browser) replenish() {
+	b.mu.Lock()
+	b.replacements++
+	b.mu.Unlock()
 	page, err := b.newPage()
 	if err != nil {
 		b.mu.Lock()
+		b.replacementFailures++
 		if b.created > 0 {
 			b.created--
 		}
@@ -347,6 +378,30 @@ func (b *Browser) replenish() {
 		b.mu.Unlock()
 	}
 }
+
+func (b *Browser) DiagnosticSnapshot() gmaps.PoolDiagnosticSnapshot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	snap := gmaps.PoolDiagnosticSnapshot{
+		Engine:              "go-rod",
+		Capacity:            b.max,
+		Created:             b.created,
+		Idle:                len(b.pages),
+		Creating:            b.creating,
+		Retirements:         b.retirements,
+		Replacements:        b.replacements,
+		ReplacementFailures: b.replacementFailures,
+	}
+	if b.launcher != nil {
+		snap.BrowserPID = b.launcher.PID()
+	}
+	if !b.createAt.IsZero() {
+		snap.OldestCreateElapsed = time.Since(b.createAt)
+	}
+	return snap
+}
+
+var _ gmaps.PoolDiagnosticSource = (*Browser)(nil)
 
 // Close closes all pooled pages, the browser, and cleans up the launcher.
 func (b *Browser) Close() error {

@@ -229,7 +229,15 @@ With `-error-log`, all log output goes to both stderr and the specified file. Th
   ```
   places 12/42 completed, 0 failed (elapsed 112s)
   ```
-- Write success/failure counts on exit.
+- `DIAG` records for claim start/completion, watchdogs, browser/page-pool state,
+  active place stage, resource health, and final job/writer summaries. Timeout
+  diagnostics are metadata-only: screenshots and page HTML are not retained.
+- Write success/failure counts on exit. The `DIAG event=job_summary` line
+  distinguishes URL failures from output-writer failures.
+
+Set `GMAPS_TIMINGS=1` to additionally log the duration of every successfully
+completed feed/place stage. Failure diagnostics and five-minute health
+heartbeats remain enabled without this setting.
 
 ## Flags
 

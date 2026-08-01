@@ -815,6 +815,10 @@ func spawnProcess(store *gmaps.JobStore, jobID, exe string, args []string, logPa
 			// Give Chromium and the OS a moment to release resources before
 			// respawning; this goroutine is already off the request path.
 			time.Sleep(stallResumeDelay)
+			if store != nil {
+				_ = store.IncrementJobStat(context.Background(), jobID, "stall_restarts", 1)
+			}
+			log.Printf("DIAG event=stall_restart job_id=%q", jobID)
 			onStallExit(jobID)
 		}
 	}()

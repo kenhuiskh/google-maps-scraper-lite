@@ -702,6 +702,7 @@ func TestScrapeDeadlineIsNotTransient(t *testing.T) {
 
 func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
 	ctx := context.Background()
+	logs := captureLog(t)
 	store := newTestJobStore(t)
 	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1", "u2"}))
 	if err != nil {
@@ -725,6 +726,8 @@ func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
 		Pool:  fakePagePool{},
 		Store: store,
 		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			finishStage := tracePlaceStage(ctx, "place.extra_reviews")
+			defer finishStage()
 			mu.Lock()
 			attempts[placeURL]++
 			n := attempts[placeURL]
@@ -779,6 +782,19 @@ func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
 	}
 	if es.RetryEvents < 1 {
 		t.Fatalf("RetryEvents = %d, want >= 1 (watchdog requeue)", es.RetryEvents)
+	}
+	if es.WatchdogTimeouts != 1 {
+		t.Fatalf("WatchdogTimeouts = %d, want 1", es.WatchdogTimeouts)
+	}
+	logText := logs.String()
+	for _, want := range []string{
+		"DIAG event=scrape_watchdog",
+		"stage=place.extra_reviews",
+		"phase=place_scrape",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("watchdog diagnostics missing %q:\n%s", want, logText)
+		}
 	}
 }
 

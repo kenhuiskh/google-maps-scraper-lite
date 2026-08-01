@@ -171,7 +171,7 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Scraper Control") {
 		t.Fatalf("index did not include admin shell title: %s", rec.Body.String())
 	}
-	for _, want := range []string{"Feed URLs", "Queued", "Scraped", "Errors"} {
+	for _, want := range []string{"Feed URLs", "Queued", "Scraped", "Errors", "Browser health", "Watchdogs", "Bot blocks", "Nav / CDP", "Page crashes", "Stall restarts"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Fatalf("index did not include analytics card %q: %s", want, rec.Body.String())
 		}
@@ -2188,6 +2188,13 @@ func TestSpawnProcessStallExitAutoResumes(t *testing.T) {
 	if len(procs) != 0 {
 		t.Fatalf("job process rows = %d, want 0", len(procs))
 	}
+	execStats, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("execution stats: %v", err)
+	}
+	if execStats.StallRestarts != 1 {
+		t.Fatalf("stall restarts = %d, want 1", execStats.StallRestarts)
+	}
 }
 
 func TestSpawnProcessStallExitRespectsCap(t *testing.T) {
@@ -2241,6 +2248,13 @@ func TestSpawnProcessStallExitRespectsCap(t *testing.T) {
 	}
 	if job.Status != gmaps.JobStatusPaused {
 		t.Fatalf("status = %s, want %s", job.Status, gmaps.JobStatusPaused)
+	}
+	execStats, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("execution stats: %v", err)
+	}
+	if execStats.StallRestarts != 0 {
+		t.Fatalf("stall restarts = %d, want 0 past cap", execStats.StallRestarts)
 	}
 }
 

@@ -46,6 +46,30 @@ func TestAcquirePageCancelledContextReturnsPromptly(t *testing.T) {
 	}
 }
 
+func TestDiagnosticSnapshotIsPassivePoolState(t *testing.T) {
+	b := &Browser{
+		pages:               make(chan gmaps.Page, 3),
+		created:             2,
+		max:                 3,
+		creating:            1,
+		createAt:            time.Now().Add(-time.Second),
+		retirements:         4,
+		replacements:        3,
+		replacementFailures: 1,
+		uses:                make(map[gmaps.Page]int),
+	}
+	snap := b.DiagnosticSnapshot()
+	if snap.Engine != "playwright" || snap.Capacity != 3 || snap.Created != 2 || snap.Creating != 1 {
+		t.Fatalf("pool snapshot = %#v", snap)
+	}
+	if snap.Retirements != 4 || snap.Replacements != 3 || snap.ReplacementFailures != 1 {
+		t.Fatalf("pool counters = %#v", snap)
+	}
+	if snap.OldestCreateElapsed < time.Second {
+		t.Fatalf("create elapsed = %s, want at least 1s", snap.OldestCreateElapsed)
+	}
+}
+
 func TestDefaultUserAgents(t *testing.T) {
 	if got := len(defaultUserAgents); got < 3 || got > 5 {
 		t.Fatalf("default user agent pool length = %d, want 3-5", got)
