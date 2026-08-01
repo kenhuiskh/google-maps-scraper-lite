@@ -58,6 +58,35 @@ func isTransientNavError(err error) bool {
 		strings.Contains(msg, "Page crashed")
 }
 
+func diagnosticCounterForAttempt(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, ErrBotBlocked):
+		return "bot_block_events"
+	case errors.Is(err, ErrScrapeDeadline):
+		return "watchdog_timeouts"
+	case strings.Contains(strings.ToLower(err.Error()), "page crashed"):
+		return "page_crash_events"
+	}
+	msg := strings.ToLower(err.Error())
+	if isTransientNavError(err) ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "runtime.callfunctionon") ||
+		strings.Contains(msg, "cdp") ||
+		strings.Contains(msg, "timed out") {
+		return "navigation_cdp_errors"
+	}
+	return ""
+}
+
+func (s *Scraper) recordAttemptDiagnostic(jobID string, err error) {
+	if field := diagnosticCounterForAttempt(err); field != "" {
+		_ = s.Store.IncrementJobStat(context.Background(), jobID, field, 1)
+	}
+}
+
 // Config controls what the Scraper extracts.
 type Config struct {
 	Concurrency       int
@@ -240,17 +269,6 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					}
 				}
 
-				inflight.set(workerID, claimed.URL)
-				lastProgress.Store(time.Now().UnixNano())
-
-				delay := s.Config.BrowseStartDelay
-				if delay <= 0 {
-					delay = time.Duration(rng.Intn(1000)) * time.Millisecond
-				}
-				if err := sleepContext(gctx, delay); err != nil {
-					return err
-				}
-
 				claimOpts := placeOpts
 				claimOpts.LangCode = claimed.Lang
 				if claimOpts.LangCode == "" {
@@ -259,9 +277,24 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					claimOpts.LangCode = langs[0]
 				}
 
+				trace := newClaimTrace(workerID, claimed, claimOpts.LangCode)
+				inflight.set(workerID, trace)
+				lastProgress.Store(time.Now().UnixNano())
+				logClaimLifecycle("claim_start", trace, nil, nil)
+
+				delay := s.Config.BrowseStartDelay
+				if delay <= 0 {
+					delay = time.Duration(rng.Intn(1000)) * time.Millisecond
+				}
+				trace.setPhase("browse_delay")
+				if err := sleepContext(gctx, delay); err != nil {
+					return err
+				}
+
 				var entry *Entry
 				usedHTTP := false
 				if s.Config.EnableHTTPFirst && claimOpts.ExtraReviews == 0 {
+					trace.setPhase("http_first")
 					entry, err = scrapePlaceHTTP(gctx, claimed.URL, claimOpts)
 					if err == nil {
 						usedHTTP = true
@@ -273,22 +306,35 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 				if !usedHTTP {
 					// An acquire failure means the browser is dead: end the run so
 					// finishJob persists the job state instead of hanging workers.
+					trace.setPhase("acquire_page")
 					page, aerr := s.Pool.AcquirePage(gctx)
 					if aerr != nil {
+						logClaimDiagnostic("acquire_error", trace, nil, s.Pool, aerr)
 						return aerr
 					}
-					entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
+					trace.setPhase("place_scrape")
+					logClaimLifecycle("scrape_start", trace, page, nil)
+					entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts, trace)
+					s.recordAttemptDiagnostic(jobID, err)
 					for retry := 1; retry <= 2 && err != nil && isTransientNavError(err) && !errors.Is(err, ErrBotBlocked); retry++ {
+						trace.setPhase("retire_page")
 						s.releaseScrapePage(page, err)
+						trace.setPhase("fast_retry_wait")
 						if serr := sleepContext(gctx, time.Duration(retry*2)*time.Second); serr != nil {
 							return serr
 						}
+						trace.setPhase("acquire_page")
 						page, aerr = s.Pool.AcquirePage(gctx)
 						if aerr != nil {
+							logClaimDiagnostic("acquire_error", trace, nil, s.Pool, aerr)
 							return aerr
 						}
-						entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts)
+						trace.setPhase("place_scrape")
+						logClaimLifecycle("scrape_retry_start", trace, page, nil)
+						entry, err = s.scrapeWithDeadline(gctx, scrapePlace, page, claimed.URL, claimOpts, trace)
+						s.recordAttemptDiagnostic(jobID, err)
 					}
+					trace.setPhase("release_page")
 					s.releaseScrapePage(page, err)
 				}
 				if err == nil {
@@ -301,9 +347,13 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					} else {
 						log.Printf("scrape via browser: %s", claimed.URL)
 					}
+					trace.setPhase("complete")
+					logClaimLifecycle("scrape_complete", trace, nil, nil)
 				}
 				if err != nil {
 					// A handled failure still counts as pipeline progress.
+					trace.setPhase("failed")
+					logClaimDiagnostic("scrape_error", trace, nil, s.Pool, err)
 					inflight.clear(workerID)
 					lastProgress.Store(time.Now().UnixNano())
 					if s.Config.AutoRecover {
@@ -429,7 +479,7 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 // calls do not honor ctx, so on deadline (or cancellation) the page is closed to
 // force the wedged call inside the scrape to error out. The result channel is
 // buffered so the scrape goroutine can always deliver and never leaks.
-func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error), page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error), page Page, placeURL string, opts PlaceOptions, trace *claimTrace) (*Entry, error) {
 	deadline := s.Config.ScrapeDeadline
 	if deadline <= 0 {
 		deadline = scrapeDeadline
@@ -439,8 +489,9 @@ func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx contex
 		err   error
 	}
 	res := make(chan scrapeResult, 1)
+	scrapeCtx := withPlaceTrace(ctx, trace)
 	go func() {
-		entry, err := scrape(ctx, page, placeURL, opts)
+		entry, err := scrape(scrapeCtx, page, placeURL, opts)
 		res <- scrapeResult{entry, err}
 	}()
 
@@ -450,13 +501,20 @@ func (s *Scraper) scrapeWithDeadline(ctx context.Context, scrape func(ctx contex
 	case r := <-res:
 		return r.entry, r.err
 	case <-ctx.Done():
+		logClaimDiagnostic("scrape_canceled", trace, page, s.Pool, ctx.Err())
 		if page != nil {
+			closeStarted := time.Now()
 			_ = page.Close()
+			log.Printf("DIAG event=page_close_complete reason=context_canceled duration=%s url=%q", time.Since(closeStarted).Round(time.Millisecond), placeURL)
 		}
 		return nil, ctx.Err()
 	case <-timer.C:
+		logClaimDiagnostic("scrape_watchdog", trace, page, s.Pool, ErrScrapeDeadline)
+		logHealthDiagnostic(s.Pool, "")
 		if page != nil {
+			closeStarted := time.Now()
 			_ = page.Close()
+			log.Printf("DIAG event=page_close_complete reason=watchdog duration=%s url=%q", time.Since(closeStarted).Round(time.Millisecond), placeURL)
 		}
 		log.Printf("scrape watchdog: %s exceeded %s — page closed", placeURL, deadline)
 		return nil, ErrScrapeDeadline
@@ -495,6 +553,7 @@ func (s *Scraper) runStallMonitor(ctx context.Context, done <-chan struct{}, job
 		} else {
 			log.Printf("heartbeat: done=%d/%d inflight=%s", stats.Done, stats.Total, inflight.snapshot())
 		}
+		logHealthDiagnostic(s.Pool, inflight.snapshot())
 
 		idle := time.Since(time.Unix(0, lastProgress.Load()))
 		if idle <= stall || recovery.isActive() {
@@ -526,21 +585,16 @@ func (s *Scraper) runStallMonitor(ctx context.Context, done <-chan struct{}, job
 // stall diagnostics can name the wedged claims.
 type inflightRegistry struct {
 	mu      sync.Mutex
-	entries map[int]inflightClaim
-}
-
-type inflightClaim struct {
-	url     string
-	started time.Time
+	entries map[int]*claimTrace
 }
 
 func newInflightRegistry() *inflightRegistry {
-	return &inflightRegistry{entries: make(map[int]inflightClaim)}
+	return &inflightRegistry{entries: make(map[int]*claimTrace)}
 }
 
-func (r *inflightRegistry) set(worker int, url string) {
+func (r *inflightRegistry) set(worker int, trace *claimTrace) {
 	r.mu.Lock()
-	r.entries[worker] = inflightClaim{url: url, started: time.Now()}
+	r.entries[worker] = trace
 	r.mu.Unlock()
 }
 
@@ -571,8 +625,18 @@ func (r *inflightRegistry) snapshot() string {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		claim := r.entries[id]
-		fmt.Fprintf(&b, "%d: %s %s", id, claim.url, time.Since(claim.started).Round(time.Second))
+		claim := r.entries[id].snapshot()
+		fmt.Fprintf(
+			&b,
+			"%d: %s %s phase=%s/%s stage=%s/%s",
+			id,
+			claim.URL,
+			claim.Elapsed.Round(time.Second),
+			claim.Phase,
+			claim.PhaseElapsed.Round(time.Second),
+			claim.Stage,
+			claim.StageElapsed.Round(time.Second),
+		)
 	}
 	b.WriteByte(']')
 	return b.String()

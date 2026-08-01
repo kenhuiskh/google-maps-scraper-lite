@@ -946,6 +946,18 @@ func TestJobStoreMigratesExistingSQLiteSchema(t *testing.T) {
 			t.Fatalf("%s table was not created", table)
 		}
 	}
+	for _, column := range []string{
+		"cross_job_duplicate_urls",
+		"watchdog_timeouts",
+		"bot_block_events",
+		"navigation_cdp_errors",
+		"page_crash_events",
+		"stall_restarts",
+	} {
+		if !testColumnExists(t, store.db, "job_execution_stats", column) {
+			t.Fatalf("job_execution_stats.%s was not migrated", column)
+		}
+	}
 	if !testColumnExists(t, store.db, "job_execution_stats", "cross_job_duplicate_urls") {
 		t.Fatalf("job_execution_stats.cross_job_duplicate_urls was not migrated")
 	}
@@ -988,6 +1000,17 @@ func TestJobStoreStrategiesAndExecutionStats(t *testing.T) {
 	if err := store.IncrementJobStat(ctx, jobID, "duplicate_places", 1); err != nil {
 		t.Fatalf("inc duplicate places: %v", err)
 	}
+	for field, delta := range map[string]int{
+		"watchdog_timeouts":     2,
+		"bot_block_events":      3,
+		"navigation_cdp_errors": 4,
+		"page_crash_events":     5,
+		"stall_restarts":        6,
+	} {
+		if err := store.IncrementJobStat(ctx, jobID, field, delta); err != nil {
+			t.Fatalf("inc %s: %v", field, err)
+		}
+	}
 	job, err := store.GetJob(ctx, jobID)
 	if err != nil {
 		t.Fatalf("get job: %v", err)
@@ -1000,6 +1023,13 @@ func TestJobStoreStrategiesAndExecutionStats(t *testing.T) {
 	}
 	if job.ExecutionStats.ScrapedURLs != 3 || job.ExecutionStats.DuplicatePlaces != 1 {
 		t.Fatalf("execution stats = %#v", job.ExecutionStats)
+	}
+	if job.ExecutionStats.WatchdogTimeouts != 2 ||
+		job.ExecutionStats.BotBlockEvents != 3 ||
+		job.ExecutionStats.NavigationCDPErrors != 4 ||
+		job.ExecutionStats.PageCrashEvents != 5 ||
+		job.ExecutionStats.StallRestarts != 6 {
+		t.Fatalf("diagnostic stats = %#v", job.ExecutionStats)
 	}
 }
 

@@ -886,7 +886,7 @@
       width: 100%;
       padding: 0;
     }
-    .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
+    .stat-strip { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin-top: 10px; }
     .stat-cell { padding: 9px 11px; }
     .stat-value { margin-top: 3px; font-size: 1.05rem; font-weight: 850; color: var(--text); }
     .ordered-list { display: grid; gap: 7px; }
@@ -2283,6 +2283,11 @@
     <div class="stat-value">{{add .Analytics.ScrapeErrors .Analytics.WriteErrors}}</div>
     <div class="muted tiny">{{.Analytics.RetryEvents}} retries</div>
   </div>
+  <div class="stat-cell">
+    <div class="metric-label">Browser health</div>
+    <div class="stat-value">{{.Analytics.WatchdogTimeouts}}</div>
+    <div class="muted tiny">{{.Analytics.BotBlockEvents}} blocks, {{.Analytics.NavigationCDPErrors}} nav/CDP, {{.Analytics.PageCrashEvents}} crashes, {{.Analytics.StallRestarts}} restarts</div>
+  </div>
 </section>
 {{end}}
 
@@ -2425,6 +2430,11 @@
                 <div class="inspector-metric"><span class="metric-label">Queued</span><strong>{{.QueuedURLs}}</strong></div>
                 <div class="inspector-metric"><span class="metric-label">Scraped</span><strong>{{.ScrapedURLs}}</strong></div>
                 <div class="inspector-metric"><span class="metric-label">Errors</span><strong>{{add .ScrapeErrors .WriteErrors}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Watchdogs</span><strong>{{.WatchdogTimeouts}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Bot blocks</span><strong>{{.BotBlockEvents}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Nav / CDP</span><strong>{{.NavigationCDPErrors}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Page crashes</span><strong>{{.PageCrashEvents}}</strong></div>
+                <div class="inspector-metric"><span class="metric-label">Stall restarts</span><strong>{{.StallRestarts}}</strong></div>
               </div>
               <div class="metric-label">Actions</div>
               <div class="inspector-actions">

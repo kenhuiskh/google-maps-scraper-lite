@@ -3,7 +3,34 @@ package browserrod
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gosom/google-maps-scraper-lite/gmaps"
 )
+
+func TestDiagnosticSnapshotIsPassivePoolState(t *testing.T) {
+	b := &Browser{
+		pages:               make(chan gmaps.Page, 2),
+		created:             2,
+		max:                 2,
+		creating:            1,
+		createAt:            time.Now().Add(-time.Second),
+		retirements:         5,
+		replacements:        4,
+		replacementFailures: 2,
+		uses:                make(map[gmaps.Page]int),
+	}
+	snap := b.DiagnosticSnapshot()
+	if snap.Engine != "go-rod" || snap.Capacity != 2 || snap.Created != 2 || snap.Creating != 1 {
+		t.Fatalf("pool snapshot = %#v", snap)
+	}
+	if snap.Retirements != 5 || snap.Replacements != 4 || snap.ReplacementFailures != 2 {
+		t.Fatalf("pool counters = %#v", snap)
+	}
+	if snap.OldestCreateElapsed < time.Second {
+		t.Fatalf("create elapsed = %s, want at least 1s", snap.OldestCreateElapsed)
+	}
+}
 
 func TestRandomUserAgentFromEmptyReturnsFallback(t *testing.T) {
 	if got := randomUserAgentFrom(nil); got != fallbackUserAgent {

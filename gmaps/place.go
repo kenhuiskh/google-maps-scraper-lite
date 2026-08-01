@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/url"
 	"regexp"
@@ -24,6 +25,7 @@ var (
 	yearsAgoRE  = regexp.MustCompile(`(?i)^(\d+)\s+years?\s+ago$`)
 	aYearAgoRE  = regexp.MustCompile(`(?i)^a\s+year\s+ago$`)
 	todayAgoRE  = regexp.MustCompile(`(?i)^(just now|today)$`)
+	pageTitleRE = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 // PlaceOptions configures the place detail scrape behaviour.
@@ -46,66 +48,66 @@ func ScrapePlace(ctx context.Context, page Page, placeURL string, opts PlaceOpti
 
 	fullURL := placeURLWithLang(placeURL, opts.LangCode)
 
-	stageStarted := time.Now()
+	finishStage := tracePlaceStage(ctx, "place.goto")
 	status, err := page.Goto(fullURL)
-	logStageTiming("place.goto", stageStarted)
+	finishStage()
 	if err != nil {
 		return nil, fmt.Errorf("goto place URL: %w", err)
 	}
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.bot_check")
 	berr := detectBotBlock(page, status)
-	logStageTiming("place.bot_check", stageStarted)
+	finishStage()
 	if berr != nil {
 		return nil, berr
 	}
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.cookies")
 	clickRejectCookiesPlaywright(page)
-	logStageTiming("place.cookies", stageStarted)
+	finishStage()
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.wait_rich")
 	canonicalURL := waitForRichPlacePage(ctx, page)
-	logStageTiming("place.wait_rich", stageStarted)
+	finishStage()
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.expand_hours")
 	expandOpeningHours(page)
-	logStageTiming("place.expand_hours", stageStarted)
+	finishStage()
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.extract_json")
 	raw, err := extractPlaceJSON(ctx, page)
-	logStageTiming("place.extract_json", stageStarted)
+	finishStage()
 	if err != nil {
 		return nil, fmt.Errorf("extract place JSON: %w", err)
 	}
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.parse_json")
 	entry, err := EntryFromJSON(raw)
-	logStageTiming("place.parse_json", stageStarted)
+	finishStage()
 	if err != nil {
 		return nil, fmt.Errorf("parse entry JSON: %w", err)
 	}
 
-	stageStarted = time.Now()
+	finishStage = tracePlaceStage(ctx, "place.review_tags")
 	entry.ReviewTags = extractReviewTags(page)
-	logStageTiming("place.review_tags", stageStarted)
+	finishStage()
 
 	entry.Link = choosePlaceLink(entry.Link, canonicalURL, fullURL)
 
 	if opts.ExtraReviews > 0 {
-		stageStarted = time.Now()
+		finishStage = tracePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("target=%d", opts.ExtraReviews))
 		if err := scrapeExtraReviews(ctx, page, &entry, opts.ExtraReviews); err != nil {
 			log.Printf("extra reviews scrape warning for %s: %v", placeURL, err)
 		}
-		logStageTiming("place.extra_reviews", stageStarted)
+		finishStage()
 		entry.SortAndCapReviews(opts.ExtraReviews)
 	}
 
 	if opts.ExtractEmail && entry.IsWebsiteValidForEmail() {
-		stageStarted = time.Now()
+		finishStage = tracePlaceStage(ctx, "place.email")
 		websiteURL := normalizeGoogleURL(entry.WebSite)
 		emails, err := ExtractEmails(ctx, websiteURL)
-		logStageTiming("place.email", stageStarted)
+		finishStage()
 		if err == nil {
 			entry.Emails = emails
 		}
@@ -119,21 +121,58 @@ func ScrapePlace(ctx context.Context, page Page, placeURL string, opts PlaceOpti
 // traffic" / "automated queries" text. Returns nil otherwise.
 func detectBotBlock(page Page, status int) error {
 	curURL := page.URL()
+	pageClass := classifyPageMetadata(curURL, status, "")
 	for _, marker := range []string{"/sorry/", "consent.google", "ipv4.google.com/sorry"} {
 		if strings.Contains(curURL, marker) {
+			observePageMetadata(page, pageClass, "", "")
 			return fmt.Errorf("bot block: url %q: %w", curURL, ErrBotBlocked)
 		}
 	}
 	if status == 429 {
+		observePageMetadata(page, "rate_limited", "", "")
 		return fmt.Errorf("bot block: HTTP 429: %w", ErrBotBlocked)
 	}
 	if content, err := page.Content(); err == nil {
 		lc := strings.ToLower(content)
+		pageClass = classifyPageMetadata(curURL, status, lc)
+		title := ""
+		if match := pageTitleRE.FindStringSubmatch(content); len(match) == 2 {
+			title = strings.Join(strings.Fields(html.UnescapeString(match[1])), " ")
+		}
+		observePageMetadata(page, pageClass, content, title)
 		if strings.Contains(lc, "unusual traffic") || strings.Contains(lc, "automated queries") {
 			return fmt.Errorf("bot block: unusual-traffic page: %w", ErrBotBlocked)
 		}
+	} else {
+		observePageMetadata(page, pageClass, "", "")
 	}
 	return nil
+}
+
+func classifyPageMetadata(curURL string, status int, lowerContent string) string {
+	lowerURL := strings.ToLower(curURL)
+	switch {
+	case status == 429:
+		return "rate_limited"
+	case strings.Contains(lowerURL, "/sorry/"), strings.Contains(lowerURL, "ipv4.google.com/sorry"):
+		return "sorry"
+	case strings.Contains(lowerURL, "consent.google"), strings.Contains(lowerContent, "before you continue"):
+		return "consent"
+	case strings.Contains(lowerContent, "recaptcha"), strings.Contains(lowerContent, "captcha"):
+		return "captcha"
+	case strings.Contains(lowerContent, "unusual traffic"), strings.Contains(lowerContent, "automated queries"):
+		return "unusual_traffic"
+	case strings.Contains(lowerURL, "/maps/"), strings.Contains(lowerContent, "app_initialization_state"):
+		return "maps"
+	default:
+		return "unknown"
+	}
+}
+
+func observePageMetadata(page Page, class, content, title string) {
+	if observer, ok := page.(PageDiagnosticObserver); ok {
+		observer.ObservePageDiagnostics(class, len(content), title)
+	}
 }
 
 func placeURLWithLang(placeURL, lang string) string {
@@ -257,6 +296,7 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 		`[data-tab-index="1"]`,
 		`a[href*="reviews"]`,
 	}
+	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=open target=%d", targetReviews))
 	for _, sel := range reviewSelectors {
 		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
@@ -274,6 +314,7 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 		`button[aria-label*="Sort" i]`,
 		`[data-value="Sort reviews"]`,
 	}
+	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=open_sort target=%d", targetReviews))
 	for _, sel := range sortButtonSelectors {
 		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
@@ -288,6 +329,7 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 		`[data-index="1"]`,
 		`[data-value="2"]`,
 	}
+	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=select_newest target=%d", targetReviews))
 	for _, sel := range newestSelectors {
 		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
 			continue
@@ -310,6 +352,7 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 
 	// Scroll the reviews panel until target is met or stale.
 	staleCount := 0
+	scrollCount := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -317,6 +360,10 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 		default:
 		}
 
+		updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf(
+			"action=extract scroll=%d collected=%d target=%d stale=%d",
+			scrollCount, len(entry.UserReviews)+len(entry.UserReviewsExtended), targetReviews, staleCount,
+		))
 		reviews, err := extractDOMReviews(page)
 		if err != nil {
 			return err
@@ -338,6 +385,11 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 		}
 
 		// Scroll the reviews panel.
+		scrollCount++
+		updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf(
+			"action=scroll scroll=%d collected=%d target=%d stale=%d",
+			scrollCount, len(entry.UserReviews)+len(entry.UserReviewsExtended), targetReviews, staleCount,
+		))
 		_, _ = page.Evaluate(scrollReviewsFeedJS)
 		page.Sleep(scrollPauseMs * time.Millisecond)
 
@@ -455,6 +507,7 @@ func extractPlaceJSON(ctx context.Context, page Page) ([]byte, error) {
 	const maxAttempts = 3
 
 	for attempt := range maxAttempts {
+		updatePlaceStageDetail(ctx, "place.extract_json", fmt.Sprintf("action=evaluate attempt=%d/%d", attempt+1, maxAttempts))
 		if berr := detectBotBlock(page, 0); berr != nil {
 			return nil, berr
 		}
@@ -463,7 +516,9 @@ func extractPlaceJSON(ctx context.Context, page Page) ([]byte, error) {
 			if attempt < maxAttempts-1 {
 				// Brief pause before reload to avoid immediately re-hitting a
 				// rate-limited or bot-detected response.
+				updatePlaceStageDetail(ctx, "place.extract_json", fmt.Sprintf("action=reload_wait attempt=%d/%d", attempt+1, maxAttempts))
 				page.Sleep(time.Duration(2000*(attempt+1)) * time.Millisecond)
+				updatePlaceStageDetail(ctx, "place.extract_json", fmt.Sprintf("action=reload attempt=%d/%d", attempt+1, maxAttempts))
 				if status, reloadErr := page.Reload(); reloadErr == nil {
 					if berr := detectBotBlock(page, status); berr != nil {
 						return nil, berr

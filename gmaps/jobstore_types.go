@@ -94,6 +94,11 @@ type JobExecutionStats struct {
 	ScrapeErrors          int
 	WriteErrors           int
 	RetryEvents           int
+	WatchdogTimeouts      int
+	BotBlockEvents        int
+	NavigationCDPErrors   int
+	PageCrashEvents       int
+	StallRestarts         int
 	UpdatedAt             sql.NullTime
 }
 

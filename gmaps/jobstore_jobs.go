@@ -437,7 +437,8 @@ func (s *JobStore) loadJobsBatch(ctx context.Context, ids []string) ([]Job, erro
 	}
 
 	execRows, err := s.db.QueryContext(ctx, `SELECT job_id, feed_urls_found, feed_duplicate_urls, cross_job_duplicate_urls, queued_urls,
-		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events, updated_at
+		scraped_urls, duplicate_places, scrape_errors, write_errors, retry_events,
+		watchdog_timeouts, bot_block_events, navigation_cdp_errors, page_crash_events, stall_restarts, updated_at
 		FROM job_execution_stats WHERE job_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -446,7 +447,8 @@ func (s *JobStore) loadJobsBatch(ctx context.Context, ids []string) ([]Job, erro
 		var es JobExecutionStats
 		if err := execRows.Scan(&es.JobID, &es.FeedURLsFound, &es.FeedDuplicateURLs,
 			&es.CrossJobDuplicateURLs, &es.QueuedURLs, &es.ScrapedURLs, &es.DuplicatePlaces, &es.ScrapeErrors, &es.WriteErrors,
-			&es.RetryEvents, &es.UpdatedAt); err != nil {
+			&es.RetryEvents, &es.WatchdogTimeouts, &es.BotBlockEvents, &es.NavigationCDPErrors, &es.PageCrashEvents,
+			&es.StallRestarts, &es.UpdatedAt); err != nil {
 			_ = execRows.Close()
 			return nil, err
 		}

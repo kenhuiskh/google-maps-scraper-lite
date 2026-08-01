@@ -441,6 +441,7 @@ func main() {
 	}
 
 	log.Printf("run complete: written=%d failed=%d", written, failed)
+	log.Printf("DIAG event=writer_summary written=%d failed=%d duplicates=%d", written, failed, dupes)
 
 	runErr := <-errCh
 	currentJobMu.Lock()
@@ -453,6 +454,29 @@ func main() {
 			} else {
 				_ = store.SetJobStatus(context.Background(), finalJobID, gmaps.JobStatusDone, nil)
 			}
+		}
+	}
+	if finalJobID != "" {
+		stats, statsErr := store.JobStats(context.Background(), finalJobID)
+		execStats, execErr := store.JobExecutionStats(context.Background(), finalJobID)
+		if statsErr == nil && execErr == nil {
+			log.Printf(
+				"DIAG event=job_summary job_id=%q total=%d done=%d failed=%d pending=%d in_progress=%d scrape_errors=%d write_errors=%d retry_events=%d watchdog_timeouts=%d bot_block_events=%d navigation_cdp_errors=%d page_crash_events=%d stall_restarts=%d",
+				finalJobID,
+				stats.Total,
+				stats.Done,
+				stats.Failed,
+				stats.Pending,
+				stats.InProgress,
+				execStats.ScrapeErrors,
+				execStats.WriteErrors,
+				execStats.RetryEvents,
+				execStats.WatchdogTimeouts,
+				execStats.BotBlockEvents,
+				execStats.NavigationCDPErrors,
+				execStats.PageCrashEvents,
+				execStats.StallRestarts,
+			)
 		}
 	}
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
