@@ -211,7 +211,7 @@ func TestControlIndexListsJobs(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "inset 3px 0 0") {
 		t.Fatalf("index should not use active row side-stripe styling: %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `grid-template-columns: minmax(220px, 0.85fr) minmax(190px, 0.65fr) 116px;`) {
+	if !strings.Contains(rec.Body.String(), `grid-template-columns: minmax(220px, 0.85fr) minmax(190px, 0.65fr) 164px;`) {
 		t.Fatalf("index should reserve enough job action column width: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "overflow-x: hidden;") || !strings.Contains(rec.Body.String(), "scrollbar-gutter: stable;") {
@@ -237,6 +237,12 @@ func TestControlIndexListsJobs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `aria-label="More info for job `+jobID+`"`) {
 		t.Fatalf("index did not include accessible more info button for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `viewJobLog('`+jobID+`')`) {
+		t.Fatalf("index did not include log button for job ID %s: %s", jobID, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `aria-label="View log for job `+jobID+`"`) {
+		t.Fatalf("index did not include accessible log button for job ID %s: %s", jobID, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `start-pending`) {
 		t.Fatalf("index did not include start action for unblocked pending job ID %s: %s", jobID, rec.Body.String())

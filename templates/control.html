@@ -195,7 +195,7 @@
     .jobs-list-head,
     .job-row {
       display: grid;
-      grid-template-columns: minmax(220px, 0.85fr) minmax(190px, 0.65fr) 116px;
+      grid-template-columns: minmax(220px, 0.85fr) minmax(190px, 0.65fr) 164px;
       gap: 12px;
       align-items: center;
     }
@@ -2515,7 +2515,10 @@
     </span>
     <span class="job-action-cell">
       <button class="icon-button action-refresh more-info" onclick="selectJob('{{.ID}}')" title="More info for this job." aria-label="More info for job {{.ID}}" aria-expanded="false" aria-controls="inspector-title-{{.ID}}">
-        {{template "icon-log" .}}<span class="sr-only">More info</span>
+        {{template "icon-expand" .}}<span class="sr-only">More info</span>
+      </button>
+      <button type="button" class="icon-button action-refresh job-log-button" onclick="viewJobLog('{{.ID}}')" title="View the saved log for this job." aria-label="View log for job {{.ID}}">
+        {{template "icon-log" .}}<span class="sr-only">View log</span>
       </button>
       {{if ne .StatusLabel "Done"}}
         {{if .ActionDisabled}}
@@ -2885,6 +2888,19 @@
     syncJobInspector(selectedJobID);
     if (jobID) setJobDetailTab(jobID, 'overview');
     refreshSelectedJobLog({ restore: true });
+  }
+
+  function viewJobLog(jobID) {
+    if (!jobID) return;
+    selectedJobID = jobID;
+    selectedLogJobID = jobID;
+    syncJobInspector(jobID);
+    setJobDetailTab(jobID, 'logs');
+    if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+      openMobileLogReader(jobID);
+      return;
+    }
+    openJobLogModal();
   }
 
   function closeJobInspector() {
