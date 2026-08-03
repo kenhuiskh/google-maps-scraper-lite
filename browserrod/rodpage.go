@@ -21,6 +21,11 @@ const navTimeout = 60 * time.Second
 // Evaluate call then blocks the entire feed phase until the outer job timeout.
 const cdpCallTimeout = 30 * time.Second
 
+// clickHardCeilingSlack keeps the hard ceiling clear of normal timeout jitter:
+// clean selector misses have landed at 3.001s against a 3s budget, so only a
+// genuine driver wedge should trip the ceiling.
+const clickHardCeilingSlack = 2 * time.Second
+
 // rodPage adapts a *rod.Page to the engine-neutral gmaps.Page interface. All
 // rod-specific option structs live here so the gmaps package stays engine-neutral.
 //
@@ -41,6 +46,9 @@ type rodPage struct {
 	// cdpCallTimeout and (*rod.Page).Eval.
 	callTimeout time.Duration
 	eval        func(context.Context, string) (*proto.RuntimeRemoteObject, error)
+	// clickFn is a test seam. Production pages use clickForce, which calls the
+	// live rod element operations.
+	clickFn func(selector string, wait, click time.Duration) error
 	// routerStop and pageClose are test seams for teardown calls that can wait
 	// on an unhealthy CDP connection. Production uses HijackRouter.Stop and a
 	// context-bound rod Page.Close.
@@ -218,15 +226,41 @@ func (p *rodPage) WaitSelector(selector string, timeout time.Duration) (err erro
 	return err
 }
 
-// ClickForce waits for selector to attach then sends a trusted CDP click. rod's
+// ClickForce retains the click operation bookkeeping while imposing a wall
+// clock ceiling around the driver call. The result channel is buffered because
+// the driver goroutine is abandoned, not cancelled: the driver owns the
+// in-flight call and returns when Chromium answers or the page is closed; the
+// caller retires the page after a failure, bounding that goroutine's lifetime.
+func (p *rodPage) ClickForce(selector string, waitTimeout, clickTimeout time.Duration) (err error) {
+	done := p.diagnosticState().BeginOperation("click", "")
+	defer func() { done(0, err) }()
+	click := p.clickFn
+	if click == nil {
+		click = p.clickForce
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- click(selector, waitTimeout, clickTimeout)
+	}()
+
+	ceiling := waitTimeout + clickTimeout + clickHardCeilingSlack
+	timer := time.NewTimer(ceiling)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err
+	case <-timer.C:
+		return &gmaps.ClickHardTimeoutError{Selector: selector, Ceiling: ceiling}
+	}
+}
+
+// clickForce waits for selector to attach then sends a trusted CDP click. rod's
 // Click gates on interactability more strictly than playwright's Force:true, so
 // we scroll the element into view first to satisfy the viewport check; any
 // residual non-interactable error is returned and the call sites already treat
 // every error as "skip this selector", so behavior stays equivalent to the
 // playwright Force click for the review/hours expansion selectors.
-func (p *rodPage) ClickForce(selector string, waitTimeout, clickTimeout time.Duration) (err error) {
-	done := p.diagnosticState().BeginOperation("click", "")
-	defer func() { done(0, err) }()
+func (p *rodPage) clickForce(selector string, waitTimeout, clickTimeout time.Duration) error {
 	el, err := p.page.Timeout(waitTimeout).Element(selector)
 	if err != nil {
 		return err

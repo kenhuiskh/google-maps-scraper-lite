@@ -1,6 +1,34 @@
 package gmaps
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
+
+// ErrClickHardTimeout is returned by a ClickForce whose driver call outlived
+// waitTimeout+clickTimeout and was abandoned. Both browser engines already
+// bound clicks with driver-level deadlines, but those deadlines have been
+// observed not to hold: a 3s/2s budget once ran for 3m49s. Callers already
+// treat every ClickForce error as "skip this selector", so this behaves like
+// any other selector miss; the sentinel exists to name a driver wedge in logs.
+var ErrClickHardTimeout = errors.New("gmaps: click exceeded its hard ceiling")
+
+// ClickHardTimeoutError reports a ClickForce abandoned at its wall-clock
+// ceiling. It carries the ceiling as a duration so diagnostics never have to
+// parse it back out of a message formatted in another package.
+type ClickHardTimeoutError struct {
+	Selector string
+	Ceiling  time.Duration
+}
+
+func (e *ClickHardTimeoutError) Error() string {
+	return fmt.Sprintf("click %q abandoned after %s: %v", e.Selector, e.Ceiling, ErrClickHardTimeout)
+}
+
+func (e *ClickHardTimeoutError) Unwrap() error {
+	return ErrClickHardTimeout
+}
 
 // Page is the minimal browser-page surface the feed/place scrapers need. Both the
 // playwright-backed adapter (browser package) and the rod-backed adapter implement it,

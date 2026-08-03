@@ -87,6 +87,10 @@ func (s *Scraper) recordAttemptDiagnostic(jobID string, err error) {
 	}
 }
 
+func isExtraReviewsWatchdogFailure(err error, trace *claimTrace) bool {
+	return errors.Is(err, ErrScrapeDeadline) && trace.snapshot().Stage == "place.extra_reviews"
+}
+
 // Config controls what the Scraper extracts.
 type Config struct {
 	Concurrency       int
@@ -357,6 +361,15 @@ func (s *Scraper) Run(ctx context.Context, queries []string, out chan<- PlaceRes
 					inflight.clear(workerID)
 					lastProgress.Store(time.Now().UnixNano())
 					if s.Config.AutoRecover {
+						claim := trace.snapshot()
+						// This stage has reproduced deterministically per place; other
+						// watchdogs remain retryable because their causes are unknown.
+						if isExtraReviewsWatchdogFailure(err, trace) {
+							_ = s.Store.IncrementJobStat(context.Background(), jobID, "scrape_errors", 1)
+							_ = s.Store.MarkURLFailed(context.Background(), claimed.ID, err)
+							log.Printf("DIAG event=scrape_non_retryable reason=extra_reviews_watchdog worker=%d url_id=%d attempt=%d stage=%s url=%q error=%q", claim.Worker, claim.URLID, claim.Attempt, claim.Stage, claimed.URL, err)
+							continue
+						}
 						if s.urlAttemptsExhausted(claimed) {
 							_ = s.Store.IncrementJobStat(context.Background(), jobID, "scrape_errors", 1)
 							_ = s.Store.MarkURLFailed(context.Background(), claimed.ID, err)

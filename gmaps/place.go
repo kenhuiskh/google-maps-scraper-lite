@@ -3,6 +3,7 @@ package gmaps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -290,20 +291,16 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 	)
 
 	// Click the "All reviews" / reviews tab to open the reviews panel.
+	// Structural fallbacks may miss and yield no extra reviews; that is better
+	// than the loose fallback's post-A1 hard-timeout wedge.
 	reviewSelectors := []string{
 		`button[aria-label*="review" i][jsaction]`,
 		`button[aria-label*="reviews" i]`,
-		`[data-tab-index="1"]`,
-		`a[href*="reviews"]`,
+		`[role="main"] button[data-tab-index="1"]`,
+		`[role="main"] a[href*="reviews"]`,
 	}
 	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=open target=%d", targetReviews))
-	for _, sel := range reviewSelectors {
-		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
-			continue
-		}
-		page.Sleep(scrollPauseMs * time.Millisecond)
-		break
-	}
+	clickFirstMatching(ctx, page, "open", targetReviews, reviewSelectors, 3000*time.Millisecond, 2000*time.Millisecond, scrollPauseMs*time.Millisecond)
 
 	_ = page.WaitSelector("[data-review-id], .jftiEf, .wiI7pd", 5000*time.Millisecond)
 
@@ -312,31 +309,19 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 	sortButtonSelectors := []string{
 		`button[aria-label*="Sort reviews" i]`,
 		`button[aria-label*="Sort" i]`,
-		`[data-value="Sort reviews"]`,
+		`[role="main"] button[data-value="Sort reviews"]`,
 	}
 	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=open_sort target=%d", targetReviews))
-	for _, sel := range sortButtonSelectors {
-		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
-			continue
-		}
-		page.Sleep(scrollPauseMs * time.Millisecond)
-		break
-	}
+	clickFirstMatching(ctx, page, "open_sort", targetReviews, sortButtonSelectors, 3000*time.Millisecond, 2000*time.Millisecond, scrollPauseMs*time.Millisecond)
 
 	newestSelectors := []string{
 		`button[aria-label*="Newest" i]`,
 		`[role="menuitemradio"][aria-label*="Newest" i]`,
-		`[data-index="1"]`,
-		`[data-value="2"]`,
+		`[role="menu"] [role="menuitemradio"][data-index="1"]`,
+		`[role="menu"] [role="menuitemradio"][data-value="2"]`,
 	}
 	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=select_newest target=%d", targetReviews))
-	for _, sel := range newestSelectors {
-		if err := page.ClickForce(sel, 3000*time.Millisecond, 2000*time.Millisecond); err != nil {
-			continue
-		}
-		page.Sleep(scrollPauseMs * time.Millisecond)
-		break
-	}
+	clickFirstMatching(ctx, page, "select_newest", targetReviews, newestSelectors, 3000*time.Millisecond, 2000*time.Millisecond, scrollPauseMs*time.Millisecond)
 
 	reviewKey := func(r Review) string {
 		return strings.TrimSpace(r.Name) + "|" + strings.TrimSpace(r.When) + "|" + strings.TrimSpace(r.Description)
@@ -404,6 +389,132 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 	}
 
 	return nil
+}
+
+// clickFirstMatching tries selectors in order, returning the selector that was
+// clicked or "" when none matched. Every error remains a selector miss, and a
+// successful click still settles before the helper returns.
+func clickFirstMatching(ctx context.Context, page Page, action string, targetReviews int, selectors []string, waitTimeout, clickTimeout, settle time.Duration) string {
+	for _, selector := range selectors {
+		updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "trying", selector))
+		logClickTarget(ctx, page, action, selector)
+
+		err := page.ClickForce(selector, waitTimeout, clickTimeout)
+		if err != nil {
+			if errors.Is(err, ErrClickHardTimeout) {
+				logClickHardTimeout(ctx, action, selector, err)
+			}
+			continue
+		}
+
+		updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "matched", selector))
+		page.Sleep(settle)
+		return selector
+	}
+	return ""
+}
+
+func extraReviewsClickDetail(action string, targetReviews int, state, selector string) string {
+	return fmt.Sprintf("action=%s %s=%s target=%d", action, state, truncateDiagnostic(selector, 120), targetReviews)
+}
+
+func logClickHardTimeout(ctx context.Context, action, selector string, err error) {
+	ceiling := "unknown"
+	var timeoutErr *ClickHardTimeoutError
+	if errors.As(err, &timeoutErr) && timeoutErr != nil {
+		ceiling = timeoutErr.Ceiling.String()
+	}
+	log.Printf(
+		"DIAG event=click_hard_timeout selector=%q ceiling=%s action=%s stage=place.extra_reviews %s",
+		truncateDiagnostic(selector, 300),
+		ceiling,
+		truncateDiagnostic(action, 80),
+		claimContextDiagnostic(ctx),
+	)
+}
+
+type clickTargetGeometry struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
+}
+
+type clickTargetProbe struct {
+	Count            int                 `json:"count"`
+	TagName          string              `json:"tagName"`
+	Role             string              `json:"role"`
+	AriaLabel        string              `json:"ariaLabel"`
+	DataAttributes   map[string]string   `json:"dataAttributes"`
+	TextContent      string              `json:"textContent"`
+	Geometry         clickTargetGeometry `json:"geometry"`
+	OffsetParentNull bool                `json:"offsetParentNull"`
+	Visibility       string              `json:"visibility"`
+	PointerEvents    string              `json:"pointerEvents"`
+	RefineReviews    bool                `json:"refineReviews"`
+	ReviewCards      bool                `json:"reviewCards"`
+	Error            string              `json:"error"`
+}
+
+func logClickTarget(ctx context.Context, page Page, action, selector string) {
+	result, err := page.Evaluate(clickTargetJS(selector))
+	if err != nil {
+		logClickTargetError(ctx, action, selector, err)
+		return
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		logClickTargetError(ctx, action, selector, err)
+		return
+	}
+
+	var target clickTargetProbe
+	if err := json.Unmarshal(raw, &target); err != nil {
+		logClickTargetError(ctx, action, selector, err)
+		return
+	}
+
+	dataAttributes := "{}"
+	if target.DataAttributes != nil {
+		if data, err := json.Marshal(target.DataAttributes); err == nil {
+			dataAttributes = string(data)
+		}
+	}
+	geometry := "{}"
+	if data, err := json.Marshal(target.Geometry); err == nil {
+		geometry = string(data)
+	}
+
+	log.Printf(
+		"DIAG event=click_target action=%s selector=%q count=%d tag_name=%q role=%q aria_label=%q data_attributes=%q text_content=%q geometry=%q offset_parent_null=%t visibility=%q pointer_events=%q refine_reviews=%t review_cards=%t error=%q %s",
+		truncateDiagnostic(action, 80),
+		truncateDiagnostic(selector, 300),
+		target.Count,
+		truncateDiagnostic(target.TagName, 50),
+		truncateDiagnostic(target.Role, 100),
+		truncateDiagnostic(target.AriaLabel, 300),
+		truncateDiagnostic(dataAttributes, 500),
+		truncateDiagnostic(target.TextContent, 100),
+		truncateDiagnostic(geometry, 200),
+		target.OffsetParentNull,
+		truncateDiagnostic(target.Visibility, 100),
+		truncateDiagnostic(target.PointerEvents, 100),
+		target.RefineReviews,
+		target.ReviewCards,
+		truncateDiagnostic(target.Error, 300),
+		claimContextDiagnostic(ctx),
+	)
+}
+
+func logClickTargetError(ctx context.Context, action, selector string, err error) {
+	log.Printf(
+		"DIAG event=click_target action=%s selector=%q error=%q %s",
+		truncateDiagnostic(action, 80),
+		truncateDiagnostic(selector, 300),
+		truncateDiagnostic(err.Error(), 300),
+		claimContextDiagnostic(ctx),
+	)
 }
 
 func extractDOMReviews(page Page) ([]Review, error) {
@@ -693,6 +804,52 @@ const reviewTagsJS = `
 	return tags;
 })()
 `
+
+// clickTargetJS JSON-encodes the selector before embedding it in the probe so
+// quotes, backslashes, and malformed-selector test cases cannot alter the JS.
+const clickTargetProbeJS = `
+(function(selector) {
+	const result = {
+		count: 0,
+		refineReviews: !!document.querySelector('[aria-label="Refine reviews"]'),
+		reviewCards: !!document.querySelector('[data-review-id]'),
+	};
+
+	try {
+		const matches = document.querySelectorAll(selector);
+		result.count = matches.length;
+		const first = matches[0];
+		if (!first) return result;
+
+		const rect = first.getBoundingClientRect();
+		const dataAttributes = {};
+		for (const attribute of first.attributes) {
+			if (attribute.name.startsWith('data-')) {
+				dataAttributes[attribute.name] = attribute.value;
+			}
+		}
+
+		const style = getComputedStyle(first);
+		result.tagName = first.tagName || '';
+		result.role = first.getAttribute('role') || '';
+		result.ariaLabel = first.getAttribute('aria-label') || '';
+		result.dataAttributes = dataAttributes;
+		result.textContent = (first.textContent || '').trim().slice(0, 40);
+		result.geometry = { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
+		result.offsetParentNull = first.offsetParent === null;
+		result.visibility = style.visibility;
+		result.pointerEvents = style.pointerEvents;
+	} catch (err) {
+		result.error = String(err);
+	}
+
+	return result;
+})(`
+
+func clickTargetJS(selector string) string {
+	encoded, _ := json.Marshal(selector)
+	return clickTargetProbeJS + string(encoded) + `)`
+}
 
 const expandReviewTextJS = `
 (function() {

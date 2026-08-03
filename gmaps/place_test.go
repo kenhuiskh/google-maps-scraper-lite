@@ -1,9 +1,11 @@
 package gmaps
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -145,5 +147,155 @@ func TestChoosePlaceLinkFallsBackWhenNoCanonical(t *testing.T) {
 	got := choosePlaceLink("", "", fallback)
 	if got != fallback {
 		t.Fatalf("link = %q, want fallback %q", got, fallback)
+	}
+}
+
+func TestScrapeExtraReviewsUsesQualifiedFallbackSelectors(t *testing.T) {
+	want := []string{
+		`button[aria-label*="review" i][jsaction]`,
+		`button[aria-label*="reviews" i]`,
+		`[role="main"] button[data-tab-index="1"]`,
+		`[role="main"] a[href*="reviews"]`,
+		`button[aria-label*="Sort reviews" i]`,
+		`button[aria-label*="Sort" i]`,
+		`[role="main"] button[data-value="Sort reviews"]`,
+		`button[aria-label*="Newest" i]`,
+		`[role="menuitemradio"][aria-label*="Newest" i]`,
+		`[role="menu"] [role="menuitemradio"][data-index="1"]`,
+		`[role="menu"] [role="menuitemradio"][data-value="2"]`,
+	}
+	clickErrors := make(map[string]error, len(want))
+	for _, selector := range want {
+		clickErrors[selector] = errors.New("selector miss")
+	}
+	page := &clickFirstMatchingTestPage{clickErrors: clickErrors}
+
+	_ = scrapeExtraReviews(context.Background(), page, &Entry{}, 1)
+
+	if !reflect.DeepEqual(page.clicked, want) {
+		t.Fatalf("fallback selectors passed to ClickForce = %#v, want %#v", page.clicked, want)
+	}
+	for _, selector := range page.clicked {
+		if selector == `[data-tab-index="1"]` || selector == `[data-index="1"]` || selector == `[data-value="2"]` {
+			t.Fatalf("bare fallback selector passed to ClickForce: %q", selector)
+		}
+	}
+}
+
+type clickFirstMatchingTestPage struct {
+	clickErrors   map[string]error
+	evaluateErr   error
+	evaluateCalls int
+	clicked       []string
+	sleeps        []time.Duration
+	detailAtClick []string
+	onClick       func(string)
+}
+
+func (p *clickFirstMatchingTestPage) Goto(string) (int, error)                 { return 200, nil }
+func (p *clickFirstMatchingTestPage) Reload() (int, error)                     { return 200, nil }
+func (p *clickFirstMatchingTestPage) Content() (string, error)                 { return "", nil }
+func (p *clickFirstMatchingTestPage) URL() string                              { return "" }
+func (p *clickFirstMatchingTestPage) Close() error                             { return nil }
+func (p *clickFirstMatchingTestPage) IsClosed() bool                           { return false }
+func (p *clickFirstMatchingTestPage) WaitSelector(string, time.Duration) error { return nil }
+func (p *clickFirstMatchingTestPage) Sleep(d time.Duration)                    { p.sleeps = append(p.sleeps, d) }
+func (p *clickFirstMatchingTestPage) Evaluate(string) (any, error) {
+	p.evaluateCalls++
+	if p.evaluateErr != nil {
+		return nil, p.evaluateErr
+	}
+	return map[string]any{"count": float64(1)}, nil
+}
+func (p *clickFirstMatchingTestPage) ClickForce(selector string, _, _ time.Duration) error {
+	p.clicked = append(p.clicked, selector)
+	if p.onClick != nil {
+		p.onClick(selector)
+	}
+	if err, ok := p.clickErrors[selector]; ok {
+		return err
+	}
+	return nil
+}
+
+func TestClickFirstMatchingAttributesSelectorsAndStageDetails(t *testing.T) {
+	trace := &claimTrace{worker: 2, urlID: 17, attempt: 3, lang: "en", url: "https://example.test/place", started: time.Now()}
+	ctx := withPlaceTrace(context.Background(), trace)
+	updatePlaceStageDetail(ctx, "place.extra_reviews", "action=open target=5")
+
+	page := &clickFirstMatchingTestPage{
+		clickErrors: map[string]error{
+			"first":  errors.New("not attached"),
+			"second": errors.New("not clickable"),
+		},
+	}
+	page.onClick = func(string) {
+		page.detailAtClick = append(page.detailAtClick, trace.snapshot().Detail)
+	}
+	got := clickFirstMatching(ctx, page, "open", 5, []string{"first", "second", "third"}, time.Millisecond, time.Millisecond, 0)
+	if got != "third" {
+		t.Fatalf("clickFirstMatching() = %q, want third", got)
+	}
+	if len(page.clicked) != 3 || page.clicked[0] != "first" || page.clicked[2] != "third" {
+		t.Fatalf("clicked selectors = %#v", page.clicked)
+	}
+	if len(page.detailAtClick) != 3 || !strings.Contains(page.detailAtClick[0], "trying=first") || !strings.Contains(page.detailAtClick[1], "trying=second") {
+		t.Fatalf("trying details = %#v", page.detailAtClick)
+	}
+	if detail := trace.snapshot().Detail; !strings.Contains(detail, "matched=third") || !strings.Contains(detail, "target=5") {
+		t.Fatalf("final stage detail = %q, want matched selector and target", detail)
+	}
+	if len(page.sleeps) != 1 || page.sleeps[0] != 0 {
+		t.Fatalf("settle sleeps = %#v, want one zero-duration settle", page.sleeps)
+	}
+}
+
+func TestClickFirstMatchingContinuesWhenClickTargetProbeFails(t *testing.T) {
+	logs := captureLog(t)
+	page := &clickFirstMatchingTestPage{
+		evaluateErr: errors.New("probe unavailable"),
+		clickErrors: map[string]error{
+			"first": errors.New("not attached"),
+		},
+	}
+	got := clickFirstMatching(context.Background(), page, "open", 5, []string{"first", "second"}, time.Millisecond, time.Millisecond, 0)
+	if got != "second" {
+		t.Fatalf("clickFirstMatching() = %q, want second", got)
+	}
+	if page.evaluateCalls != 2 || len(page.clicked) != 2 {
+		t.Fatalf("probe/click calls = %d/%d, want 2/2", page.evaluateCalls, len(page.clicked))
+	}
+	if !strings.Contains(logs.String(), "DIAG event=click_target") {
+		t.Fatalf("expected probe diagnostics after evaluate errors, got %q", logs.String())
+	}
+}
+
+func TestClickFirstMatchingEmitsHardTimeoutDiagnostic(t *testing.T) {
+	logs := captureLog(t)
+	trace := &claimTrace{worker: 4, urlID: 31, attempt: 2, lang: "zh-tw", url: "https://example.test/place", started: time.Now()}
+	ctx := withPlaceTrace(context.Background(), trace)
+	updatePlaceStageDetail(ctx, "place.extra_reviews", "action=open target=5")
+	page := &clickFirstMatchingTestPage{
+		clickErrors: map[string]error{
+			"review-tab": &ClickHardTimeoutError{Selector: "review-tab", Ceiling: 7 * time.Second},
+		},
+		evaluateErr: errors.New("probe unavailable"),
+	}
+
+	if got := clickFirstMatching(ctx, page, "open", 5, []string{"review-tab"}, time.Millisecond, time.Millisecond, 0); got != "" {
+		t.Fatalf("clickFirstMatching() = %q, want no match", got)
+	}
+	logText := logs.String()
+	for _, want := range []string{
+		"DIAG event=click_hard_timeout",
+		`selector="review-tab"`,
+		"ceiling=7s",
+		"action=open",
+		"stage=place.extra_reviews",
+		"worker=4 url_id=31 attempt=2 lang=\"zh-tw\"",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("hard-timeout diagnostic missing %q:\n%s", want, logText)
+		}
 	}
 }

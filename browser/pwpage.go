@@ -8,6 +8,11 @@ import (
 	"github.com/mxschmitt/playwright-go"
 )
 
+// clickHardCeilingSlack keeps the hard ceiling clear of normal timeout jitter:
+// clean selector misses have landed at 3.001s against a 3s budget, so only a
+// genuine driver wedge should trip the ceiling.
+const clickHardCeilingSlack = 2 * time.Second
+
 // pwPage adapts a playwright.Page to the engine-neutral gmaps.Page interface.
 // All playwright option structs live here so the gmaps package stays
 // engine-neutral.
@@ -15,6 +20,10 @@ type pwPage struct {
 	page     playwright.Page
 	diagOnce sync.Once
 	diag     *gmaps.PageDiagnosticsState
+
+	// clickFn is a test seam. Production pages use clickForce, which calls the
+	// live Playwright locator and click operations.
+	clickFn func(selector string, wait, click time.Duration) error
 }
 
 func newPWPage(page playwright.Page) *pwPage {
@@ -86,9 +95,35 @@ func (p *pwPage) WaitSelector(selector string, timeout time.Duration) (err error
 	})
 }
 
+// ClickForce retains the click operation bookkeeping while imposing a wall
+// clock ceiling around the driver call. The result channel is buffered because
+// the driver goroutine is abandoned, not cancelled: the driver owns the
+// in-flight call and returns when Chromium answers or the page is closed; the
+// caller retires the page after a failure, bounding that goroutine's lifetime.
 func (p *pwPage) ClickForce(selector string, waitTimeout, clickTimeout time.Duration) (err error) {
 	done := p.diagnosticState().BeginOperation("click", "")
 	defer func() { done(0, err) }()
+	click := p.clickFn
+	if click == nil {
+		click = p.clickForce
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- click(selector, waitTimeout, clickTimeout)
+	}()
+
+	ceiling := waitTimeout + clickTimeout + clickHardCeilingSlack
+	timer := time.NewTimer(ceiling)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err
+	case <-timer.C:
+		return &gmaps.ClickHardTimeoutError{Selector: selector, Ceiling: ceiling}
+	}
+}
+
+func (p *pwPage) clickForce(selector string, waitTimeout, clickTimeout time.Duration) error {
 	loc := p.page.Locator(selector).First()
 	if err := loc.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateAttached,

@@ -700,7 +700,7 @@ func TestScrapeDeadlineIsNotTransient(t *testing.T) {
 	}
 }
 
-func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
+func TestScraperWatchdogMarksExtraReviewsFailed(t *testing.T) {
 	ctx := context.Background()
 	logs := captureLog(t)
 	store := newTestJobStore(t)
@@ -766,35 +766,181 @@ func TestScraperWatchdogRequeuesStuckScrape(t *testing.T) {
 	mu.Lock()
 	gotU1, gotU2 := attempts["u1"], attempts["u2"]
 	mu.Unlock()
-	if gotU1 != 2 || gotU2 != 1 {
-		t.Fatalf("attempts = u1:%d u2:%d, want u1 requeued once and u2 once", gotU1, gotU2)
+	if gotU1 != 1 || gotU2 != 1 {
+		t.Fatalf("attempts = u1:%d u2:%d, want one failed extra-reviews attempt and u2 once", gotU1, gotU2)
 	}
 	stats, err := store.JobStats(ctx, jobID)
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
-	if stats.Done != 2 || stats.Pending != 0 || stats.Failed != 0 {
-		t.Fatalf("stats = %+v, want 2 done / 0 pending / 0 failed", stats)
+	if stats.Done != 1 || stats.Pending != 0 || stats.Failed != 1 {
+		t.Fatalf("stats = %+v, want 1 done / 0 pending / 1 failed", stats)
 	}
 	es, err := store.JobExecutionStats(ctx, jobID)
 	if err != nil {
 		t.Fatalf("exec stats: %v", err)
 	}
-	if es.RetryEvents < 1 {
-		t.Fatalf("RetryEvents = %d, want >= 1 (watchdog requeue)", es.RetryEvents)
+	if es.RetryEvents != 0 {
+		t.Fatalf("RetryEvents = %d, want 0 (extra-reviews watchdog is non-retryable)", es.RetryEvents)
 	}
 	if es.WatchdogTimeouts != 1 {
 		t.Fatalf("WatchdogTimeouts = %d, want 1", es.WatchdogTimeouts)
+	}
+	if es.ScrapeErrors != 1 {
+		t.Fatalf("ScrapeErrors = %d, want 1", es.ScrapeErrors)
 	}
 	logText := logs.String()
 	for _, want := range []string{
 		"DIAG event=scrape_watchdog",
 		"stage=place.extra_reviews",
 		"phase=place_scrape",
+		"detail=",
+		"DIAG event=scrape_non_retryable reason=extra_reviews_watchdog",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("watchdog diagnostics missing %q:\n%s", want, logText)
 		}
+	}
+}
+
+func TestScraperWatchdogRequeuesDifferentStage(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	attempts := 0
+	s := Scraper{
+		Config: Config{
+			Concurrency:      1,
+			JobID:            jobID,
+			AutoRecover:      true,
+			MaxURLAttempts:   2,
+			RecoveryMinDelay: time.Millisecond,
+			RecoveryMaxDelay: time.Millisecond,
+			BrowseStartDelay: time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			attempts++
+			if attempts == 1 {
+				tracePlaceStage(ctx, "place.parse_json")
+				return nil, ErrScrapeDeadline
+			}
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 1)
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx, nil, out) }()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 after requeue", attempts)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Failed != 0 || stats.Pending != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 0 failed / 0 pending", stats)
+	}
+	es, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("execution stats: %v", err)
+	}
+	if es.RetryEvents != 1 {
+		t.Fatalf("RetryEvents = %d, want 1", es.RetryEvents)
+	}
+}
+
+func TestScraperExtraReviewsNonDeadlineErrorRequeues(t *testing.T) {
+	ctx := context.Background()
+	store := newTestJobStore(t)
+	jobID, err := store.CreateJob(ctx, []string{"coffee"}, nil, URLsNoLang([]string{"u1"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	attempts := 0
+	s := Scraper{
+		Config: Config{
+			Concurrency:      1,
+			JobID:            jobID,
+			AutoRecover:      true,
+			MaxURLAttempts:   2,
+			RecoveryMinDelay: time.Millisecond,
+			RecoveryMaxDelay: time.Millisecond,
+			BrowseStartDelay: time.Millisecond,
+		},
+		Pool:  fakePagePool{},
+		Store: store,
+		ScrapePlace: func(ctx context.Context, page Page, placeURL string, opts PlaceOptions) (*Entry, error) {
+			attempts++
+			if attempts == 1 {
+				tracePlaceStage(ctx, "place.extra_reviews")
+				return nil, errors.New("extra reviews failed")
+			}
+			return &Entry{PlaceID: placeURL}, nil
+		},
+	}
+
+	out := make(chan PlaceResult, 1)
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx, nil, out) }()
+	for result := range out {
+		if err := store.MarkURLDone(ctx, result.URLID); err != nil {
+			t.Fatalf("mark done: %v", err)
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 after requeue", attempts)
+	}
+	stats, err := store.JobStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Done != 1 || stats.Failed != 0 || stats.Pending != 0 {
+		t.Fatalf("stats = %+v, want 1 done / 0 failed / 0 pending", stats)
+	}
+	es, err := store.JobExecutionStats(ctx, jobID)
+	if err != nil {
+		t.Fatalf("execution stats: %v", err)
+	}
+	if es.RetryEvents != 1 {
+		t.Fatalf("RetryEvents = %d, want 1", es.RetryEvents)
+	}
+}
+
+func TestExtraReviewsWatchdogFailureIsNilSafeAndNarrow(t *testing.T) {
+	if isExtraReviewsWatchdogFailure(ErrScrapeDeadline, nil) {
+		t.Fatal("nil trace must not classify as an extra-reviews watchdog failure")
+	}
+
+	extraTrace := &claimTrace{}
+	extraTrace.setStage("place.extra_reviews", "")
+	if !isExtraReviewsWatchdogFailure(ErrScrapeDeadline, extraTrace) {
+		t.Fatal("extra-reviews watchdog was not classified")
+	}
+	if isExtraReviewsWatchdogFailure(errors.New("extra reviews failed"), extraTrace) {
+		t.Fatal("non-deadline error must remain retryable")
+	}
+
+	parseTrace := &claimTrace{}
+	parseTrace.setStage("place.parse_json", "")
+	if isExtraReviewsWatchdogFailure(ErrScrapeDeadline, parseTrace) {
+		t.Fatal("watchdog from another stage must remain retryable")
 	}
 }
 

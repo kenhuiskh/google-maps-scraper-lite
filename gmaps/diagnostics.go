@@ -357,12 +357,36 @@ func withPlaceTrace(ctx context.Context, trace *claimTrace) context.Context {
 	return context.WithValue(ctx, placeTraceContextKey{}, trace)
 }
 
+func claimTraceFromContext(ctx context.Context) *claimTrace {
+	if ctx == nil {
+		return nil
+	}
+	trace, _ := ctx.Value(placeTraceContextKey{}).(*claimTrace)
+	return trace
+}
+
+// claimContextDiagnostic formats the stable claim identity used by per-place
+// diagnostics. A missing trace is valid for direct/unit calls, so the nil
+// receiver behavior of claimTrace.snapshot supplies zero values consistently
+// with the stage helpers.
+func claimContextDiagnostic(ctx context.Context) string {
+	claim := claimTraceFromContext(ctx).snapshot()
+	return fmt.Sprintf(
+		"worker=%d url_id=%d attempt=%d lang=%q url=%q",
+		claim.Worker,
+		claim.URLID,
+		claim.Attempt,
+		truncateDiagnostic(claim.Lang, 80),
+		truncateDiagnostic(claim.URL, 300),
+	)
+}
+
 func tracePlaceStage(ctx context.Context, stage string) func() {
 	return tracePlaceStageDetail(ctx, stage, "")
 }
 
 func tracePlaceStageDetail(ctx context.Context, stage, detail string) func() {
-	trace, _ := ctx.Value(placeTraceContextKey{}).(*claimTrace)
+	trace := claimTraceFromContext(ctx)
 	trace.setStage(stage, detail)
 	started := time.Now()
 	return func() {
@@ -372,7 +396,7 @@ func tracePlaceStageDetail(ctx context.Context, stage, detail string) func() {
 }
 
 func updatePlaceStageDetail(ctx context.Context, stage, detail string) {
-	trace, _ := ctx.Value(placeTraceContextKey{}).(*claimTrace)
+	trace := claimTraceFromContext(ctx)
 	trace.setStage(stage, detail)
 }
 
