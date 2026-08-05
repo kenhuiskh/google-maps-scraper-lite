@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,7 +28,41 @@ var (
 	aYearAgoRE  = regexp.MustCompile(`(?i)^a\s+year\s+ago$`)
 	todayAgoRE  = regexp.MustCompile(`(?i)^(just now|today)$`)
 	pageTitleRE = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+	// Reviews that have been edited carry a prefix in front of the relative date
+	// ("Edited 5 days ago", "上次編輯：5 天前", "已编辑：5 天前"). Stripping it
+	// lets the normal unit rules match.
+	editedPrefixRE = regexp.MustCompile(`^(?i:edited)\s*|^(?:上次編輯|上次编辑|已編輯|已编辑)\s*[:：]?\s*`)
+
+	// Sub-day units. Output granularity is a day, so these all resolve to today
+	// rather than being dropped, which is what happened before they existed —
+	// on English UIs as much as Chinese ones.
+	subDayAgoRE   = regexp.MustCompile(`(?i)^(?:\d+|an?)\s+(?:second|minute|hour)s?\s+ago$`)
+	zhSubDayAgoRE = regexp.MustCompile(`^(?:\d+|[一二兩两三四五六七八九十]+)\s*(?:秒|分鐘|分钟|分|小時|小时)前$`)
+
+	// Chinese relative dates. Review cards are scraped from the DOM, so their
+	// timestamps arrive in the UI language: -lang zh-tw yields "3 個月前", not
+	// "3 months ago", and every such date parsed to "" before these existed.
+	// Traditional and simplified forms are both accepted because the same job
+	// can be run with either code. The count is normally an Arabic numeral but
+	// "一年前" also appears.
+	zhCount      = `(\d+|[一二兩两三四五六七八九十]+)`
+	zhTodayRE    = regexp.MustCompile(`^(剛剛|刚刚|現在|现在|今天|今日)$`)
+	zhYesterday  = regexp.MustCompile(`^(昨天|昨日)$`)
+	zhDaysAgoRE  = regexp.MustCompile(`^` + zhCount + `\s*[天日]前$`)
+	zhWeeksAgoRE = regexp.MustCompile(`^` + zhCount + `\s*(?:個|个)?\s*(?:週|周|星期|禮拜|礼拜)前$`)
+	// 個月/个月 must be matched as a unit; a bare 月 rule would read the 個 of
+	// "3 個月前" as part of the count.
+	zhMonthsAgoRE = regexp.MustCompile(`^` + zhCount + `\s*(?:個|个)\s*月前$`)
+	zhYearsAgoRE  = regexp.MustCompile(`^` + zhCount + `\s*年前$`)
 )
+
+// cjkDigits maps the Chinese numerals that appear in Maps' relative dates. 兩/两
+// are the counting form of 2.
+var cjkDigits = map[rune]int{
+	'一': 1, '二': 2, '兩': 2, '两': 2, '三': 3, '四': 4,
+	'五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+}
 
 // PlaceOptions configures the place detail scrape behaviour.
 type PlaceOptions struct {
@@ -102,6 +137,16 @@ func ScrapePlace(ctx context.Context, page Page, placeURL string, opts PlaceOpti
 		}
 		finishStage()
 		entry.SortAndCapReviews(opts.ExtraReviews)
+
+		// The chip bar is normally on the Overview pane and was already read
+		// above. When it was not yet rendered there, the reviews panel this
+		// stage just opened carries it, so a second read costs one probe and
+		// recovers the tags instead of emitting an empty list.
+		if len(entry.ReviewTags) == 0 {
+			finishStage = tracePlaceStage(ctx, "place.review_tags_retry")
+			entry.ReviewTags = extractReviewTags(page)
+			finishStage()
+		}
 	}
 
 	if opts.ExtractEmail && entry.IsWebsiteValidForEmail() {
@@ -288,40 +333,75 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 	const (
 		maxStaleScrolls = 3
 		scrollPauseMs   = 1800
+
+		// Every selector is DOM-probed before it is clicked, so a click only
+		// runs against an element already known to be attached. The attach wait
+		// exists for the hydration race between probe and click, not for
+		// discovery, which drops the ClickForce hard ceiling from 7s to 3.3s.
+		clickWaitTimeout   = 800 * time.Millisecond
+		clickActionTimeout = 2000 * time.Millisecond
 	)
 
-	// Click the "All reviews" / reviews tab to open the reviews panel.
-	// Structural fallbacks may miss and yield no extra reviews; that is better
-	// than the loose fallback's post-A1 hard-timeout wedge.
+	// Nothing to page for: Maps already handed us every review it has, or the
+	// place has none. The click chain below costs 15-45s per place, so skipping
+	// it here is the single largest saving on a mixed corpus.
+	if !extraReviewsWorthOpening(entry, targetReviews) {
+		return nil
+	}
+
+	// Click the reviews tab to open the reviews panel. The tab's data-tab-index
+	// is 1 or 2 depending on whether the place also has a Menu tab, so indices
+	// are enumerated rather than guessed, and every click is confirmed against
+	// review cards actually appearing — a "successful" click on the Menu tab is
+	// otherwise indistinguishable from success and ends the chain early.
 	reviewSelectors := []string{
 		`button[aria-label*="review" i][jsaction]`,
 		`button[aria-label*="reviews" i]`,
-		`[role="main"] button[data-tab-index="1"]`,
-		`[role="main"] a[href*="reviews"]`,
+		`[role="main"] [role="tab"][data-tab-index="1"]`,
+		`[role="main"] [role="tab"][data-tab-index="2"]`,
+		`[role="main"] [role="tab"][data-tab-index="3"]`,
 	}
+	baselineCards, _ := countMatches(page, reviewCardSelector)
+	panelOpen := func() bool { return reviewsPanelOpen(page, baselineCards) }
 	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=open target=%d", targetReviews))
-	clickFirstMatching(ctx, page, "open", targetReviews, reviewSelectors, 3000*time.Millisecond, 2000*time.Millisecond, scrollPauseMs*time.Millisecond)
+	opened := clickFirstMatching(ctx, page, "open", targetReviews, reviewSelectors, clickWaitTimeout, clickActionTimeout, scrollPauseMs*time.Millisecond, panelOpen)
 
-	_ = page.WaitSelector("[data-review-id], .jftiEf, .wiI7pd", 5000*time.Millisecond)
-
-	// Sort by "Newest". In current Maps UI this usually requires opening the sort
-	// menu first, then clicking the "Newest" option.
-	sortButtonSelectors := []string{
-		`button[aria-label*="Sort reviews" i]`,
-		`button[aria-label*="Sort" i]`,
-		`[role="main"] button[data-value="Sort reviews"]`,
+	// Without an open reviews panel there is no sort control to find, and the
+	// scroll loop below has nothing to page. Both chains would be pure latency.
+	if opened == "" {
+		return nil
 	}
+
+	// Sort by "Newest": open the sort menu, then pick the newest option. The sort
+	// button has no locale-independent attribute, so it is resolved in JS by its
+	// icon glyph and stamped with data-gms-sort; the English attribute selectors
+	// remain as fallbacks in case that glyph ever changes.
+	sortButtonSelectors := make([]string, 0, 3)
+	if resolveSortControl(ctx, page) {
+		sortButtonSelectors = append(sortButtonSelectors, sortControlTagSelector)
+	}
+	sortButtonSelectors = append(sortButtonSelectors, sortControlSelector, `button[aria-label*="Sort" i]`)
+
+	sortMenuOpen := func() bool {
+		return page.WaitSelector(`[role="menu"] [role="menuitemradio"], [role="menuitemradio"]`, 1500*time.Millisecond) == nil
+	}
+
 	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=open_sort target=%d", targetReviews))
-	clickFirstMatching(ctx, page, "open_sort", targetReviews, sortButtonSelectors, 3000*time.Millisecond, 2000*time.Millisecond, scrollPauseMs*time.Millisecond)
+	sorted := clickFirstMatching(ctx, page, "open_sort", targetReviews, sortButtonSelectors, clickWaitTimeout, clickActionTimeout, scrollPauseMs*time.Millisecond, sortMenuOpen)
 
-	newestSelectors := []string{
-		`button[aria-label*="Newest" i]`,
-		`[role="menuitemradio"][aria-label*="Newest" i]`,
-		`[role="menu"] [role="menuitemradio"][data-index="1"]`,
-		`[role="menu"] [role="menuitemradio"][data-value="2"]`,
+	if sorted == "" {
+		logSortCandidates(ctx, page)
 	}
-	updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=select_newest target=%d", targetReviews))
-	clickFirstMatching(ctx, page, "select_newest", targetReviews, newestSelectors, 3000*time.Millisecond, 2000*time.Millisecond, scrollPauseMs*time.Millisecond)
+
+	if sorted != "" {
+		newestSelectors := []string{
+			`[role="menu"] [role="menuitemradio"][data-index="1"]`,
+			`[role="menuitemradio"][data-index="1"]`,
+			`[role="menuitemradio"][aria-label*="Newest" i]`,
+		}
+		updatePlaceStageDetail(ctx, "place.extra_reviews", fmt.Sprintf("action=select_newest target=%d", targetReviews))
+		clickFirstMatching(ctx, page, "select_newest", targetReviews, newestSelectors, clickWaitTimeout, clickActionTimeout, scrollPauseMs*time.Millisecond, nil)
+	}
 
 	reviewKey := func(r Review) string {
 		return strings.TrimSpace(r.Name) + "|" + strings.TrimSpace(r.When) + "|" + strings.TrimSpace(r.Description)
@@ -388,16 +468,173 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 		}
 	}
 
+	log.Printf(
+		"DIAG event=extra_reviews_done collected=%d target=%d scrolls=%d stale=%d %s",
+		len(entry.UserReviews)+len(entry.UserReviewsExtended), targetReviews,
+		scrollCount, staleCount, claimContextDiagnostic(ctx),
+	)
+
 	return nil
+}
+
+const (
+	reviewCardSelector = `[data-review-id]`
+	// sortControlSelector matches the reviews-panel sort button on an English UI
+	// only: data-value carries the *translated* label, so zh-tw renders
+	// data-value="排序". It stays as a fallback behind resolveSortControl.
+	sortControlSelector = `button[data-value="Sort"]`
+	// sortControlTagSelector matches the button resolveSortControl stamped, so
+	// the click still goes through ClickForce as a trusted CDP event rather
+	// than an untrusted JS dispatch Maps' handlers would ignore.
+	sortControlTagSelector = `[data-gms-sort="1"]`
+)
+
+// resolveSortControlJS tags the reviews-panel sort button and returns its label,
+// or "" when there is nothing to tag.
+//
+// Maps renders that button's text as a Material icon ligature in the private use
+// area (U+E164) followed by the translated word — "Sort" on en,
+// "排序" on zh-tw. The glyph is identical across locales; the word, the
+// aria-label, and data-value are all translated, which is why a CSS selector
+// alone cannot find this control.
+const resolveSortControlJS = `
+(function() {
+	document.querySelectorAll('[data-gms-sort]').forEach(function(node) {
+		node.removeAttribute('data-gms-sort');
+	});
+
+	const sortIcon = String.fromCharCode(0xE164);
+	const scope = document.querySelector('[role="main"]') || document;
+	const buttons = Array.from(scope.querySelectorAll('button, [role="button"]'));
+	const match = buttons.find(function(button) {
+		return (button.textContent || '').indexOf(sortIcon) !== -1;
+	});
+	if (!match) return '';
+
+	match.setAttribute('data-gms-sort', '1');
+	return (match.getAttribute('aria-label') || match.textContent || 'sort').trim().slice(0, 60);
+})()
+`
+
+// resolveSortControl tags the sort button in the DOM and reports whether one was
+// found, so the caller can skip a selector that is guaranteed to miss.
+func resolveSortControl(ctx context.Context, page Page) bool {
+	// The panel header renders after its review cards, so a single probe taken
+	// right after the open click can miss a control that is merely late.
+	const (
+		attempts = 4
+		pause    = 600 * time.Millisecond
+	)
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			page.Sleep(pause)
+		}
+		result, err := page.Evaluate(resolveSortControlJS)
+		if err != nil {
+			return false
+		}
+		label, _ := result.(string)
+		if label == "" {
+			continue
+		}
+		log.Printf(
+			"DIAG event=sort_control_resolved label=%q stage=place.extra_reviews %s",
+			truncateDiagnostic(label, 60),
+			claimContextDiagnostic(ctx),
+		)
+		return true
+	}
+	return false
+}
+
+// reviewsPanelOpen distinguishes an open reviews panel from the place Overview
+// pane, which renders a handful of review cards of its own: 46 of 48 places in
+// the captured diagnostics already had [data-review-id] attached before any
+// click, so card presence alone would confirm every click — including the
+// Menu-tab mis-click this check exists to reject.
+//
+// Growth past the Overview card baseline is the primary signal. The English
+// sort-control selector is checked first only because it is a cheap exact hit on
+// an en UI; it is expected to miss on every other locale, where data-value
+// carries the translated label.
+func reviewsPanelOpen(page Page, baselineCards int) bool {
+	// The panel hydrates asynchronously after the click settles, so poll a
+	// bounded number of times rather than judging on a single sample.
+	const (
+		attempts = 5
+		pause    = 400 * time.Millisecond
+	)
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			page.Sleep(pause)
+		}
+		if count, ok := countMatches(page, sortControlSelector); ok && count > 0 {
+			return true
+		}
+		if count, ok := countMatches(page, reviewCardSelector); ok && count > baselineCards {
+			return true
+		}
+	}
+	return false
+}
+
+// countMatches returns how many elements match selector. ok is false when the
+// probe itself failed, so callers can tell "no matches" from "no answer".
+func countMatches(page Page, selector string) (count int, ok bool) {
+	result, err := page.Evaluate(clickTargetJS(selector))
+	if err != nil {
+		return 0, false
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return 0, false
+	}
+	var probe clickTargetProbe
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return 0, false
+	}
+	return probe.Count, true
+}
+
+// extraReviewsWorthOpening reports whether paging the reviews panel can still
+// add reviews beyond what EntryFromJSON already parsed out of the page blob.
+// ReviewCount is Google's own total, so it bounds what any amount of scrolling
+// could ever yield.
+func extraReviewsWorthOpening(entry *Entry, targetReviews int) bool {
+	have := len(entry.UserReviews) + len(entry.UserReviewsExtended)
+	if have >= targetReviews {
+		return false
+	}
+	if entry.ReviewCount <= 0 {
+		// A place Maps reports as having no reviews at all. Guard on `have` too,
+		// so a review_count that failed to parse never silently skips a place
+		// that demonstrably has reviews.
+		return have > 0
+	}
+	return have < entry.ReviewCount
 }
 
 // clickFirstMatching tries selectors in order, returning the selector that was
 // clicked or "" when none matched. Every error remains a selector miss, and a
 // successful click still settles before the helper returns.
-func clickFirstMatching(ctx context.Context, page Page, action string, targetReviews int, selectors []string, waitTimeout, clickTimeout, settle time.Duration) string {
+//
+// A selector the DOM probe reports as matching nothing is skipped without a
+// ClickForce: the driver call could only wait out its attach timeout and fail,
+// and on a non-English UI most of a chain misses that way.
+//
+// verify, when non-nil, is the post-click check that the click had the intended
+// effect. Maps' tab strip makes a wrong-but-clickable target (the Menu tab where
+// the Reviews tab was expected) look identical to success, so an unverified
+// click ends the chain on the wrong element; a failed verify falls through to
+// the next selector instead.
+func clickFirstMatching(ctx context.Context, page Page, action string, targetReviews int, selectors []string, waitTimeout, clickTimeout, settle time.Duration, verify func() bool) string {
 	for _, selector := range selectors {
 		updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "trying", selector))
-		logClickTarget(ctx, page, action, selector)
+
+		if count, probed := logClickTarget(ctx, page, action, selector); probed && count == 0 {
+			updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "absent", selector))
+			continue
+		}
 
 		err := page.ClickForce(selector, waitTimeout, clickTimeout)
 		if err != nil {
@@ -407,11 +644,69 @@ func clickFirstMatching(ctx context.Context, page Page, action string, targetRev
 			continue
 		}
 
-		updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "matched", selector))
 		page.Sleep(settle)
+
+		if verify != nil && !verify() {
+			updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "unverified", selector))
+			logClickUnverified(ctx, action, selector)
+			continue
+		}
+
+		updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "matched", selector))
 		return selector
 	}
 	return ""
+}
+
+// sortCandidatesJS lists the reviews panel's own controls. Google changes these
+// handles over time and per locale, and the sort control is the one piece of the
+// chain with no other way to identify it, so an exhausted sort chain records
+// what was actually on the page.
+const sortCandidatesJS = `
+(function() {
+	const nodes = document.querySelectorAll('[role="main"] button, [role="main"] [role="button"]');
+	const out = [];
+	for (const node of nodes) {
+		const data = {};
+		for (const attribute of node.attributes) {
+			if (attribute.name.startsWith('data-')) {
+				data[attribute.name] = attribute.value;
+			}
+		}
+		if (Object.keys(data).length === 0) continue;
+		out.push({
+			text: (node.textContent || '').trim().slice(0, 24),
+			ariaLabel: (node.getAttribute('aria-label') || '').slice(0, 60),
+			data: data,
+		});
+	}
+	return JSON.stringify(out).slice(0, 1800);
+})()
+`
+
+func logSortCandidates(ctx context.Context, page Page) {
+	result, err := page.Evaluate(sortCandidatesJS)
+	if err != nil {
+		return
+	}
+	dump, _ := result.(string)
+	if dump == "" {
+		return
+	}
+	log.Printf(
+		"DIAG event=sort_candidates stage=place.extra_reviews candidates=%q %s",
+		truncateDiagnostic(dump, 1800),
+		claimContextDiagnostic(ctx),
+	)
+}
+
+func logClickUnverified(ctx context.Context, action, selector string) {
+	log.Printf(
+		"DIAG event=click_unverified selector=%q action=%s stage=place.extra_reviews %s",
+		truncateDiagnostic(selector, 300),
+		truncateDiagnostic(action, 80),
+		claimContextDiagnostic(ctx),
+	)
 }
 
 func extraReviewsClickDetail(action string, targetReviews int, state, selector string) string {
@@ -456,23 +751,28 @@ type clickTargetProbe struct {
 	Error            string              `json:"error"`
 }
 
-func logClickTarget(ctx context.Context, page Page, action, selector string) {
+// logClickTarget probes selector and emits the click_target diagnostic. It
+// returns the match count and whether the probe itself succeeded; callers use
+// the pair to skip clicks that cannot match. A failed probe reports probed=false
+// so the caller still attempts the click rather than trusting a zero it never
+// measured.
+func logClickTarget(ctx context.Context, page Page, action, selector string) (count int, probed bool) {
 	result, err := page.Evaluate(clickTargetJS(selector))
 	if err != nil {
 		logClickTargetError(ctx, action, selector, err)
-		return
+		return 0, false
 	}
 
 	raw, err := json.Marshal(result)
 	if err != nil {
 		logClickTargetError(ctx, action, selector, err)
-		return
+		return 0, false
 	}
 
 	var target clickTargetProbe
 	if err := json.Unmarshal(raw, &target); err != nil {
 		logClickTargetError(ctx, action, selector, err)
-		return
+		return 0, false
 	}
 
 	dataAttributes := "{}"
@@ -505,6 +805,8 @@ func logClickTarget(ctx context.Context, page Page, action, selector string) {
 		truncateDiagnostic(target.Error, 300),
 		claimContextDiagnostic(ctx),
 	)
+
+	return target.Count, true
 }
 
 func logClickTargetError(ctx context.Context, action, selector string, err error) {
@@ -545,6 +847,7 @@ func extractDOMReviews(page Page) ([]Review, error) {
 	}
 
 	reviews := make([]Review, 0, len(rawReviews))
+	var unparsedDates []string
 	for _, r := range rawReviews {
 		review := Review{
 			Name:           strings.TrimSpace(r.Name),
@@ -556,60 +859,149 @@ func extractDOMReviews(page Page) ([]Review, error) {
 		if review.Name == "" {
 			continue
 		}
+		if review.When == "" && strings.TrimSpace(r.Date) != "" {
+			unparsedDates = append(unparsedDates, strings.TrimSpace(r.Date))
+		}
 		reviews = append(reviews, review)
 	}
+	logUnparsedReviewDates(unparsedDates)
 
 	return reviews, nil
 }
 
+// logUnparsedReviewDates records the distinct relative-date strings that
+// relativeToAbsoluteDate could not read. Review dates arrive in the UI language,
+// so this is how a new locale's wording surfaces instead of silently landing as
+// an empty When.
+func logUnparsedReviewDates(dates []string) {
+	if len(dates) == 0 {
+		return
+	}
+
+	const maxReported = 5
+	seen := make(map[string]bool, len(dates))
+	distinct := make([]string, 0, maxReported)
+	for _, date := range dates {
+		if seen[date] {
+			continue
+		}
+		seen[date] = true
+		if len(distinct) < maxReported {
+			distinct = append(distinct, date)
+		}
+	}
+
+	log.Printf(
+		"DIAG event=review_date_unparsed count=%d distinct=%d samples=%q",
+		len(dates), len(seen), truncateDiagnostic(strings.Join(distinct, " | "), 200),
+	)
+}
+
 func relativeToAbsoluteDate(s string) string {
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(editedPrefixRE.ReplaceAllString(strings.TrimSpace(s), ""))
 	if s == "" {
 		return ""
 	}
 
 	now := time.Now()
+	ago := func(years, months, days int) string {
+		t := now.AddDate(years, months, days)
+		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
+	}
 
 	switch {
-	case todayAgoRE.MatchString(s):
-		return fmt.Sprintf("%d-%d-%d", now.Year(), int(now.Month()), now.Day())
+	case todayAgoRE.MatchString(s), zhTodayRE.MatchString(s),
+		subDayAgoRE.MatchString(s), zhSubDayAgoRE.MatchString(s):
+		return ago(0, 0, 0)
+	case zhYesterday.MatchString(s):
+		return ago(0, 0, -1)
 	case aWeekAgoRE.MatchString(s):
-		t := now.AddDate(0, 0, -7)
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
+		return ago(0, 0, -7)
 	case aMonthAgoRE.MatchString(s):
-		t := now.AddDate(0, -1, 0)
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
+		return ago(0, -1, 0)
 	case aYearAgoRE.MatchString(s):
-		t := now.AddDate(-1, 0, 0)
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
+		return ago(-1, 0, 0)
 	}
 
-	if matches := daysAgoRE.FindStringSubmatch(s); len(matches) == 2 {
-		var days int
-		_, _ = fmt.Sscanf(matches[1], "%d", &days)
-		t := now.AddDate(0, 0, -days)
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
-	}
-	if matches := weeksAgoRE.FindStringSubmatch(s); len(matches) == 2 {
-		var weeks int
-		_, _ = fmt.Sscanf(matches[1], "%d", &weeks)
-		t := now.AddDate(0, 0, -(weeks * 7))
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
-	}
-	if matches := monthsAgoRE.FindStringSubmatch(s); len(matches) == 2 {
-		var months int
-		_, _ = fmt.Sscanf(matches[1], "%d", &months)
-		t := now.AddDate(0, -months, 0)
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
-	}
-	if matches := yearsAgoRE.FindStringSubmatch(s); len(matches) == 2 {
-		var years int
-		_, _ = fmt.Sscanf(matches[1], "%d", &years)
-		t := now.AddDate(-years, 0, 0)
-		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
+	// Each entry is the offset for a count of one, scaled by the parsed count.
+	for _, unit := range []struct {
+		re                  *regexp.Regexp
+		years, months, days int
+	}{
+		{daysAgoRE, 0, 0, -1},
+		{zhDaysAgoRE, 0, 0, -1},
+		{weeksAgoRE, 0, 0, -7},
+		{zhWeeksAgoRE, 0, 0, -7},
+		{monthsAgoRE, 0, -1, 0},
+		{zhMonthsAgoRE, 0, -1, 0},
+		{yearsAgoRE, -1, 0, 0},
+		{zhYearsAgoRE, -1, 0, 0},
+	} {
+		matches := unit.re.FindStringSubmatch(s)
+		if len(matches) != 2 {
+			continue
+		}
+		count := parseRelativeCount(matches[1])
+		if count <= 0 {
+			continue
+		}
+		return ago(unit.years*count, unit.months*count, unit.days*count)
 	}
 
 	return ""
+}
+
+// parseRelativeCount reads the quantity out of a relative date, accepting both
+// Arabic numerals and the Chinese numerals up to 99 that Maps occasionally uses
+// ("一年前"). It returns 0 when the text is not a count.
+func parseRelativeCount(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+
+	if count, err := strconv.Atoi(s); err == nil {
+		return count
+	}
+
+	// Chinese numerals are positional around 十: 十=10, 十五=15, 五十=50,
+	// 五十三=53. Anything else is left to the caller as "not a count".
+	runes := []rune(s)
+	tensIdx := -1
+	for i, r := range runes {
+		if r == '十' {
+			tensIdx = i
+			break
+		}
+	}
+	if tensIdx < 0 {
+		if len(runes) != 1 {
+			return 0
+		}
+		return cjkDigits[runes[0]]
+	}
+
+	tens := 1
+	if tensIdx > 0 {
+		if tensIdx != 1 {
+			return 0
+		}
+		if tens = cjkDigits[runes[0]]; tens == 0 {
+			return 0
+		}
+	}
+
+	ones := 0
+	if rest := runes[tensIdx+1:]; len(rest) > 0 {
+		if len(rest) != 1 {
+			return 0
+		}
+		if ones = cjkDigits[rest[0]]; ones == 0 {
+			return 0
+		}
+	}
+
+	return tens*10 + ones
 }
 
 // extractPlaceJSON retries up to 3 times to extract the APP_INITIALIZATION_STATE
@@ -735,7 +1127,8 @@ func extractReviewTags(page Page) []ReviewTag {
 	// By this stage the rich page, opening hours, and JSON state have already had
 	// time to hydrate. Keep a short grace period for late review chips, but do not
 	// stall every cold tab or place without review tags for several seconds.
-	if err := page.WaitSelector(`[aria-label="Refine reviews"]`, 500*time.Millisecond); err != nil {
+	if err := page.WaitSelector(reviewTagChipSelector, 500*time.Millisecond); err != nil {
+		logReviewTagCandidates(page)
 		return []ReviewTag{}
 	}
 
@@ -759,26 +1152,69 @@ func extractReviewTags(page Page) []ReviewTag {
 	return tags
 }
 
-// reviewTagsJS extracts review keyword chips from the "Refine reviews" bar.
+// reviewTagChipSelector matches a real review-topic chip in any UI language.
+const reviewTagChipSelector = `button[role="radio"][data-index]`
+
+const reviewTagCandidatesJS = `
+(function() {
+	const chips = Array.from(document.querySelectorAll('button[role="radio"]'));
+	if (chips.length === 0) return '';
+	const parent = chips[0].parentElement;
+	const grandparent = parent ? parent.parentElement : null;
+	return JSON.stringify({
+		chipCount: chips.length,
+		parentLabel: parent ? (parent.getAttribute('aria-label') || '') : '',
+		grandparentLabel: grandparent ? (grandparent.getAttribute('aria-label') || '') : '',
+		chips: chips.slice(0, 4).map(function(chip) {
+			const data = {};
+			for (const attribute of chip.attributes) {
+				if (attribute.name.startsWith('data-')) data[attribute.name] = attribute.value;
+			}
+			return {
+				label: (chip.getAttribute('aria-label') || '').slice(0, 50),
+				text: (chip.textContent || '').trim().slice(0, 30),
+				spans: Array.from(chip.querySelectorAll('span')).slice(0, 4).map(function(span) {
+					return { cls: span.className, text: (span.textContent || '').trim().slice(0, 20) };
+				}),
+				data: data,
+			};
+		}),
+	}).slice(0, 1500);
+})()
+`
+
+func logReviewTagCandidates(page Page) {
+	result, err := page.Evaluate(reviewTagCandidatesJS)
+	if err != nil {
+		return
+	}
+	dump, _ := result.(string)
+	if dump == "" {
+		return
+	}
+	log.Printf("DIAG event=review_tag_candidates dump=%q", truncateDiagnostic(dump, 1500))
+}
+
+// reviewTagsJS extracts review keyword chips from the review-topics bar.
 // Tag name comes from span.uEubGf. Count is extracted from span.bC3Nkc first;
 // if that class is absent (Google Maps layout changes), falls back to finding
 // any span inside the button whose text is a pure integer and differs from the tag name.
+//
+// Chips are selected by data-index rather than through a container matched on
+// aria-label, and the "All reviews" / "View N more" chips are excluded
+// structurally: every label on this bar is translated ("篩選評論",
+// "所有評論"), so the previous English string comparisons returned no tags at
+// all on any non-English UI. Only real topic chips carry data-index; the "All"
+// chip has none, and "View N more" renders its name as "+N".
 const reviewTagsJS = `
 (function() {
-	const container = document.querySelector('[aria-label="Refine reviews"]');
-	if (!container) return [];
-
-	const buttons = container.querySelectorAll('button[role="radio"]');
+	const buttons = document.querySelectorAll('button[role="radio"][data-index]');
 	const tags = [];
 
 	for (const btn of buttons) {
-		const label = btn.getAttribute('aria-label') || '';
-		if (label === 'All reviews') continue;
-		if (/^View \d+ more/.test(label)) continue;
-
 		const nameSpan = btn.querySelector('span.uEubGf');
 		const name = nameSpan ? nameSpan.textContent.trim() : '';
-		if (!name || name === 'All' || /^\+\d+$/.test(name)) continue;
+		if (!name || /^\+\d+$/.test(name)) continue;
 
 		const countSpan = btn.querySelector('span.bC3Nkc');
 		let countRaw = countSpan ? (countSpan.innerText || countSpan.textContent).trim() : null;
@@ -850,27 +1286,6 @@ func clickTargetJS(selector string) string {
 	encoded, _ := json.Marshal(selector)
 	return clickTargetProbeJS + string(encoded) + `)`
 }
-
-const expandReviewTextJS = `
-(function() {
-	const selectors = [
-		'button[aria-label*=" More" i]',
-		'button[aria-label^="More" i]',
-		'button.w8nwRe',
-		'button[jsaction*="pane.review.expandReview"]'
-	];
-
-	for (const sel of selectors) {
-		for (const btn of document.querySelectorAll(sel)) {
-			try {
-				btn.click();
-			} catch (_) {}
-		}
-	}
-
-	return true;
-})()
-`
 
 const scrollReviewsFeedJS = `
 (function() {

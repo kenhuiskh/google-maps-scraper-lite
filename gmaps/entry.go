@@ -503,6 +503,142 @@ func EntryFromJSON(raw []byte, reviewCountOnly ...bool) (entry Entry, err error)
 	return entry, nil
 }
 
+// epochDivisors maps a timestamp's unit to the divisor that converts it to
+// seconds. Ordered widest-unit-first so magnitude alone identifies the unit.
+var epochDivisors = []float64{1e6, 1e3, 1}
+
+// findReviewEpochDate returns the first epoch timestamp nested under node as a
+// [year, month, day] array, or nil. Google stores some reviews' dates as epoch
+// microseconds rather than a Y/M/D triple; those reviews previously produced an
+// empty When because both the fixed paths and the triple search assume the
+// array form.
+//
+// Document order matters: the first plausible value is the review's own
+// creation timestamp, ahead of any later edit or reply timestamp.
+func findReviewEpochDate(node any, depth int) []any {
+	if depth > maxTimestampSearchDepth {
+		return nil
+	}
+
+	switch v := node.(type) {
+	case float64:
+		return epochToDateParts(v)
+	case []any:
+		for _, child := range v {
+			if found := findReviewEpochDate(child, depth+1); found != nil {
+				return found
+			}
+		}
+	}
+
+	return nil
+}
+
+// epochToDateParts converts an epoch value in seconds, milliseconds, or
+// microseconds to [year, month, day], or nil when no unit places it in a
+// plausible range for a review.
+func epochToDateParts(value float64) []any {
+	if value <= 0 || value != math.Trunc(value) {
+		return nil
+	}
+
+	minYear, maxYear := 2000, time.Now().Year()+1
+	for _, divisor := range epochDivisors {
+		seconds := math.Trunc(value / divisor)
+		t := time.Unix(int64(seconds), 0).UTC()
+		if t.Year() >= minYear && t.Year() <= maxYear {
+			return []any{float64(t.Year()), float64(int(t.Month())), float64(t.Day())}
+		}
+	}
+
+	return nil
+}
+
+// logMissingReviewTimestamp reports the large numbers carried by a review whose
+// date could not be read, so an epoch-style timestamp shows up instead of being
+// guessed at.
+func logMissingReviewTimestamp(name string, el []any) {
+	var nums []string
+	var walk func(node any, depth int)
+	walk = func(node any, depth int) {
+		if depth > maxTimestampSearchDepth || len(nums) >= 12 {
+			return
+		}
+		switch v := node.(type) {
+		case float64:
+			if v >= 1e9 {
+				nums = append(nums, strconv.FormatFloat(v, 'f', -1, 64))
+			}
+		case []any:
+			for _, child := range v {
+				walk(child, depth+1)
+			}
+		}
+	}
+	walk(el, 0)
+
+	log.Printf("DIAG event=review_timestamp_missing name=%q big_numbers=%q", name, strings.Join(nums, ","))
+}
+
+// maxTimestampSearchDepth bounds the structural timestamp search. Review
+// elements nest about a dozen levels; beyond that a match is more likely to be
+// an unrelated numeric triple than a date.
+const maxTimestampSearchDepth = 12
+
+// findReviewTimestamp returns the first [year, month, day, ...] array nested
+// anywhere under node, or nil. It exists because Google's review JSON moves the
+// timestamp between structure variants, so a fixed index path silently yields no
+// date rather than failing loudly.
+//
+// Only used as a fallback after the known paths miss, so a mis-identified triple
+// cannot override a date that was already read correctly.
+func findReviewTimestamp(node any, depth int) []any {
+	if depth > maxTimestampSearchDepth {
+		return nil
+	}
+
+	arr, ok := node.([]any)
+	if !ok {
+		return nil
+	}
+
+	if isReviewTimestamp(arr) {
+		return arr
+	}
+
+	for _, child := range arr {
+		if found := findReviewTimestamp(child, depth+1); found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
+// isReviewTimestamp reports whether arr looks like Google's [year, month, day,
+// hour, ...] review timestamp. The year bound is deliberately generous at the
+// top so a clock skew or a future-dated review still parses.
+func isReviewTimestamp(arr []any) bool {
+	if len(arr) < 3 {
+		return false
+	}
+
+	year, ok := arr[0].(float64)
+	if !ok || year < 2000 || year > float64(time.Now().Year()+1) {
+		return false
+	}
+	month, ok := arr[1].(float64)
+	if !ok || month < 1 || month > 12 {
+		return false
+	}
+	day, ok := arr[2].(float64)
+	if !ok || day < 1 || day > 31 {
+		return false
+	}
+
+	return year == math.Trunc(year) && month == math.Trunc(month) && day == math.Trunc(day)
+}
+
 func parseReviews(reviewsI []any) []Review {
 	ans := make([]Review, 0, len(reviewsI))
 
@@ -520,6 +656,17 @@ func parseReviews(reviewsI []any) []Review {
 		time := getNthElementAndCast[[]any](el, 2, 2, 0, 1, 21, 6, 8)
 		if len(time) == 0 {
 			time = getNthElementAndCast[[]any](el, 2, 2, 0, 1, 6, 8)
+		}
+		if len(time) == 0 {
+			// Neither fixed path exists in every structure variant, which left
+			// When empty on reviews that do carry a date. Fall back to locating
+			// the [year, month, day, ...] array by shape.
+			time = findReviewTimestamp(el, 0)
+		}
+		if len(time) == 0 {
+			// A third variant stores the date as an epoch timestamp instead of
+			// a Y/M/D array, with no triple anywhere in the element.
+			time = findReviewEpochDate(el, 0)
 		}
 
 		// Try multiple paths for profile picture
@@ -574,6 +721,10 @@ func parseReviews(reviewsI []any) []Review {
 
 		if review.Name == "" {
 			continue
+		}
+
+		if review.When == "" {
+			logMissingReviewTimestamp(review.Name, el)
 		}
 
 		// Try multiple paths for images

@@ -2,7 +2,9 @@ package gmaps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"reflect"
 	"strings"
@@ -39,7 +41,7 @@ func TestExtractReviewTagsUsesShortHydrationGrace(t *testing.T) {
 	if got := extractReviewTags(page); len(got) != 0 {
 		t.Fatalf("extractReviewTags() = %#v, want empty", got)
 	}
-	if page.waitSelector != `[aria-label="Refine reviews"]` {
+	if page.waitSelector != reviewTagChipSelector {
 		t.Fatalf("selector = %q", page.waitSelector)
 	}
 	if page.waitTimeout != 500*time.Millisecond {
@@ -151,26 +153,22 @@ func TestChoosePlaceLinkFallsBackWhenNoCanonical(t *testing.T) {
 }
 
 func TestScrapeExtraReviewsUsesQualifiedFallbackSelectors(t *testing.T) {
+	// Every open-chain click fails, so the chain is exhausted and the sort chain
+	// is never reached: without an open reviews panel there is nothing to sort.
 	want := []string{
 		`button[aria-label*="review" i][jsaction]`,
 		`button[aria-label*="reviews" i]`,
-		`[role="main"] button[data-tab-index="1"]`,
-		`[role="main"] a[href*="reviews"]`,
-		`button[aria-label*="Sort reviews" i]`,
-		`button[aria-label*="Sort" i]`,
-		`[role="main"] button[data-value="Sort reviews"]`,
-		`button[aria-label*="Newest" i]`,
-		`[role="menuitemradio"][aria-label*="Newest" i]`,
-		`[role="menu"] [role="menuitemradio"][data-index="1"]`,
-		`[role="menu"] [role="menuitemradio"][data-value="2"]`,
+		`[role="main"] [role="tab"][data-tab-index="1"]`,
+		`[role="main"] [role="tab"][data-tab-index="2"]`,
+		`[role="main"] [role="tab"][data-tab-index="3"]`,
 	}
 	clickErrors := make(map[string]error, len(want))
 	for _, selector := range want {
 		clickErrors[selector] = errors.New("selector miss")
 	}
-	page := &clickFirstMatchingTestPage{clickErrors: clickErrors}
+	page := &clickFirstMatchingTestPage{clickErrors: clickErrors, waitSelectorErr: errors.New("no review cards")}
 
-	_ = scrapeExtraReviews(context.Background(), page, &Entry{}, 1)
+	_ = scrapeExtraReviews(context.Background(), page, &Entry{ReviewCount: 50}, 10)
 
 	if !reflect.DeepEqual(page.clicked, want) {
 		t.Fatalf("fallback selectors passed to ClickForce = %#v, want %#v", page.clicked, want)
@@ -182,30 +180,154 @@ func TestScrapeExtraReviewsUsesQualifiedFallbackSelectors(t *testing.T) {
 	}
 }
 
-type clickFirstMatchingTestPage struct {
-	clickErrors   map[string]error
-	evaluateErr   error
-	evaluateCalls int
-	clicked       []string
-	sleeps        []time.Duration
-	detailAtClick []string
-	onClick       func(string)
+func TestScrapeExtraReviewsUsesQualifiedSortSelectors(t *testing.T) {
+	// No sort label resolves, so only the English attribute fallbacks are tried.
+	want := []string{
+		`button[data-value="Sort"]`,
+		`button[aria-label*="Sort" i]`,
+	}
+	clickErrors := make(map[string]error, len(want))
+	for _, selector := range want {
+		clickErrors[selector] = errors.New("selector miss")
+	}
+	// WaitSelector succeeds, so the first open selector verifies and the chain
+	// moves on to the sort controls.
+	page := &clickFirstMatchingTestPage{clickErrors: clickErrors}
+
+	_ = scrapeExtraReviews(context.Background(), page, &Entry{ReviewCount: 50}, 10)
+
+	if len(page.clicked) < 1+len(want) {
+		t.Fatalf("clicked selectors = %#v, want an open click followed by %#v", page.clicked, want)
+	}
+	if got := page.clicked[1 : 1+len(want)]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sort selectors passed to ClickForce = %#v, want %#v", got, want)
+	}
 }
 
-func (p *clickFirstMatchingTestPage) Goto(string) (int, error)                 { return 200, nil }
-func (p *clickFirstMatchingTestPage) Reload() (int, error)                     { return 200, nil }
-func (p *clickFirstMatchingTestPage) Content() (string, error)                 { return "", nil }
-func (p *clickFirstMatchingTestPage) URL() string                              { return "" }
-func (p *clickFirstMatchingTestPage) Close() error                             { return nil }
-func (p *clickFirstMatchingTestPage) IsClosed() bool                           { return false }
-func (p *clickFirstMatchingTestPage) WaitSelector(string, time.Duration) error { return nil }
-func (p *clickFirstMatchingTestPage) Sleep(d time.Duration)                    { p.sleeps = append(p.sleeps, d) }
-func (p *clickFirstMatchingTestPage) Evaluate(string) (any, error) {
+func TestScrapeExtraReviewsSkipsWhenNoReviewsRemain(t *testing.T) {
+	for name, entry := range map[string]*Entry{
+		"no reviews at all":  {ReviewCount: 0},
+		"target already met": {ReviewCount: 500, UserReviews: make([]Review, 10)},
+		"all reviews parsed": {ReviewCount: 3, UserReviews: make([]Review, 3)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			page := &clickFirstMatchingTestPage{}
+			if err := scrapeExtraReviews(context.Background(), page, entry, 10); err != nil {
+				t.Fatalf("scrapeExtraReviews() error: %v", err)
+			}
+			if len(page.clicked) != 0 {
+				t.Fatalf("clicked selectors = %#v, want no clicks", page.clicked)
+			}
+		})
+	}
+}
+
+// The Overview pane already renders review cards, so a click that reveals no
+// sort control and no additional cards has not opened the reviews panel — the
+// Menu-tab mis-click that ended the chain early in the captured diagnostics.
+func TestReviewsPanelOpenRejectsUnchangedOverviewPane(t *testing.T) {
+	page := &clickFirstMatchingTestPage{probeCounts: map[string]int{
+		sortControlSelector: 0,
+		reviewCardSelector:  3,
+	}}
+
+	if reviewsPanelOpen(page, 3) {
+		t.Fatal("reviewsPanelOpen() = true for an unchanged Overview pane, want false")
+	}
+}
+
+func TestReviewsPanelOpenAcceptsSortControlAndCardGrowth(t *testing.T) {
+	sortPresent := &clickFirstMatchingTestPage{probeCounts: map[string]int{
+		sortControlSelector: 1,
+		reviewCardSelector:  3,
+	}}
+	if !reviewsPanelOpen(sortPresent, 3) {
+		t.Fatal("reviewsPanelOpen() = false with a sort control present, want true")
+	}
+
+	// Places with too few reviews for Maps to offer sorting still open a panel.
+	cardsGrew := &clickFirstMatchingTestPage{probeCounts: map[string]int{
+		sortControlSelector: 0,
+		reviewCardSelector:  9,
+	}}
+	if !reviewsPanelOpen(cardsGrew, 3) {
+		t.Fatal("reviewsPanelOpen() = false after card growth, want true")
+	}
+}
+
+func TestClickFirstMatchingSkipsSelectorsThatMatchNothing(t *testing.T) {
+	page := &clickFirstMatchingTestPage{probeCounts: map[string]int{"first": 0, "second": 0}}
+
+	got := clickFirstMatching(context.Background(), page, "open", 5, []string{"first", "second", "third"}, time.Millisecond, time.Millisecond, 0, nil)
+	if got != "third" {
+		t.Fatalf("clickFirstMatching() = %q, want third", got)
+	}
+	if !reflect.DeepEqual(page.clicked, []string{"third"}) {
+		t.Fatalf("clicked selectors = %#v, want only third", page.clicked)
+	}
+}
+
+func TestClickFirstMatchingRejectsUnverifiedClick(t *testing.T) {
+	page := &clickFirstMatchingTestPage{}
+	verified := map[string]bool{"third": true}
+	var checked []string
+
+	got := clickFirstMatching(context.Background(), page, "open", 5, []string{"first", "second", "third"}, time.Millisecond, time.Millisecond, 0, func() bool {
+		selector := page.clicked[len(page.clicked)-1]
+		checked = append(checked, selector)
+		return verified[selector]
+	})
+	if got != "third" {
+		t.Fatalf("clickFirstMatching() = %q, want third", got)
+	}
+	if !reflect.DeepEqual(checked, []string{"first", "second", "third"}) {
+		t.Fatalf("verified selectors = %#v, want all three", checked)
+	}
+}
+
+type clickFirstMatchingTestPage struct {
+	clickErrors     map[string]error
+	probeCounts     map[string]int
+	evaluateErr     error
+	evaluateCalls   int
+	waitSelectorErr error
+	clicked         []string
+	sleeps          []time.Duration
+	detailAtClick   []string
+	onClick         func(string)
+	probedSelector  string
+	sortLabel       string
+}
+
+func (p *clickFirstMatchingTestPage) Goto(string) (int, error) { return 200, nil }
+func (p *clickFirstMatchingTestPage) Reload() (int, error)     { return 200, nil }
+func (p *clickFirstMatchingTestPage) Content() (string, error) { return "", nil }
+func (p *clickFirstMatchingTestPage) URL() string              { return "" }
+func (p *clickFirstMatchingTestPage) Close() error             { return nil }
+func (p *clickFirstMatchingTestPage) IsClosed() bool           { return false }
+func (p *clickFirstMatchingTestPage) WaitSelector(string, time.Duration) error {
+	return p.waitSelectorErr
+}
+func (p *clickFirstMatchingTestPage) Sleep(d time.Duration) { p.sleeps = append(p.sleeps, d) }
+func (p *clickFirstMatchingTestPage) Evaluate(js string) (any, error) {
 	p.evaluateCalls++
 	if p.evaluateErr != nil {
 		return nil, p.evaluateErr
 	}
-	return map[string]any{"count": float64(1)}, nil
+	if strings.Contains(js, "data-gms-sort") {
+		return p.sortLabel, nil
+	}
+	// The probe embeds its selector as a JSON string literal; recover it so the
+	// fake can answer per-selector match counts.
+	count := 1
+	for selector, want := range p.probeCounts {
+		if encoded, err := json.Marshal(selector); err == nil && strings.Contains(js, string(encoded)) {
+			p.probedSelector = selector
+			count = want
+			break
+		}
+	}
+	return map[string]any{"count": float64(count)}, nil
 }
 func (p *clickFirstMatchingTestPage) ClickForce(selector string, _, _ time.Duration) error {
 	p.clicked = append(p.clicked, selector)
@@ -232,7 +354,7 @@ func TestClickFirstMatchingAttributesSelectorsAndStageDetails(t *testing.T) {
 	page.onClick = func(string) {
 		page.detailAtClick = append(page.detailAtClick, trace.snapshot().Detail)
 	}
-	got := clickFirstMatching(ctx, page, "open", 5, []string{"first", "second", "third"}, time.Millisecond, time.Millisecond, 0)
+	got := clickFirstMatching(ctx, page, "open", 5, []string{"first", "second", "third"}, time.Millisecond, time.Millisecond, 0, nil)
 	if got != "third" {
 		t.Fatalf("clickFirstMatching() = %q, want third", got)
 	}
@@ -258,7 +380,7 @@ func TestClickFirstMatchingContinuesWhenClickTargetProbeFails(t *testing.T) {
 			"first": errors.New("not attached"),
 		},
 	}
-	got := clickFirstMatching(context.Background(), page, "open", 5, []string{"first", "second"}, time.Millisecond, time.Millisecond, 0)
+	got := clickFirstMatching(context.Background(), page, "open", 5, []string{"first", "second"}, time.Millisecond, time.Millisecond, 0, nil)
 	if got != "second" {
 		t.Fatalf("clickFirstMatching() = %q, want second", got)
 	}
@@ -282,7 +404,7 @@ func TestClickFirstMatchingEmitsHardTimeoutDiagnostic(t *testing.T) {
 		evaluateErr: errors.New("probe unavailable"),
 	}
 
-	if got := clickFirstMatching(ctx, page, "open", 5, []string{"review-tab"}, time.Millisecond, time.Millisecond, 0); got != "" {
+	if got := clickFirstMatching(ctx, page, "open", 5, []string{"review-tab"}, time.Millisecond, time.Millisecond, 0, nil); got != "" {
 		t.Fatalf("clickFirstMatching() = %q, want no match", got)
 	}
 	logText := logs.String()
@@ -297,5 +419,94 @@ func TestClickFirstMatchingEmitsHardTimeoutDiagnostic(t *testing.T) {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("hard-timeout diagnostic missing %q:\n%s", want, logText)
 		}
+	}
+}
+
+func TestRelativeToAbsoluteDateParsesChineseReviewDates(t *testing.T) {
+	now := time.Now()
+	fmtDate := func(t time.Time) string {
+		return fmt.Sprintf("%d-%d-%d", t.Year(), int(t.Month()), t.Day())
+	}
+
+	tests := map[string]string{
+		// Traditional (zh-TW) and simplified (zh-CN) both reach this parser
+		// because either code can be passed to -lang.
+		"今天":    fmtDate(now),
+		"剛剛":    fmtDate(now),
+		"昨天":    fmtDate(now.AddDate(0, 0, -1)),
+		"3 天前":  fmtDate(now.AddDate(0, 0, -3)),
+		"3天前":   fmtDate(now.AddDate(0, 0, -3)),
+		"2 週前":  fmtDate(now.AddDate(0, 0, -14)),
+		"2 星期前": fmtDate(now.AddDate(0, 0, -14)),
+		"2 周前":  fmtDate(now.AddDate(0, 0, -14)),
+		"5 個月前": fmtDate(now.AddDate(0, -5, 0)),
+		"5 个月前": fmtDate(now.AddDate(0, -5, 0)),
+		"1 年前":  fmtDate(now.AddDate(-1, 0, 0)),
+		"一年前":   fmtDate(now.AddDate(-1, 0, 0)),
+		"兩個月前":  fmtDate(now.AddDate(0, -2, 0)),
+		"十天前":   fmtDate(now.AddDate(0, 0, -10)),
+		// Sub-day units collapse to today; the output granularity is a day.
+		"1 小時前":         fmtDate(now),
+		"30 分鐘前":        fmtDate(now),
+		"an hour ago":   fmtDate(now),
+		"5 minutes ago": fmtDate(now),
+		// Edited reviews prefix the relative date.
+		"上次編輯：5 天前":           fmtDate(now.AddDate(0, 0, -5)),
+		"Edited 2 months ago": fmtDate(now.AddDate(0, -2, 0)),
+		// English must keep working unchanged.
+		"3 months ago": fmtDate(now.AddDate(0, -3, 0)),
+		"a year ago":   fmtDate(now.AddDate(-1, 0, 0)),
+	}
+
+	for in, want := range tests {
+		if got := relativeToAbsoluteDate(in); got != want {
+			t.Errorf("relativeToAbsoluteDate(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	for _, in := range []string{"", "not a date", "2025-12-08", "個月前"} {
+		if got := relativeToAbsoluteDate(in); got != "" {
+			t.Errorf("relativeToAbsoluteDate(%q) = %q, want empty", in, got)
+		}
+	}
+}
+
+func TestParseRelativeCount(t *testing.T) {
+	tests := map[string]int{
+		"7": 7, "12": 12, "一": 1, "兩": 2, "两": 2, "九": 9,
+		"十": 10, "十五": 15, "五十": 50, "五十三": 53,
+		"": 0, "abc": 0, "一二三": 0, "十十": 0,
+	}
+	for in, want := range tests {
+		if got := parseRelativeCount(in); got != want {
+			t.Errorf("parseRelativeCount(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// data-value carries the translated label ("排序" on zh-tw), so the sort button
+// is resolved in JS and stamped instead; the tagged selector must lead.
+func TestScrapeExtraReviewsPrefersResolvedSortControl(t *testing.T) {
+	page := &clickFirstMatchingTestPage{
+		sortLabel:   "排序評論",
+		clickErrors: map[string]error{sortControlTagSelector: errors.New("selector miss")},
+	}
+
+	_ = scrapeExtraReviews(context.Background(), page, &Entry{ReviewCount: 50}, 10)
+
+	if len(page.clicked) < 2 {
+		t.Fatalf("clicked selectors = %#v, want an open click then a sort click", page.clicked)
+	}
+	if page.clicked[1] != sortControlTagSelector {
+		t.Fatalf("first sort selector = %q, want %q", page.clicked[1], sortControlTagSelector)
+	}
+}
+
+func TestResolveSortControlReportsMissingControl(t *testing.T) {
+	if resolveSortControl(context.Background(), &clickFirstMatchingTestPage{sortLabel: ""}) {
+		t.Fatal("resolveSortControl() = true with no control on the page, want false")
+	}
+	if !resolveSortControl(context.Background(), &clickFirstMatchingTestPage{sortLabel: "Sort reviews"}) {
+		t.Fatal("resolveSortControl() = false with a control present, want true")
 	}
 }
