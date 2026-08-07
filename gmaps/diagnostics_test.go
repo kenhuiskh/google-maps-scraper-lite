@@ -60,20 +60,22 @@ func TestDiagnosticCounterForAttempt(t *testing.T) {
 
 func TestClassifyPageMetadata(t *testing.T) {
 	tests := []struct {
-		name, url, content, want string
-		status                   int
+		name, url, want string
+		status          int
+		sig             pageSignals
 	}{
 		{name: "rate limited", status: 429, want: "rate_limited"},
 		{name: "sorry", url: "https://google.com/sorry/index", want: "sorry"},
-		{name: "consent", content: "before you continue to google", want: "consent"},
-		{name: "captcha", content: "g-recaptcha", want: "captcha"},
-		{name: "traffic", content: "unusual traffic from your network", want: "unusual_traffic"},
-		{name: "maps", url: "https://google.com/maps/place/test", want: "maps"},
+		{name: "consent", sig: pageSignals{Consent: true}, want: "consent"},
+		{name: "captcha", sig: pageSignals{Captcha: true}, want: "captcha"},
+		{name: "traffic", sig: pageSignals{Unusual: true}, want: "unusual_traffic"},
+		{name: "maps by url", url: "https://google.com/maps/place/test", want: "maps"},
+		{name: "maps by app state", url: "https://example.test", sig: pageSignals{Maps: true}, want: "maps"},
 		{name: "unknown", url: "https://example.test", want: "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := classifyPageMetadata(tt.url, tt.status, tt.content); got != tt.want {
+			if got := classifyPageMetadata(tt.url, tt.status, tt.sig); got != tt.want {
 				t.Fatalf("classifyPageMetadata() = %q, want %q", got, tt.want)
 			}
 		})

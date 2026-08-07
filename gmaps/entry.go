@@ -107,24 +107,7 @@ type Entry struct {
 }
 
 func (e *Entry) haversineDistance(lat, lon float64) float64 {
-	const R = 6371e3 // earth radius in meters
-
-	clat := lat * math.Pi / 180
-	clon := lon * math.Pi / 180
-
-	elat := e.Latitude * math.Pi / 180
-	elon := e.Longitude * math.Pi / 180
-
-	dlat := elat - clat
-	dlon := elon - clon
-
-	a := math.Sin(dlat/2)*math.Sin(dlat/2) +
-		math.Cos(clat)*math.Cos(elat)*
-			math.Sin(dlon/2)*math.Sin(dlon/2)
-
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-
-	return R * c
+	return haversineMeters(e.Latitude, e.Longitude, lat, lon)
 }
 
 func (e *Entry) isWithinRadius(lat, lon, radius float64) bool {

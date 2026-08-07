@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1403,5 +1404,106 @@ func TestScraperDefaultUsesBrowserNotHTTP(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Entry.PlaceID != "browser:u1" {
 		t.Fatalf("results = %#v, want single entry from browser stub", results)
+	}
+}
+
+// Coordinates come straight out of the feed URL, so a place outside the radius
+// must never reach the queue — scraping it only to discard it on distance was the
+// single largest waste on a radius-scoped run.
+func TestCollectPlaceURLsFiltersOutsideRadiusBeforeScraping(t *testing.T) {
+	const (
+		nearURL      = "https://www.google.com/maps/place/Fahrenheit+Coffee/data=!4m7!3m6!1s0x1:0x2!8m2!3d43.6469915!4d-79.4006438" // 1.56km from center
+		farURL       = "https://www.google.com/maps/place/Finnish+Place/data=!4m7!3m6!1s0x3:0x4!8m2!3d43.8142606!4d-79.4247181"     // 18.2km from center
+		coordlessURL = "https://www.google.com/maps/place/?q=place_id:ChIJ123"
+	)
+
+	s := Scraper{
+		Pool:   fakePagePool{},
+		Config: Config{Geo: "43.6532,-79.3832,14z", Radius: 5000},
+		ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+			return []string{nearURL, farURL, coordlessURL}, nil
+		},
+	}
+
+	collected, err := s.collectPlaceURLs(context.Background(), []string{"coffee"}, FeedOptions{LangCode: "en"}, "", []string{"en"})
+	if err != nil {
+		t.Fatalf("collectPlaceURLs: %v", err)
+	}
+
+	if collected.RadiusFilteredURLs != 1 {
+		t.Errorf("RadiusFilteredURLs = %d, want 1", collected.RadiusFilteredURLs)
+	}
+
+	got := make([]string, 0, len(collected.URLs))
+	for _, u := range collected.URLs {
+		got = append(got, u.URL)
+	}
+	// The coordless URL is kept: an unmeasurable place must still be scraped so the
+	// post-scrape filter can judge it, rather than be dropped on a guess.
+	want := []string{nearURL, coordlessURL}
+	if !slices.Equal(got, want) {
+		t.Errorf("queued urls = %#v, want %#v", got, want)
+	}
+}
+
+func TestCollectPlaceURLsKeepsAllURLsWithoutRadius(t *testing.T) {
+	const farURL = "https://www.google.com/maps/place/Finnish+Place/data=!4m7!3m6!1s0x3:0x4!8m2!3d43.8142606!4d-79.4247181"
+
+	for _, tt := range []struct {
+		name   string
+		config Config
+	}{
+		{name: "no radius", config: Config{Geo: "43.6532,-79.3832,14z"}},
+		{name: "no geo", config: Config{Radius: 5000}},
+		{name: "unparseable geo", config: Config{Geo: "not-a-coordinate", Radius: 5000}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := Scraper{
+				Pool:   fakePagePool{},
+				Config: tt.config,
+				ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+					return []string{farURL}, nil
+				},
+			}
+
+			collected, err := s.collectPlaceURLs(context.Background(), []string{"coffee"}, FeedOptions{LangCode: "en"}, "", []string{"en"})
+			if err != nil {
+				t.Fatalf("collectPlaceURLs: %v", err)
+			}
+			if collected.RadiusFilteredURLs != 0 {
+				t.Errorf("RadiusFilteredURLs = %d, want 0", collected.RadiusFilteredURLs)
+			}
+			if len(collected.URLs) != 1 {
+				t.Errorf("queued %d urls, want 1", len(collected.URLs))
+			}
+		})
+	}
+}
+
+// Limit caps places that will actually be kept, so it has to be applied to the
+// post-radius list; otherwise a run could fill its budget with places the radius
+// filter is about to throw away.
+func TestCollectPlaceURLsAppliesLimitAfterRadiusFilter(t *testing.T) {
+	near1 := "https://www.google.com/maps/place/A/data=!8m2!3d43.6469915!4d-79.4006438"
+	far := "https://www.google.com/maps/place/B/data=!8m2!3d43.8142606!4d-79.4247181"
+	near2 := "https://www.google.com/maps/place/C/data=!8m2!3d43.6532!4d-79.3832"
+
+	s := Scraper{
+		Pool:   fakePagePool{},
+		Config: Config{Geo: "43.6532,-79.3832,14z", Radius: 5000, Limit: 2},
+		ScrapeFeed: func(context.Context, Page, string, FeedOptions) ([]string, error) {
+			return []string{near1, far, near2}, nil
+		},
+	}
+
+	collected, err := s.collectPlaceURLs(context.Background(), []string{"coffee"}, FeedOptions{LangCode: "en"}, "", []string{"en"})
+	if err != nil {
+		t.Fatalf("collectPlaceURLs: %v", err)
+	}
+	if len(collected.URLs) != 2 {
+		t.Fatalf("queued %d urls, want 2", len(collected.URLs))
+	}
+	if collected.URLs[0].URL != near1 || collected.URLs[1].URL != near2 {
+		t.Errorf("queued %q and %q, want the two in-radius places", collected.URLs[0].URL, collected.URLs[1].URL)
 	}
 }

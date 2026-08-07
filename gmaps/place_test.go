@@ -160,7 +160,6 @@ func TestScrapeExtraReviewsUsesQualifiedFallbackSelectors(t *testing.T) {
 		`button[aria-label*="reviews" i]`,
 		`[role="main"] [role="tab"][data-tab-index="1"]`,
 		`[role="main"] [role="tab"][data-tab-index="2"]`,
-		`[role="main"] [role="tab"][data-tab-index="3"]`,
 	}
 	clickErrors := make(map[string]error, len(want))
 	for _, selector := range want {
@@ -508,5 +507,245 @@ func TestResolveSortControlReportsMissingControl(t *testing.T) {
 	}
 	if !resolveSortControl(context.Background(), &clickFirstMatchingTestPage{sortLabel: "Sort reviews"}) {
 		t.Fatal("resolveSortControl() = false with a control present, want true")
+	}
+}
+
+// botCheckTestPage records whether the bot check reached for the page's full
+// HTML. Content() is the expensive path this probe exists to avoid, so the tests
+// assert it is never called rather than only checking the verdict.
+type botCheckTestPage struct {
+	url          string
+	signals      any
+	evaluateErr  error
+	contentCalls int
+	observed     []string
+	observedSize int
+	observedName string
+}
+
+func (p *botCheckTestPage) Goto(string) (int, error) { return 200, nil }
+func (p *botCheckTestPage) Reload() (int, error)     { return 200, nil }
+func (p *botCheckTestPage) Content() (string, error) {
+	p.contentCalls++
+	return "", nil
+}
+
+func (p *botCheckTestPage) Evaluate(string) (any, error) {
+	if p.evaluateErr != nil {
+		return nil, p.evaluateErr
+	}
+	return p.signals, nil
+}
+func (p *botCheckTestPage) ClickForce(string, time.Duration, time.Duration) error { return nil }
+func (p *botCheckTestPage) URL() string                                           { return p.url }
+func (p *botCheckTestPage) Sleep(time.Duration)                                   {}
+func (p *botCheckTestPage) Close() error                                          { return nil }
+func (p *botCheckTestPage) IsClosed() bool                                        { return false }
+func (p *botCheckTestPage) WaitSelector(string, time.Duration) error              { return nil }
+func (p *botCheckTestPage) ObservePageDiagnostics(class string, contentBytes int, title string) {
+	p.observed = append(p.observed, class)
+	p.observedSize = contentBytes
+	p.observedName = title
+}
+
+var _ PageDiagnosticObserver = (*botCheckTestPage)(nil)
+
+func signalsMap(sig pageSignals) map[string]any {
+	return map[string]any{
+		"title":   sig.Title,
+		"bytes":   float64(sig.Bytes),
+		"unusual": sig.Unusual,
+		"captcha": sig.Captcha,
+		"consent": sig.Consent,
+		"maps":    sig.Maps,
+	}
+}
+
+func TestDetectBotBlockUsesBoundedProbeNotPageContent(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		status    int
+		signals   any
+		wantBlock bool
+		wantClass string
+	}{
+		{
+			name:      "healthy maps page",
+			url:       "https://www.google.com/maps/place/Coffee",
+			status:    200,
+			signals:   signalsMap(pageSignals{Title: "Coffee - Google Maps", Bytes: 2_500_000, Maps: true}),
+			wantClass: "maps",
+		},
+		{
+			name:      "unusual traffic",
+			url:       "https://www.google.com/maps/place/Coffee",
+			status:    200,
+			signals:   signalsMap(pageSignals{Title: "Error", Bytes: 4096, Unusual: true}),
+			wantBlock: true,
+			wantClass: "unusual_traffic",
+		},
+		{
+			name:      "captcha",
+			url:       "https://example.test/challenge",
+			status:    200,
+			signals:   signalsMap(pageSignals{Title: "Verify", Bytes: 8192, Captcha: true}),
+			wantClass: "captcha",
+		},
+		{
+			name:      "consent wall",
+			url:       "https://example.test/interstitial",
+			status:    200,
+			signals:   signalsMap(pageSignals{Title: "Before you continue", Bytes: 8192, Consent: true}),
+			wantClass: "consent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := &botCheckTestPage{url: tt.url, signals: tt.signals}
+
+			err := detectBotBlock(page, tt.status)
+
+			if gotBlock := errors.Is(err, ErrBotBlocked); gotBlock != tt.wantBlock {
+				t.Fatalf("detectBotBlock() blocked = %v (err %v), want %v", gotBlock, err, tt.wantBlock)
+			}
+			if page.contentCalls != 0 {
+				t.Errorf("page.Content() called %d times, want 0", page.contentCalls)
+			}
+			if len(page.observed) != 1 || page.observed[0] != tt.wantClass {
+				t.Errorf("observed classes = %#v, want [%s]", page.observed, tt.wantClass)
+			}
+		})
+	}
+}
+
+// The title reaches diagnostics from document.title, so no <title> regex over the
+// full HTML is needed; whitespace is still collapsed and entities unescaped.
+func TestDetectBotBlockReportsTitleAndSizeFromProbe(t *testing.T) {
+	page := &botCheckTestPage{
+		url:     "https://www.google.com/maps/place/Coffee",
+		signals: signalsMap(pageSignals{Title: "  Ben &amp; Jerry’s\n  - Google Maps ", Bytes: 1_234_567, Maps: true}),
+	}
+
+	if err := detectBotBlock(page, 200); err != nil {
+		t.Fatalf("detectBotBlock() = %v, want nil", err)
+	}
+	if want := "Ben & Jerry’s - Google Maps"; page.observedName != want {
+		t.Errorf("title = %q, want %q", page.observedName, want)
+	}
+	if page.observedSize != 1_234_567 {
+		t.Errorf("content bytes = %d, want 1234567", page.observedSize)
+	}
+}
+
+// URL and status alone decide the sorry/consent/429 cases, so those must not pay
+// for a probe at all.
+func TestDetectBotBlockSkipsProbeForURLAndStatusSignals(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		status    int
+		wantClass string
+	}{
+		{name: "sorry", url: "https://www.google.com/sorry/index", status: 200, wantClass: "sorry"},
+		{name: "consent redirect", url: "https://consent.google.com/ml", status: 200, wantClass: "consent"},
+		{name: "rate limited", url: "https://www.google.com/maps/place/Coffee", status: 429, wantClass: "rate_limited"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := &botCheckTestPage{
+				url:         tt.url,
+				evaluateErr: errors.New("probe must not run"),
+			}
+
+			err := detectBotBlock(page, tt.status)
+
+			if !errors.Is(err, ErrBotBlocked) {
+				t.Fatalf("detectBotBlock() = %v, want ErrBotBlocked", err)
+			}
+			if page.contentCalls != 0 {
+				t.Errorf("page.Content() called %d times, want 0", page.contentCalls)
+			}
+			if len(page.observed) != 1 || page.observed[0] != tt.wantClass {
+				t.Errorf("observed classes = %#v, want [%s]", page.observed, tt.wantClass)
+			}
+		})
+	}
+}
+
+// A probe that cannot answer must not be read as "no bot block detected" data:
+// the page is still reported, just without signals.
+func TestDetectBotBlockToleratesFailedProbe(t *testing.T) {
+	page := &botCheckTestPage{
+		url:         "https://www.google.com/maps/place/Coffee",
+		evaluateErr: errors.New("Page crashed while evaluating"),
+	}
+
+	if err := detectBotBlock(page, 200); err != nil {
+		t.Fatalf("detectBotBlock() = %v, want nil", err)
+	}
+	if len(page.observed) != 1 || page.observed[0] != "maps" {
+		t.Errorf("observed classes = %#v, want [maps]", page.observed)
+	}
+	if page.observedSize != 0 {
+		t.Errorf("content bytes = %d, want 0", page.observedSize)
+	}
+}
+
+// ClickForce abandons its click goroutine at the hard ceiling while that
+// goroutine still holds the page, so every later selector inherits a wedged CDP
+// call. In the corpus this was near-total: 51 of 56 places that hard-timed-out
+// then timed out on every remaining selector, at another full ceiling each.
+func TestClickFirstMatchingStopsChainAfterHardTimeout(t *testing.T) {
+	trace := &claimTrace{worker: 4, urlID: 31, attempt: 2, lang: "en", url: "https://example.test/place", started: time.Now()}
+	ctx := withPlaceTrace(context.Background(), trace)
+	page := &clickFirstMatchingTestPage{
+		clickErrors: map[string]error{
+			"first": &ClickHardTimeoutError{Selector: "first", Ceiling: 4800 * time.Millisecond},
+		},
+	}
+
+	got := clickFirstMatching(ctx, page, "open", 5, []string{"first", "second", "third"}, time.Millisecond, time.Millisecond, 0, nil)
+
+	if got != "" {
+		t.Fatalf("clickFirstMatching() = %q, want no match", got)
+	}
+	if len(page.clicked) != 1 || page.clicked[0] != "first" {
+		t.Fatalf("clicked = %#v, want only the wedged selector", page.clicked)
+	}
+	if detail := trace.snapshot().Detail; !strings.Contains(detail, "wedged=first") {
+		t.Errorf("stage detail = %q, want it to record the wedged selector", detail)
+	}
+}
+
+// A plain driver error is a selector miss, not a wedged page, so the chain must
+// still fall through — and must say so, since these were previously the one
+// outcome that left no trace in the logs at all.
+func TestClickFirstMatchingContinuesAndLogsOnNonTimeoutClickError(t *testing.T) {
+	logs := captureLog(t)
+	trace := &claimTrace{worker: 1, urlID: 9, attempt: 1, lang: "zh-tw", url: "https://example.test/place", started: time.Now()}
+	ctx := withPlaceTrace(context.Background(), trace)
+	page := &clickFirstMatchingTestPage{
+		clickErrors: map[string]error{"first": errors.New("element not interactable")},
+	}
+
+	got := clickFirstMatching(ctx, page, "open", 5, []string{"first", "second"}, time.Millisecond, time.Millisecond, 0, nil)
+
+	if got != "second" {
+		t.Fatalf("clickFirstMatching() = %q, want second", got)
+	}
+	logText := logs.String()
+	for _, want := range []string{
+		"DIAG event=click_error",
+		`selector="first"`,
+		`error="element not interactable"`,
+		"stage=place.extra_reviews",
+		`worker=1 url_id=9 attempt=1 lang="zh-tw"`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("click-error diagnostic missing %q:\n%s", want, logText)
+		}
 	}
 }

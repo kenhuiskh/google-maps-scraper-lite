@@ -27,7 +27,6 @@ var (
 	yearsAgoRE  = regexp.MustCompile(`(?i)^(\d+)\s+years?\s+ago$`)
 	aYearAgoRE  = regexp.MustCompile(`(?i)^a\s+year\s+ago$`)
 	todayAgoRE  = regexp.MustCompile(`(?i)^(just now|today)$`)
-	pageTitleRE = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
 	// Reviews that have been edited carry a prefix in front of the relative date
 	// ("Edited 5 days ago", "上次編輯：5 天前", "已编辑：5 天前"). Stripping it
@@ -162,62 +161,118 @@ func ScrapePlace(ctx context.Context, page Page, placeURL string, opts PlaceOpti
 	return &entry, nil
 }
 
+// pageSignals is the bounded summary pageSignalsJS returns in place of the
+// page's full HTML.
+type pageSignals struct {
+	Title   string `json:"title"`
+	Bytes   int    `json:"bytes"`
+	Unusual bool   `json:"unusual"`
+	Captcha bool   `json:"captcha"`
+	Consent bool   `json:"consent"`
+	Maps    bool   `json:"maps"`
+}
+
+// pageSignalsJS answers the bot-block questions inside the browser, where the DOM
+// already lives, and returns a few hundred bytes.
+//
+// The obvious alternative — page.Content() — serializes the whole Maps DOM (MBs)
+// across CDP so Go can lower-case a second copy of it and run six substring scans
+// that all fail. The pages this looks for (sorry/captcha/consent walls) are a few
+// KB; only the healthy pages are expensive, so the cost was inverted.
+//
+// The text window is the visible text, not the raw HTML: the interstitials render
+// their wording as body copy, and the URL check in detectBotBlock is the primary
+// signal for them regardless.
+const pageSignalsJS = `
+(function() {
+	const title = document.title || '';
+	const text = (title + ' ' + (document.body ? document.body.innerText : ''))
+		.slice(0, 4000)
+		.toLowerCase();
+
+	return {
+		title: title,
+		bytes: document.documentElement ? document.documentElement.outerHTML.length : 0,
+		unusual: text.includes('unusual traffic') || text.includes('automated queries'),
+		captcha: text.includes('recaptcha') || text.includes('captcha'),
+		consent: text.includes('before you continue'),
+		maps: !!window.APP_INITIALIZATION_STATE,
+	};
+})()
+`
+
+// readPageSignals evaluates pageSignalsJS. ok is false when the probe itself
+// failed, so callers can tell "no signals" from "no answer".
+func readPageSignals(page Page) (sig pageSignals, ok bool) {
+	result, err := page.Evaluate(pageSignalsJS)
+	if err != nil {
+		return pageSignals{}, false
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return pageSignals{}, false
+	}
+
+	if err := json.Unmarshal(raw, &sig); err != nil {
+		return pageSignals{}, false
+	}
+
+	return sig, true
+}
+
 // detectBotBlock returns a non-nil error wrapping ErrBotBlocked when the page
 // shows a Google captcha/consent/sorry wall, a 429 response, or "unusual
 // traffic" / "automated queries" text. Returns nil otherwise.
 func detectBotBlock(page Page, status int) error {
 	curURL := page.URL()
-	pageClass := classifyPageMetadata(curURL, status, "")
+	pageClass := classifyPageMetadata(curURL, status, pageSignals{})
 	for _, marker := range []string{"/sorry/", "consent.google", "ipv4.google.com/sorry"} {
 		if strings.Contains(curURL, marker) {
-			observePageMetadata(page, pageClass, "", "")
+			observePageMetadata(page, pageClass, 0, "")
 			return fmt.Errorf("bot block: url %q: %w", curURL, ErrBotBlocked)
 		}
 	}
 	if status == 429 {
-		observePageMetadata(page, "rate_limited", "", "")
+		observePageMetadata(page, "rate_limited", 0, "")
 		return fmt.Errorf("bot block: HTTP 429: %w", ErrBotBlocked)
 	}
-	if content, err := page.Content(); err == nil {
-		lc := strings.ToLower(content)
-		pageClass = classifyPageMetadata(curURL, status, lc)
-		title := ""
-		if match := pageTitleRE.FindStringSubmatch(content); len(match) == 2 {
-			title = strings.Join(strings.Fields(html.UnescapeString(match[1])), " ")
-		}
-		observePageMetadata(page, pageClass, content, title)
-		if strings.Contains(lc, "unusual traffic") || strings.Contains(lc, "automated queries") {
+	if sig, ok := readPageSignals(page); ok {
+		pageClass = classifyPageMetadata(curURL, status, sig)
+		title := strings.Join(strings.Fields(html.UnescapeString(sig.Title)), " ")
+		observePageMetadata(page, pageClass, sig.Bytes, title)
+		if sig.Unusual {
 			return fmt.Errorf("bot block: unusual-traffic page: %w", ErrBotBlocked)
 		}
 	} else {
-		observePageMetadata(page, pageClass, "", "")
+		observePageMetadata(page, pageClass, 0, "")
 	}
 	return nil
 }
 
-func classifyPageMetadata(curURL string, status int, lowerContent string) string {
+func classifyPageMetadata(curURL string, status int, sig pageSignals) string {
 	lowerURL := strings.ToLower(curURL)
 	switch {
 	case status == 429:
 		return "rate_limited"
 	case strings.Contains(lowerURL, "/sorry/"), strings.Contains(lowerURL, "ipv4.google.com/sorry"):
 		return "sorry"
-	case strings.Contains(lowerURL, "consent.google"), strings.Contains(lowerContent, "before you continue"):
+	case strings.Contains(lowerURL, "consent.google"), sig.Consent:
 		return "consent"
-	case strings.Contains(lowerContent, "recaptcha"), strings.Contains(lowerContent, "captcha"):
+	case sig.Captcha:
 		return "captcha"
-	case strings.Contains(lowerContent, "unusual traffic"), strings.Contains(lowerContent, "automated queries"):
+	case sig.Unusual:
 		return "unusual_traffic"
-	case strings.Contains(lowerURL, "/maps/"), strings.Contains(lowerContent, "app_initialization_state"):
+	case strings.Contains(lowerURL, "/maps/"), sig.Maps:
 		return "maps"
 	default:
 		return "unknown"
 	}
 }
 
-func observePageMetadata(page Page, class, content, title string) {
+func observePageMetadata(page Page, class string, contentBytes int, title string) {
 	if observer, ok := page.(PageDiagnosticObserver); ok {
-		observer.ObservePageDiagnostics(class, len(content), title)
+		observer.ObservePageDiagnostics(class, contentBytes, title)
 	}
 }
 
@@ -354,12 +409,14 @@ func scrapeExtraReviews(ctx context.Context, page Page, entry *Entry, targetRevi
 	// are enumerated rather than guessed, and every click is confirmed against
 	// review cards actually appearing — a "successful" click on the Menu tab is
 	// otherwise indistinguishable from success and ends the chain early.
+	//
+	// data-tab-index="3" is deliberately absent: across a 2458-place corpus it
+	// matched twice and missed 134 times, so it only ever cost a DOM probe.
 	reviewSelectors := []string{
 		`button[aria-label*="review" i][jsaction]`,
 		`button[aria-label*="reviews" i]`,
 		`[role="main"] [role="tab"][data-tab-index="1"]`,
 		`[role="main"] [role="tab"][data-tab-index="2"]`,
-		`[role="main"] [role="tab"][data-tab-index="3"]`,
 	}
 	baselineCards, _ := countMatches(page, reviewCardSelector)
 	panelOpen := func() bool { return reviewsPanelOpen(page, baselineCards) }
@@ -627,6 +684,13 @@ func extraReviewsWorthOpening(entry *Entry, targetReviews int) bool {
 // the Reviews tab was expected) look identical to success, so an unverified
 // click ends the chain on the wrong element; a failed verify falls through to
 // the next selector instead.
+//
+// A hard timeout ends the chain instead of falling through. ClickForce abandons
+// its click goroutine at the ceiling while that goroutine still holds the page,
+// so every later selector inherits a page with a wedged CDP call on it: across a
+// 2458-place corpus, 51 of the 56 places that hard-timed-out went on to time out
+// on every remaining selector. Continuing buys nothing and costs another ceiling
+// per selector.
 func clickFirstMatching(ctx context.Context, page Page, action string, targetReviews int, selectors []string, waitTimeout, clickTimeout, settle time.Duration, verify func() bool) string {
 	for _, selector := range selectors {
 		updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "trying", selector))
@@ -639,8 +703,12 @@ func clickFirstMatching(ctx context.Context, page Page, action string, targetRev
 		err := page.ClickForce(selector, waitTimeout, clickTimeout)
 		if err != nil {
 			if errors.Is(err, ErrClickHardTimeout) {
+				updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "wedged", selector))
 				logClickHardTimeout(ctx, action, selector, err)
+				return ""
 			}
+			updatePlaceStageDetail(ctx, "place.extra_reviews", extraReviewsClickDetail(action, targetReviews, "error", selector))
+			logClickError(ctx, action, selector, err)
 			continue
 		}
 
@@ -705,6 +773,20 @@ func logClickUnverified(ctx context.Context, action, selector string) {
 		"DIAG event=click_unverified selector=%q action=%s stage=place.extra_reviews %s",
 		truncateDiagnostic(selector, 300),
 		truncateDiagnostic(action, 80),
+		claimContextDiagnostic(ctx),
+	)
+}
+
+// logClickError records a ClickForce failure that is not a hard timeout. Without
+// it these are the one chain outcome that leaves no trace at all, which is how a
+// tab that was found, clicked, and rejected by the driver ends up looking
+// identical in the logs to a place that never had a reviews tab.
+func logClickError(ctx context.Context, action, selector string, err error) {
+	log.Printf(
+		"DIAG event=click_error selector=%q action=%s stage=place.extra_reviews error=%q %s",
+		truncateDiagnostic(selector, 300),
+		truncateDiagnostic(action, 80),
+		truncateDiagnostic(err.Error(), 300),
 		claimContextDiagnostic(ctx),
 	)
 }

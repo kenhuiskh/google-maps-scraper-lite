@@ -874,6 +874,7 @@ type feedCollection struct {
 	URLs                  []QueuedURL
 	FeedURLsFound         int
 	FeedDuplicateURLs     int
+	RadiusFilteredURLs    int
 	CrossJobDuplicateURLs int
 }
 
@@ -947,6 +948,13 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 	}
 	feedURLs = dedupedURLs
 	duplicatesRemoved := originalCount - len(feedURLs)
+	// Drop out-of-radius places before they are ever scraped. Every place URL
+	// carries the place's own coordinates, so the same haversine test the
+	// post-scrape filter applies can run here for free — scraping a place only to
+	// discard it on distance is the single largest waste on a radius-scoped run.
+	// The post-scrape filter stays as-is: it still judges every entry, and it also
+	// sorts the kept ones by distance.
+	radiusFiltered := s.filterURLsWithinRadius(&feedURLs)
 	// Limit caps canonical places, not place×language tasks, so apply it before
 	// fanning out into per-language queued URLs.
 	if s.Config.Limit > 0 && len(feedURLs) > s.Config.Limit {
@@ -963,14 +971,64 @@ func (s *Scraper) collectPlaceURLs(ctx context.Context, queries []string, feedOp
 		queued = kept
 		crossJobDuplicates = skipped
 	}
-	if dedupScraped {
-		log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages (%d duplicates removed, %d already-scraped skipped)", len(queued), total, len(langs), duplicatesRemoved, crossJobDuplicates)
-	} else if duplicatesRemoved > 0 {
-		log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages (%d duplicates removed)", len(queued), total, len(langs), duplicatesRemoved)
-	} else {
-		log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages", len(queued), total, len(langs))
+	// Every URL discarded before the scrape is reported here: a job whose queued
+	// count is far below what the feed found should say why rather than leave the
+	// gap to be inferred from a short writer_summary.
+	notes := make([]string, 0, 3)
+	if duplicatesRemoved > 0 {
+		notes = append(notes, fmt.Sprintf("%d duplicates removed", duplicatesRemoved))
 	}
-	return feedCollection{URLs: queued, FeedURLsFound: feedURLsFound, FeedDuplicateURLs: duplicatesRemoved, CrossJobDuplicateURLs: crossJobDuplicates}, nil
+	if radiusFiltered > 0 {
+		notes = append(notes, fmt.Sprintf("%d outside radius", radiusFiltered))
+	}
+	if dedupScraped {
+		notes = append(notes, fmt.Sprintf("%d already-scraped skipped", crossJobDuplicates))
+	}
+	suffix := ""
+	if len(notes) > 0 {
+		suffix = " (" + strings.Join(notes, ", ") + ")"
+	}
+	log.Printf("Feed collection done: %d URL×lang tasks queued across %d queries, %d languages%s", len(queued), total, len(langs), suffix)
+
+	return feedCollection{
+		URLs:                  queued,
+		FeedURLsFound:         feedURLsFound,
+		FeedDuplicateURLs:     duplicatesRemoved,
+		RadiusFilteredURLs:    radiusFiltered,
+		CrossJobDuplicateURLs: crossJobDuplicates,
+	}, nil
+}
+
+// filterURLsWithinRadius removes places whose coordinates put them outside the
+// configured radius, in place. It returns how many were dropped.
+//
+// It fails open in both directions: a -geo that will not parse leaves the list
+// untouched, and a URL carrying no coordinates is kept. Dropping only what can be
+// measured keeps this a pure optimisation — the post-scrape filter still decides
+// every entry that reaches it, so this can never discard a place that filter
+// would have kept.
+func (s *Scraper) filterURLsWithinRadius(urls *[]string) int {
+	if s.Config.Radius <= 0 || s.Config.Geo == "" {
+		return 0
+	}
+
+	lat, lon, err := ParseGeoCenter(s.Config.Geo)
+	if err != nil {
+		return 0
+	}
+
+	filtered := 0
+	kept := (*urls)[:0]
+	for _, u := range *urls {
+		if plat, plon, ok := CoordsFromPlaceURL(u); ok && haversineMeters(plat, plon, lat, lon) > s.Config.Radius {
+			filtered++
+			continue
+		}
+		kept = append(kept, u)
+	}
+	*urls = kept
+
+	return filtered
 }
 
 func (s *Scraper) finishJob(jobID string, err error) {
