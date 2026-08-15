@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: google-maps-scraper-lite-linux-amd64
+            binary: google-maps-scraper-lite
+            archive: tar.gz
+
+          - runner: macos-15
+            asset: google-maps-scraper-lite-darwin-arm64
+            binary: google-maps-scraper-lite
+            archive: tar.gz
+
+          - runner: windows-2025
+            asset: google-maps-scraper-lite-windows-amd64
+            binary: google-maps-scraper-lite.exe
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        shell: bash
+        run: go test ./...
+
+      - name: Build and package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          asset="${{ matrix.asset }}"
+          dir="dist/$asset"
+
+          mkdir -p "$dir"
+
+          CGO_ENABLED=1 go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o "$dir/${{ matrix.binary }}" .
+
+          cp README.md LICENSE "$dir/"
+
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            (cd "$dir" && 7z a -tzip "../../$asset.zip" *) >/dev/null
+            mv "$asset.zip" dist/
+          else
+            tar -czf "$asset.tar.gz" -C "$dir" .
+            mv "$asset.tar.gz" dist/
+          fi
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes
