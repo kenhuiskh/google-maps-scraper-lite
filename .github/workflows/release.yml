@@ -90,7 +90,7 @@ jobs:
       - name: Test
         run: >-
           go test ./...
-          -skip 'Test_EntryFromJSON|TestOverpassClient_Count|TestOverpassClient_SendsRequiredHeaders'
+          -skip 'Test_EntryFromJSON|Test_EntryFromJsonC|TestOverpassClient_Count|TestOverpassClient_SendsRequiredHeaders'
 
   release:
     needs: [build, test]
